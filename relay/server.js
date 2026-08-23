@@ -41,7 +41,13 @@ export const DEFAULT_LIMITS = Object.freeze({
   linesPerSec: 120,     // steps are ~4/s/player; this is a flood, not play
   badLines: 20,         // unparsable lines before we give up on a socket
   members: 16,
-  conns: 1000,
+  // Ceilings, not targets.  A relay is billed by what it moves, and what
+  // moves bytes is a live room: the host of a 30-bot match broadcasts ~40
+  // small messages a second to everyone in it, so concurrent ROOMS -- not
+  // connections -- decide the bill.  These are sized for a small hosted box;
+  // BR_MAX_ROOMS / BR_MAX_CONNS raise them.
+  rooms: 40,
+  conns: 200,
   connsPerIp: 24,
   idleMs: 60_000,       // clients ping every few seconds
   unboundMs: 30_000,    // connected but never hosted/joined
@@ -49,6 +55,20 @@ export const DEFAULT_LIMITS = Object.freeze({
 });
 
 const NAME_MAX = 10;
+
+// Bytes actually written, so "what is this costing" has an answer that is not
+// a guess.  Egress is the line item that scales with players.
+const traffic = { bytesOut: 0, linesOut: 0, roomsOpened: 0, peakRooms: 0,
+                  peakConns: 0, rejected: 0 };
+
+export function stats() { return { ...traffic }; }
+
+function human(bytes) {
+  if (bytes < 1024) return bytes + "B";
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + "KB";
+  if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + "MB";
+  return (bytes / 1073741824).toFixed(2) + "GB";
+}
 
 function cleanName(name) {
   if (typeof name !== "string") return "PLAYER";
@@ -125,7 +145,10 @@ class Conn {
   send(msg) {
     if (this.closed) return;
     try {
-      this.socket.write(JSON.stringify(msg) + "\n");
+      const line = JSON.stringify(msg) + "\n";
+      traffic.bytesOut += Buffer.byteLength(line);
+      traffic.linesOut += 1;
+      this.socket.write(line);
     } catch {
       this.destroy("write_failed");
     }
@@ -177,11 +200,19 @@ export function createRelay(options = {}) {
 
       case "host_room": {
         if (conn.room) { conn.send({ type: "room_error", reason: "already_in_room" }); return; }
+        if (rooms.size >= limits.rooms) {
+          traffic.rejected += 1;
+          conn.send({ type: "room_error", reason: "server_full" });
+          log(`room refused: at the ${limits.rooms}-room ceiling`);
+          return;
+        }
         conn.name = cleanName(msg.name);
         const room = new Room(makeCode(rooms), conn);
         room.open = msg.open === true;
         rooms.set(room.code, room);
         room.add(conn);
+        traffic.roomsOpened += 1;
+        if (rooms.size > traffic.peakRooms) traffic.peakRooms = rooms.size;
         conn.send({ type: "room_hosted", code: room.code, id: conn.id });
         conn.send(room.roster());
         log(`room ${room.code} hosted by ${conn.name}#${conn.id}` +
@@ -327,10 +358,21 @@ export function createRelay(options = {}) {
     }
     perIp.set(conn.ip, ipCount);
     conns.add(conn);
+    if (conns.size > traffic.peakConns) traffic.peakConns = conns.size;
     socket.on("data", (chunk) => onData(conn, chunk));
     socket.on("error", () => conn.destroy("socket_error"));
     socket.on("close", () => conn.destroy("closed"));
   });
+
+  // One line every few minutes: enough to see whether the box is busy or
+  // idle and what it has moved, without shipping a metrics stack.
+  const reporter = setInterval(() => {
+    log(`rooms ${rooms.size}/${limits.rooms} conns ${conns.size}/${limits.conns}`
+        + ` | sent ${human(traffic.bytesOut)} in ${traffic.linesOut} lines`
+        + ` | peak ${traffic.peakRooms} rooms ${traffic.peakConns} conns`
+        + (traffic.rejected ? ` | refused ${traffic.rejected}` : ""));
+  }, 5 * 60_000);
+  reporter.unref();
 
   const sweeper = setInterval(() => {
     const now = Date.now();
@@ -370,7 +412,11 @@ const isMain = process.argv[1] && import.meta.url === new URL(`file://${process.
 if (isMain) {
   const port = Number(process.env.PORT || process.env.BR_RELAY_PORT || 7790);
   const host = process.env.HOST || "0.0.0.0";
-  const relay = createRelay({ log: (line) => console.log(new Date().toISOString(), line) });
+  const limits = {};
+  if (process.env.BR_MAX_ROOMS) limits.rooms = Number(process.env.BR_MAX_ROOMS);
+  if (process.env.BR_MAX_CONNS) limits.conns = Number(process.env.BR_MAX_CONNS);
+  const relay = createRelay({ limits,
+    log: (line) => console.log(new Date().toISOString(), line) });
   process.on("uncaughtException", (err) => console.error("uncaught:", err));
   process.on("unhandledRejection", (err) => console.error("unhandled:", err));
   relay.listen(port, host).then((addr) => {

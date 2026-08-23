@@ -145,6 +145,42 @@ the only settings that matter.
 Fly.io is the other easy fit (it forwards raw TCP by default). Any $4-a-month
 VPS works too — the process is a few MB and idles at nothing.
 
+### What it costs, and capping it
+
+Measured rather than guessed. A busy room — four players and thirty bots,
+the host relaying every bot's step — moves **about 17 KB/s outbound**:
+
+| | egress |
+| --- | --- |
+| one busy room, two hours a day | ~3.4 GB/month |
+| ten such rooms, two hours a day | ~34 GB/month |
+| one room pegged nonstop | ~41 GB/month |
+
+Compute is the other half and barely moves: the process is a few MB and idles
+at nothing, but it has to stay awake. On Railway's Hobby plan the included
+credit covers a comfortable amount of this; check current pricing rather than
+trusting that sentence.
+
+Two ceilings keep it bounded, and the relay logs a line every five minutes
+saying where it is against them:
+
+```
+rooms 3/40 conns 11/200 | sent 41.2MB in 260431 lines | peak 5 rooms 22 conns
+```
+
+- **`BR_MAX_ROOMS`** (default 40) caps concurrent rooms, which is what
+  decides the bill — a refused host gets a clear "server is busy" rather
+  than a hang, and `QUICK PLAY` cannot squeeze past it by another door
+- **`BR_MAX_CONNS`** (default 200) caps sockets, with 24 per IP
+
+The real backstop is Railway's own: **Workspace → Settings → Usage**, where
+you can set a spend alert and a **hard usage limit** that stops the service
+when hit. Set it. The room cap bounds concurrency, but only the platform
+limit bounds money — forty rooms pegged nonstop would be far more traffic
+than the plan's credit, and the failure you want is "the relay stops" rather
+than a surprise invoice. Solo play keeps working regardless: it never touches
+a server.
+
 **Before you host one for other people:** it is a public service with your
 name on it. It is deliberately small — no accounts, no persistence, rooms
 vanish when their host leaves — and it has flood limits per connection (16KB

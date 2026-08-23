@@ -35,6 +35,9 @@ local ERRORS = {
   full = "That game is\nfull.",
   locked = "That game has\nalready started.",
   already_in_room = "Already in a\ngame.",
+  -- the relay is at its room ceiling: not the player's fault, and
+  -- SOLO VS BOTS still works, so say something that points at the way out
+  server_full = "That server is\nbusy. Try SOLO\nor try again\nlater.",
 }
 
 local function now()

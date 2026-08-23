@@ -7,7 +7,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
-import { createRelay, CODE_ALPHABET, CODE_LENGTH } from "./server.js";
+import { createRelay, CODE_ALPHABET, CODE_LENGTH, stats } from "./server.js";
 
 class Client {
   constructor(port) {
@@ -315,6 +315,52 @@ test("set_open is the host's alone, and tells the room", async () => {
     assert.equal((await seeker2.until("room_joined")).code, code);
 
     host.end(); guest.end(); seeker.end(); seeker2.end();
+  });
+});
+
+test("the room ceiling holds, refuses cleanly, and frees up again", async () => {
+  await withRelay(async (port) => {
+    // concurrent rooms are what a hosted relay is billed for, so the cap has
+    // to be real and has to fail in a way the client can explain
+    const a = await connect(port);
+    a.send({ type: "host_room", name: "ONE" });
+    await a.until("room_hosted");
+    const b = await connect(port);
+    b.send({ type: "host_room", name: "TWO" });
+    await b.until("room_hosted");
+
+    const third = await connect(port);
+    third.send({ type: "host_room", name: "THREE" });
+    const refused = await third.until("room_error");
+    assert.equal(refused.reason, "server_full");
+
+    // quick play must not squeeze past the ceiling by another door
+    const quick = await connect(port);
+    quick.send({ type: "quick_join", name: "QUICK" });
+    assert.equal((await quick.next()).type, "no_open_rooms");
+
+    // ...and a room closing gives the slot back
+    a.end();
+    await new Promise((r) => setTimeout(r, 50));
+    const fourth = await connect(port);
+    fourth.send({ type: "host_room", name: "FOUR" });
+    assert.equal((await fourth.until("room_hosted")).code.length, CODE_LENGTH);
+
+    b.end(); third.end(); quick.end(); fourth.end();
+  }, { rooms: 2 });
+});
+
+test("traffic accounting counts what it actually wrote", async () => {
+  await withRelay(async (port) => {
+    const before = stats();
+    const a = await connect(port);
+    a.send({ type: "host_room", name: "RED" });
+    await a.until("roster");
+    const after = stats();
+    assert.ok(after.bytesOut > before.bytesOut, "bytes out went up");
+    assert.ok(after.linesOut > before.linesOut, "lines out went up");
+    assert.ok(after.roomsOpened > before.roomsOpened, "a room was counted");
+    a.end();
   });
 });
 
