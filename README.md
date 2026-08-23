@@ -118,8 +118,38 @@ itself loads the mod perfectly well.
 
 Zero dependencies — any machine with Node 18+ and a reachable port is a
 server. On a LAN, one player runs it and everyone points `SERVER...` at that
-machine's address. For internet play, run it on a small VPS (or a free
-tier) and use its public `host:port`.
+machine's address.
+
+### Hosting it so nobody has to run it
+
+The relay is **raw TCP**, not HTTP — newline-delimited JSON on a socket. That
+rules out anything that only forwards HTTP requests (Vercel, Netlify, Cloud
+Functions), and it is the one thing to get right when picking a host.
+
+**Railway** works, via its TCP Proxy:
+
+1. New project → Deploy from GitHub repo, pointed at this repository
+2. Service → Settings → **Root Directory: `relay`** (Nixpacks then sees
+   `package.json` and runs `npm start` on its own)
+3. Variables → add **`PORT=7790`**
+4. Settings → Networking → **TCP Proxy** → target port **7790**. Railway
+   answers with something like `roundhouse.proxy.rlwy.net:23456` — that
+   `host:port`, not the HTTP domain it also offers, is what players enter
+   under `SERVER...`
+5. Settings → **turn App Sleeping off.** A sleeping relay drops every room
+   it is holding, and the first player to arrive wakes it into an empty one
+
+`relay/railway.json` pins the builder and start command so steps 2 and 5 are
+the only settings that matter.
+
+Fly.io is the other easy fit (it forwards raw TCP by default). Any $4-a-month
+VPS works too — the process is a few MB and idles at nothing.
+
+**Before you host one for other people:** it is a public service with your
+name on it. It is deliberately small — no accounts, no persistence, rooms
+vanish when their host leaves — and it has flood limits per connection (16KB
+lines, 120 lines a second, 16 to a room, a 60-second idle sweep), but it has
+no moderation, and anyone with the address can open a room on it.
 
 ## How it works
 

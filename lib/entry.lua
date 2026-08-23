@@ -17,9 +17,14 @@ local Entry = {}
 Entry.__index = Entry
 
 Entry.CODE = { charset = CodeEntry.CHARSET, length = CodeEntry.LENGTH }
--- a dotted IPv4 plus a port fits in 21 slots; trailing blanks are trimmed
--- on confirm so "10.0.0.5:7790" does not have to be padded out by hand
-Entry.ADDRESS = { charset = "0123456789.: ", length = 21 }
+-- Wide enough for a real hostname, not just a dotted IPv4: a hosted relay
+-- hands out names like "roundhouse.proxy.rlwy.net:23456", which is 31
+-- characters with letters and a hyphen in it.  Blank is the first character
+-- so a fresh entry starts empty rather than showing forty A's, and blanks are
+-- trimmed on confirm so nothing has to be padded out by hand.  Uppercase is
+-- what the Gen 1 glyphs have and DNS does not care, so the value is lowered
+-- on the way out.
+Entry.ADDRESS = { charset = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:", length = 40 }
 
 -- opts: { title=, shape=Entry.CODE|Entry.ADDRESS, default=, onDone= }
 function Entry.new(game, opts)
@@ -30,8 +35,13 @@ function Entry.new(game, opts)
   self.title = opts.title or "ENTER CODE"
   self.shape = shape
   self.onDone = opts.onDone
-  self.state = opts.default
-    and CodeEntry.fromText(opts.default, shape)
+  -- the grid has the Gen 1 glyphs, which are uppercase; a stored address is
+  -- lowercase, and fromText blanks any character its charset does not hold,
+  -- so an address has to be raised before it can be shown at all
+  local default = opts.default
+  if default and shape == Entry.ADDRESS then default = default:upper() end
+  self.state = default
+    and CodeEntry.fromText(default, shape)
     or CodeEntry.new(shape)
   self.isOpaque = true
   return self
@@ -52,6 +62,7 @@ function Entry:update()
   elseif input:wasPressed("a") then
     -- spaces are the address shape's padding, not part of the value
     local text = CodeEntry.text(self.state):gsub("%s+$", ""):gsub("^%s+", "")
+    if self.shape == Entry.ADDRESS then text = text:lower() end
     self.game.stack:pop()
     if self.onDone then self.onDone(text) end
   end
@@ -64,16 +75,30 @@ function Entry:draw()
   love.graphics.setColor(0, 0, 0, 1)
   Font.draw(self.title, 8, 6)
 
-  -- 21 address slots do not fit at the code screen's 16px pitch, so the
-  -- pitch follows the slot count and the row stays centred either way
+  -- A hostname does not fit on one line at any readable pitch, so long
+  -- shapes wrap.  The pitch and the per-row count both follow the slot
+  -- count, and every row stays centred, so a 6-slot code and a 40-slot
+  -- address are the same screen with different arithmetic.
   local n = self.state.length
   local pitch = n > 8 and 7 or 16
-  local originX = math.floor((160 - n * pitch) / 2)
+  local perRow = math.min(n, math.floor(152 / pitch))
+  local rows = math.ceil(n / perRow)
+  -- the cursor hangs 12px under its own character, so rows need more than
+  -- that between them or it reads as if it belongs to the row below.  A
+  -- single row lands on 64 either way, which is where the code screen has
+  -- always drawn it.
+  local ROW_PITCH = 26
+  local topY = 64 - (rows - 1) * math.floor(ROW_PITCH / 2)
   for i = 1, n do
-    local x = originX + (i - 1) * pitch
-    Font.draw(CodeEntry.charAt(self.state, i), x, 64)
+    local row = math.floor((i - 1) / perRow)
+    local col = (i - 1) % perRow
+    local inRow = math.min(perRow, n - row * perRow)
+    local originX = math.floor((160 - inRow * pitch) / 2)
+    local x = originX + col * pitch
+    local y = topY + row * ROW_PITCH
+    Font.draw(CodeEntry.charAt(self.state, i), x, y)
     if i == self.state.pos then
-      Font.drawCode(0xEE, x, 76) -- the same cursor LinkState uses
+      Font.drawCode(0xEE, x, y + 12) -- the same cursor LinkState uses
     end
   end
 

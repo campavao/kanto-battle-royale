@@ -636,5 +636,37 @@ do
 end
 
 
+-- ------------------------------------------------------------------
+-- the SERVER... widget has to be able to hold a hosted relay's address
+-- ------------------------------------------------------------------
+do
+  local CodeEntry = require("src.link.CodeEntry")
+  -- Entry.ADDRESS without pulling in the screen (which wants love + a game)
+  local ADDRESS = { charset = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:",
+                    length = 40 }
+
+  local function roundTrip(text)
+    local state = CodeEntry.fromText(text:upper(), ADDRESS)
+    return (CodeEntry.text(state):gsub("%s+$", ""):gsub("^%s+", "")):lower()
+  end
+
+  -- a managed host: letters, dots, a hyphen and a five-digit port.  This is
+  -- the case the old 21-slot digits-only shape could not express at all.
+  eq(roundTrip("roundhouse.proxy.rlwy.net:23456"),
+     "roundhouse.proxy.rlwy.net:23456", "a hosted relay hostname round-trips")
+  eq(roundTrip("br-relay-production.up.railway.app:7790"),
+     "br-relay-production.up.railway.app:7790",
+     "and a longer one with a hyphen in it")
+  eq(#("br-relay-production.up.railway.app:7790") <= ADDRESS.length, true,
+     "the widget is long enough for a real managed hostname")
+  -- the old cases still work
+  eq(roundTrip("127.0.0.1:7790"), "127.0.0.1:7790", "a dotted IPv4 still round-trips")
+  eq(roundTrip("10.0.0.5:7790"), "10.0.0.5:7790", "and a short one")
+  -- blank is the first slot, so an untouched widget is empty rather than AAAA
+  eq(CodeEntry.text(CodeEntry.new(ADDRESS)):gsub("%s", ""), "",
+     "a fresh address entry starts blank")
+end
+
+
 io.write(("\nbattle royale: %d passed, %d failed\n"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)
