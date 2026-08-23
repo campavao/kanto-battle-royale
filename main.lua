@@ -161,6 +161,7 @@ return function(mod)
     fillTo = 0,           -- ...or top the roster up to this many, 0 = off
     solo = false,         -- hosting a room of one, with no server
     quick = false,        -- came in through QUICK PLAY, so it self-starts
+    fellAt = nil,         -- where a whiteout caught us, to spectate from
     autoStartAt = nil,    -- quick play starts itself at this clock time
     lastRoster = 0,       -- to notice an arrival and hold the countdown open
     matchSeed = nil,      -- every client derives bot names/parties from this
@@ -383,6 +384,7 @@ return function(mod)
     self.relay = nil
     self.solo = false
     self.quick = false
+    self.fellAt = nil
     self.autoStartAt = nil
     self.lastRoster = 0
     self.players = {}
@@ -406,9 +408,25 @@ return function(mod)
     self.announcedLevel = nil
   end
 
+  -- Leaving has to actually leave.  A match runs in a throwaway world, so
+  -- dropping the relay while standing in it left the player in a Kanto that
+  -- was no longer a match and no longer a save -- the menu said "you left"
+  -- and nothing else changed.  If we are in that world, go back to the title.
   function BR:teardown(message)
+    local wasMatchWorld = self.matchWorld
     if self.relay then self.relay:leave() end
     self:reset()
+    if wasMatchWorld and self.game then
+      self.matchWorld = false   -- the throwaway world is gone; SAVE is theirs again
+      local ok, err = pcall(function()
+        while self.game.stack:top() do self.game.stack:pop() end
+        self.game.stack:push(self.game:makeTitleState())
+      end)
+      if not ok then
+        mod.log:warn("could not return to the title: %s", tostring(err))
+      end
+      return
+    end
     if message then say(message) end
   end
 
@@ -996,6 +1014,19 @@ return function(mod)
   function BR:eliminate(message)
     if self.status == "out" or self.phase ~= "match" then return end
     self.status = "out"
+    -- Where the match ended for us, captured here rather than in any one
+    -- caller: a whiteout, a PvP loss and the fog all arrive by different
+    -- routes, and only the engine's whiteout then moves us.  The step hook
+    -- brings us back if something did.
+    local spot = mod.world:current()
+    if spot and spot.mapId then
+      self.fellAt = { map = spot.mapId, x = spot.x, y = spot.y,
+                      facing = spot.facing }
+    else
+      self.fellAt = nil
+      mod.log:warn("eliminated with no readable position; spectating wherever "
+                   .. "the engine leaves us")
+    end
     local save = self.game and self.game.save
     -- the team hits the ground where you fell (DESIGN D8), so an elimination
     -- is worth converging on rather than only paying whoever landed the hit
@@ -1197,7 +1228,48 @@ return function(mod)
   -- one battle's worth of party override, for the bot fight we just built
   mod.hooks:wrap("trainer.party", function(next, oppClass, partyIndex, partyDef)
     if BR.botParty then return BR.botParty end
-    return next(oppClass, partyIndex, partyDef)
+    local party = next(oppClass, partyIndex, partyDef)
+    -- Kanto's own trainers keep their vanilla levels, which in a match means
+    -- a Lv20 ace against the Lv5 you dropped with -- an unwinnable wall on
+    -- whichever route you happened to spawn beside.  They ride the same rung
+    -- the fog sets for players and bots, so PvE stays a real fight instead of
+    -- a roadblock, and gyms get harder as the ring closes rather than going
+    -- stale.
+    if BR.phase ~= "match" or type(party) ~= "table" then return party end
+    local rung = BR:level()
+    local scaled = {}
+    for i, slot in ipairs(party) do
+      if type(slot) == "table" and slot.species then
+        local copy = {}
+        for k, v in pairs(slot) do copy[k] = v end
+        copy.level = rung
+        scaled[i] = copy
+      else
+        scaled[i] = slot
+      end
+    end
+    return #scaled > 0 and scaled or party
+  end)
+
+  -- ------- being out has to mean out
+  --
+  -- The engine's whiteout heals the party, halves the money and warps you to
+  -- a POKeMON CENTER, and world.blacked_out is raised in the MIDDLE of that
+  -- -- after the heal, before the warp.  Marking the match over was therefore
+  -- not enough on its own: the engine handed the loser a full team and put
+  -- them back in the world, which is the exact opposite of party-as-health.
+
+  mod.hooks:wrap("encounter.roll", function(next, encDef, ctx)
+    if BR.status == "out" then return nil end
+    return next(encDef, ctx)
+  end)
+
+  mod.hooks:wrap("trainer.before_battle", function(next, game, context, continue)
+    if BR.status == "out" then
+      continue({ cancel = true })
+      return true
+    end
+    return next(game, context, continue)
   end)
 
   -- A bot battle is an ordinary engine battle, so its outcome arrives on
@@ -1371,6 +1443,43 @@ return function(mod)
        and love.timer.getTime() >= BR.autoStartAt then
       BR.autoStartAt = nil
       BR:startMatch()
+    end
+
+    -- Spectating happens where you fell, not in a POKeMON CENTER two towns
+    -- away.
+    --
+    -- The engine's whiteout warp is asynchronous and lands well after
+    -- world.blacked_out, so this cannot simply warp once and stop: doing that
+    -- put us back on the right tile, saw the position match, let go -- and
+    -- then the engine's warp completed and moved us anyway.  So the position
+    -- has to be observed HOLDING before we stop asserting it.
+    if BR.fellAt and BR.status == "out" then
+      local target = BR.fellAt
+      local here = mod.world:current()
+      local now = clock() or 0
+      target.giveUpAt = target.giveUpAt or (now + 15)
+      if here and here.mapId then
+        if here.mapId == target.map and here.x == target.x
+           and here.y == target.y then
+          target.settledAt = target.settledAt or now
+          if now - target.settledAt >= 1.5 then BR.fellAt = nil end
+        else
+          target.settledAt = nil
+          if now >= (target.nextTry or 0) then
+            target.nextTry = now + 0.4
+            local ok, err = mod.world:warpTo(target.map, target.x, target.y,
+                                             target.facing, { arrive = "teleport" })
+            if not ok then
+              mod.log:warn("could not return the spectator to %s (%s)",
+                           tostring(target.map), tostring(err))
+            end
+          end
+        end
+      end
+      if BR.fellAt and now > target.giveUpAt then
+        BR.fellAt = nil
+        mod.log:warn("gave up returning the spectator to %s", tostring(target.map))
+      end
     end
 
     if relay and relay:isOpen() and BR.phase == "match" then

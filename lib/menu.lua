@@ -48,45 +48,59 @@ function Menu.build(mod, BR)
           onSelect = function() BR:teardown("You left the match.") end,
         }
       elseif relay and relay:isOpen() then
-        items[#items + 1] = {
-          label = BR.solo and "SOLO MATCH" or ("CODE " .. tostring(relay.code)),
-          keepOpen = true, onSelect = function() end,
-        }
-        for _, m in ipairs(relay.members) do
-          local tag = (m.id == relay.hostId) and "*" or ""
-          items[#items + 1] = { label = "- " .. m.name .. tag,
-                                keepOpen = true, onSelect = function() end }
+        -- A row that changes a setting keeps the menu open and rewrites its
+        -- own label, because Menu draws item.label every frame.  Closing and
+        -- re-pushing meant every adjustment cost two more button presses to
+        -- see, which read as the setting not having taken.
+        local function setting(label, onPress)
+          local item
+          item = { label = label(), keepOpen = true,
+                   onSelect = function() onPress() item.label = label() end }
+          items[#items + 1] = item
+          return item
         end
-        if relay:isHost() then
-          -- an open room is one strangers can QUICK PLAY into without ever
-          -- being told the code
+        local host = relay:isHost()
+
+        -- A solo room has no code worth reading out, no roster to watch fill
+        -- and nobody to keep seats for, so it shows the two things that
+        -- actually decide the match and nothing else.
+        if not BR.solo then
+          items[#items + 1] = {
+            label = "CODE " .. tostring(relay.code),
+            keepOpen = true, onSelect = function() end,
+          }
+          for _, m in ipairs(relay.members) do
+            local tag = (m.id == relay.hostId) and "*" or ""
+            items[#items + 1] = { label = "- " .. m.name .. tag,
+                                  keepOpen = true, onSelect = function() end }
+          end
+          if host then
+            -- an open room is one strangers can QUICK PLAY into without ever
+            -- being told the code
+            setting(function() return "OPEN: " .. (BR:isOpen() and "YES" or "NO") end,
+                    function() BR:setOpen(not BR:isOpen()) end)
+          end
+        end
+
+        if host then
+          -- steps the ladder 0,1,2,3,5,8,...,30 and wraps
+          setting(function() return "BOTS: " .. tostring(BR.botCount) end,
+                  function() BR.botCount = BR:nextBotCount() end)
+          -- Only meaningful when humans might still arrive: it holds seats
+          -- open for them and lets bots take whatever is left.  In a solo
+          -- room nobody can arrive, so it would only ever be a second, more
+          -- confusing way to say BOTS.
           if not BR.solo then
+            setting(function()
+                      return BR.fillTo > 0 and ("FILL TO: " .. BR.fillTo)
+                             or "FILL TO: OFF"
+                    end,
+                    function() BR:setFill(BR:nextFill()) end)
             items[#items + 1] = {
-              label = "OPEN: " .. (BR:isOpen() and "YES" or "NO"),
-              onSelect = function()
-                BR:setOpen(not BR:isOpen())
-                mod.ui.push(game, "BattleRoyaleMenu")
-              end,
+              label = "TRAINERS: " .. (#relay.members + BR:botsAtStart()),
+              keepOpen = true, onSelect = function() end,
             }
           end
-          -- steps up the ladder (0,1,2,3,5,8,...,30) and wraps; the menu
-          -- closes on select, so reopening it is what shows the new count
-          items[#items + 1] = {
-            label = "BOTS: " .. tostring(BR.botCount),
-            onSelect = function()
-              BR.botCount = BR:nextBotCount()
-              mod.ui.push(game, "BattleRoyaleMenu")
-            end,
-          }
-          -- ...and the same thing counted in trainers, which is what you
-          -- want when you cannot know how many people turn up
-          items[#items + 1] = {
-            label = BR.fillTo > 0 and ("FILL TO: " .. BR.fillTo) or "FILL TO: OFF",
-            onSelect = function()
-              BR:setFill(BR:nextFill())
-              mod.ui.push(game, "BattleRoyaleMenu")
-            end,
-          }
           local countdown = BR:startsIn()
           items[#items + 1] = {
             label = countdown and ("START MATCH (" .. countdown .. ")")
@@ -96,14 +110,6 @@ function Menu.build(mod, BR)
         else
           items[#items + 1] = {
             label = "WAIT FOR HOST",
-            keepOpen = true, onSelect = function() end,
-          }
-        end
-        -- how many trainers the drop will actually hold, humans and bots
-        if relay:isHost() then
-          local bots = BR:botsAtStart()
-          items[#items + 1] = {
-            label = "TRAINERS: " .. (#relay.members + bots),
             keepOpen = true, onSelect = function() end,
           }
         end
