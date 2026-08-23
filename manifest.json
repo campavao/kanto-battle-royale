@@ -1,0 +1,17 @@
+{
+  "id": "battle_royale",
+  "name": "Kanto Battle Royale",
+  "version": "0.1.0",
+  "api": 2,
+  "entry": "main.lua",
+  "profile": "content",
+  "category": "MULTIPLAYER",
+  "games": ["gen1"],
+  "game_version": ">=0.0.0-0 <2.0.0",
+  "priority": 100,
+  "permissions": ["network"],
+  "dependencies": [],
+  "optional_dependencies": [],
+  "conflicts": [],
+  "description": "Last trainer standing. Everyone drops onto a random spot in Kanto with a level 5 RATTATA, six POKe BALLs and a POTION; walk into another trainer and the battle is on; a whiteout puts you out. Plays over a relay server (see relay/)."
+}

@@ -1,0 +1,3 @@
+# the mod loader's option-schema export, written next to the working directory
+/mod_option_schemas.json
+node_modules/

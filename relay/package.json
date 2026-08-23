@@ -1,0 +1,16 @@
+{
+  "name": "gen1recomp-battle-royale-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "N-player room relay for the Gen1Recomp Battle Royale mod (plain TCP, newline-delimited JSON, no dependencies)",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
