@@ -21,7 +21,9 @@ A mod for [gen1recomp](https://github.com/bryanthaboi/gen1recomp).
 > names that folder after the repo, and the mod loads itself by path -- the
 > folder has to be called exactly `battle_royale`.
 
-Nothing else to install, and **no engine patch required**: the mod carries a
+Nothing else to install, **no server to run** (the mod ships pointed at a
+hosted relay, so `QUICK PLAY` works immediately), and **no engine patch
+required**: the mod carries a
 compatibility shim, so it runs on a stock gen1recomp build. (See "Running on
 a stock engine" below. The seams it needs are proposed upstream in
 [PR #1746](https://github.com/bryanthaboi/gen1recomp/pull/1746); when that

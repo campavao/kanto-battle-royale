@@ -38,7 +38,11 @@ local Spills = require("mods.battle_royale.lib.spills")
 local BRMenu = require("mods.battle_royale.lib.menu")
 
 local SCREEN = "BattleRoyaleMenu"
-local DEFAULT_RELAY = "127.0.0.1:7790"
+-- The relay the mod ships pointed at, so downloading it and pressing QUICK
+-- PLAY needs no configuration.  SERVER... overrides it, and SOLO VS BOTS
+-- never touches it -- if this host is ever down or gone, a solo match still
+-- works and anyone can run their own (see relay/).
+local DEFAULT_RELAY = "maglev.proxy.rlwy.net:55436"
 
 -- Full position resync cadence: steps and turns keep a ghost honest, this
 -- is insurance against a dropped message and against a peer moving in a way
