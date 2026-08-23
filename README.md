@@ -12,6 +12,10 @@ The fog shrinks the world on a shared clock, everyone's level rides the
 same clock, and a fallen team spills onto the ground as Poké Balls anyone
 can claim. See "What's here / what's next" below.
 
+The fog shrinks the world on a shared clock, everyone's level rides the
+same clock, and a fallen team spills onto the ground as Poké Balls anyone
+can claim. See "What's here / what's next" below.
+
 A mod for [gen1recomp](https://github.com/bryanthaboi/gen1recomp).
 
 ## Install
@@ -76,9 +80,23 @@ port-forwarding.
 6. **OPEN: YES** lists the room for `QUICK PLAY`, so strangers can find it
    without a code. Rooms are private until you say otherwise.
 6. The host sees the roster fill in and picks **START MATCH**. Everyone
-   drops into Kanto at once.
+   lands in the SAFARI ZONE at once.
 
 You can run a match entirely on your own: host, set some bots, start.
+
+**The Safari opening.** A match begins with every trainer together in the
+SAFARI ZONE centre, on the gate's own admission — thirty SAFARI BALLs and
+the 500-step budget — and no Pokémon at all. You have `SAFARI SECONDS`
+(a mod option, default 120) to catch what you can; the clock sits top-left,
+and nobody can fight anybody until it runs out. Run out of balls or steps
+and the PA sends you to the gate early, exactly as it always did, to wait
+for the buzzer. When it sounds — "PA: Ding-dong! Time's up!" — everyone
+walks to the gate and **picks the town they drop into**, landing on a
+random cell of it so a popular choice doesn't stack everyone on one square.
+**Caught nothing? You're out** at the buzzer: you brought no team to a mode
+where the team is your health. The Safari is closed for the rest of the
+match. `SAFARI SECONDS: 0` skips the opening for the old random drop with a
+RATTATA.
 
 You start with **all eight badges and all five HMs**, because a match is
 twenty minutes and Kanto is gated for a campaign. The badges are what Gen 1
@@ -132,6 +150,9 @@ never overwrite your actual playthrough.
 
 **The rules of a match**, from the drop until it ends and nowhere else:
 
+- **The Safari comes first, and nobody fights in it.** Every battle there
+  is a catch; the eyeline and the A press don't engage until you've
+  dropped. Caught nothing by the buzzer and you're out.
 - Every battle is at the current rung — trainers, bots, wild grass and
   water, the Safari, a bite on a rod. A Lv5 drop never meets a Lv22 Safari
   mon, and a route's PIDGEY is worth catching in the last ring.
@@ -355,10 +376,25 @@ battles follow cable rules and never touch your real party, so the mod reads
 the lockstep party copy off `link.battle_ended` and copies the damage back
 itself. The host is the authority on who's left and declares the winner.
 
-**The drop.** The host picks every spawn once (`lib/spawn.lua`: a random
-walkable, non-water cell on a random outdoor Kanto map, dealt round-robin so
-players spread out and never share a cell) and sends the list. Nobody else
-has to agree on the algorithm, only on the answer.
+**The Safari opening, and the drop.** The host deals every spawn once
+(`lib/spawn.lua`, `Spawn.pickIn`: distinct walkable cells of the SAFARI
+ZONE centre) and sends the list with the round's length; nobody else has to
+agree on the algorithm, only on the answer. The Safari itself is the
+engine's own — `save.safari` with thirty balls and the 500-step budget, the
+BALL/BAIT/ROCK/RUN battles, the PA game-over — with three things added from
+outside: a clock the host owns and re-announces every five seconds (like
+the fog's, nobody derives it from their own wall clock), the centre's exit
+warps refused while it runs, and a stand-in lead lent for exactly one
+encounter while the party is empty — the engine refuses to open a battle
+with nobody on your side, and never draws your lead in a Safari battle
+anyway, so the stand-in is inserted as the roll lands and gone with the
+screen. At the buzzer the vanilla game-over walks you to the gate, the
+picker opens there (a `ListMenu` over the fly-town list), and you land on
+a random cell of the town you chose. Bots pick a town the same way,
+host-side. The fog's clock starts on the host's landing, so the Safari never
+eats into the first ring. `SAFARI SECONDS: 0` is the old drop — `Spawn.pick`,
+a random walkable, non-water cell on a random outdoor Kanto map, dealt
+round-robin, with a RATTATA.
 
 **Bots** (`lib/bots.lua`) fill a match out and make it playable solo. They
 take spawns from the same list as everyone else, and the host walks them —
@@ -475,7 +511,9 @@ thing that proves the fallback is honest; run it in either tree.
 ## What's here / what's next
 
 **Here (v0):** rooms + lobby over a relay with name entry, bots (up to 30,
-so a match is playable solo), random Kanto drop, the shared loadout plus all
+so a match is playable solo), the Safari opening (everyone together, two
+minutes, no starter, caught nothing = out) and a choose-your-town drop, the
+shared loadout plus all
 badges and HMs, real-time presence, forced face-to-face battles, the
 shrinking fog on a shared clock that closes all the way, party-as-health
 elimination from any whiteout, victor-takes-the-bag loot, a save-slot guard

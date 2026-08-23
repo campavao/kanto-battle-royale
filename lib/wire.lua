@@ -43,7 +43,10 @@ local Wire = {}
 -- 2: npcout joined the vocabulary, spills may stack on one cell, and a
 --    loot ball is a gift prompt -- a v1 peer would keep beaten trainers
 --    standing and fight balls, silently diverging from the room
-Wire.PROTOCOL = 2
+-- 3: a match opens in the Safari (start carries the round's length, and a
+--    safari beat carries the host's clock) -- a v2 peer would drop into
+--    the zone with a RATTATA and fight whoever it met there
+Wire.PROTOCOL = 3
 
 Wire.DIRS = { up = true, down = true, left = true, right = true }
 Wire.STATUS = { lobby = true, alive = true, battle = true, out = true }
@@ -92,8 +95,8 @@ function Wire.face(facing, map, as)
 end
 
 -- spawns: array of { id=, map=, x=, y= }, one per player in the match
-function Wire.start(seed, spawns)
-  return { t = "start", seed = seed, spawns = spawns }
+function Wire.start(seed, spawns, safari)
+  return { t = "start", seed = seed, spawns = spawns, safari = safari }
 end
 
 function Wire.challenge(nonce) return { t = "challenge", n = nonce } end
@@ -132,6 +135,8 @@ function Wire.npcout(map, obj) return { t = "npcout", map = map, obj = obj } end
 function Wire.ring(phase, cx, cy, r, place)
   return { t = "ring", phase = phase, cx = cx, cy = cy, r = r, place = place }
 end
+-- the host's Safari clock (POK-21): seconds left, zero being the buzzer
+function Wire.safari(left) return { t = "safari", left = left } end
 function Wire.winner(id) return { t = "winner", id = id } end
 
 -- ------- decoding
@@ -189,7 +194,14 @@ decoders.start = function(m)
     spawns[#spawns + 1] = { id = s.id, map = s.map, x = s.x, y = s.y }
   end
   if #spawns == 0 then return nil, "no spawns" end
-  return { t = "start", seed = math.floor(m.seed), spawns = spawns }
+  -- the Safari opening's length in seconds; absent or 0 is the plain drop
+  local safari = m.safari
+  if safari ~= nil and not (type(safari) == "number" and safari == safari
+                            and safari >= 0 and safari <= 3600) then
+    return nil, "bad safari"
+  end
+  return { t = "start", seed = math.floor(m.seed), spawns = spawns,
+           safari = math.floor(safari or 0) }
 end
 
 local function nonce(m)
@@ -304,6 +316,13 @@ decoders.ring = function(m)
   return { t = "ring", phase = math.floor(m.phase), cx = m.cx, cy = m.cy,
            r = m.r,
            place = type(m.place) == "string" and m.place:sub(1, MAX_ID) or nil }
+end
+
+decoders.safari = function(m)
+  if type(m.left) ~= "number" or m.left ~= m.left or m.left < 0 or m.left > 3600 then
+    return nil, "bad clock"
+  end
+  return { t = "safari", left = math.floor(m.left) }
 end
 
 decoders.winner = function(m)

@@ -106,6 +106,24 @@ local START_BADGES = {
 }
 local START_HMS = { "HM_CUT", "HM_FLY", "HM_SURF", "HM_STRENGTH", "HM_FLASH" }
 
+-- The Safari opening (POK-21): a match starts with everyone together in the
+-- SAFARI ZONE on the gate's own admission -- thirty SAFARI BALLs and the
+-- 500-step budget -- catching what they can until the PA calls time.  No
+-- starter: the Safari IS the team-building phase, so a player who catches
+-- nothing brought no team to a team-as-health mode and is out at the
+-- buzzer.  The steps and the balls are the real game's limits; the clock
+-- is ours, and the host owns it the way it owns the fog's.
+local SAFARI_MAP = "SAFARI_ZONE_CENTER"
+local SAFARI_BALLS = 30
+local SAFARI_STEPS = 502          -- what the gate script writes (data/scripts/safari.lua)
+local DEFAULT_SAFARI_SECONDS = 120
+local SAFARI_BEAT_SECONDS = 5     -- how often the host re-announces the clock
+-- the two south warps out of the centre, to the gate: there is no leaving
+-- early -- the buzzer is the only way out
+local SAFARI_EXIT_WARPS = { { x = 14, y = 25 }, { x = 15, y = 25 } }
+-- the gate's door on FUCHSIA CITY: shut for the rest of the match
+local SAFARI_DOOR = { map = "FUCHSIA_CITY", x = 18, y = 3 }
+
 -- Story flags a fresh Kanto save normally earns in Pallet/Oak's lab.  Set
 -- at match start so the intro scripts never fire and the towns are free to
 -- walk, while every route/gym trainer stays live as PvE.
@@ -128,6 +146,10 @@ return function(mod)
     -- seconds per ring, not minutes: a short game wants 30, a long one 300
     { key = "fog", label = "FOG SECONDS", type = "number",
       default = Fog.DEFAULT_PHASE_SECONDS, min = 5, max = 600 },
+    -- the Safari opening's clock; 0 skips it for the old random drop with
+    -- a RATTATA, which is what the smoke drivers still expect
+    { key = "safari", label = "SAFARI SECONDS", type = "number",
+      default = DEFAULT_SAFARI_SECONDS, min = 0, max = 600 },
   })
 
   local BR = {
@@ -135,7 +157,7 @@ return function(mod)
     ghosts = Ghosts.new(mod),
     spills = Spills.new(mod),
     game = nil,
-    phase = "off",        -- off | lobby | match | over
+    phase = "off",        -- off | lobby | safari | drop | match | over
     status = "lobby",     -- my status: lobby | alive | battle | out
     players = {},         -- id -> { name, map, x, y, facing, sprite, status }
     myId = nil,
@@ -271,7 +293,7 @@ return function(mod)
           BR.players[id] = nil
         end
       end
-      if BR.phase == "match" then BR:checkWinner() end
+      if BR:inRound() then BR:checkWinner() end
     end)
     relay:on("message", function(fromId, m) BR:onMessage(fromId, m) end)
     relay:on("closed", function(reason)
@@ -397,6 +419,11 @@ return function(mod)
     self.pendingDrop = nil   -- a release that never landed (POK-34)
     self.claimedCatch = nil  -- custody taken on a shimmed engine, unconsumed
     self.dropSeq = nil
+    self.safariEndsAt = nil  -- the Safari opening's clock (POK-21)
+    self.lastSafariBeat = nil
+    self.safariGhost = nil
+    self.buzzed = nil
+    self.pickingTown = nil
     self.matchSeed = nil
     self.botFight = nil
     self.botParty = nil
@@ -454,7 +481,15 @@ return function(mod)
     local seed = love.math.random(1, 2 ^ 30)
     local rng = Spawn.rng(seed)
     local data = self.game.data
-    local drops, err = Spawn.pick(data.maps, data.tilesets, #ids, rng)
+    -- the Safari opening: everyone on one map, together.  0 seconds is the
+    -- old drop, scattered over Kanto with a starter.
+    local safari = self:safariSeconds()
+    local drops, err
+    if safari > 0 then
+      drops, err = Spawn.pickIn(data.maps, data.tilesets, SAFARI_MAP, #ids, rng)
+    else
+      drops, err = Spawn.pick(data.maps, data.tilesets, #ids, rng)
+    end
     if not drops then
       say("Couldn't start:\n" .. tostring(err))
       return
@@ -464,8 +499,8 @@ return function(mod)
       spawns[i] = { id = id, map = drops[i].map, x = drops[i].x, y = drops[i].y }
     end
     relay:lock(true)                       -- no late joiners mid-match
-    relay:broadcast(Wire.start(seed, spawns))
-    self:onStart({ seed = seed, spawns = spawns })
+    relay:broadcast(Wire.start(seed, spawns, safari))
+    self:onStart({ seed = seed, spawns = spawns, safari = safari })
   end
 
   function BR:onStart(msg)
@@ -495,15 +530,27 @@ return function(mod)
       end
     end
     -- arm the loadout hook, then start a fresh game straight into the world
-    self.arming = { map = mine.map, x = mine.x, y = mine.y }
-    self.phase = "match"
+    local safari = tonumber(msg.safari) or 0
+    self.arming = { map = mine.map, x = mine.x, y = mine.y, safari = safari > 0 }
+    self.phase = safari > 0 and "safari" or "match"
     self.status = "alive"
     self.started = true
     self.matchWorld = true
+    if safari > 0 then
+      -- the host's beats correct this; until the first lands it is the
+      -- announced length from now, which is close enough for a clock
+      local now = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
+      self.safariEndsAt = now + safari
+      self.lastSafariBeat = nil
+    end
     self.game:startNewGame({ intro = false })
     self.arming = nil
     self.sentMap, self.sentFacing, self.resync = nil, nil, 0
     broadcastPlace()
+    if safari > 0 then
+      say(("Catch what you can!\nThe PA calls time\nin %d:%02d."):format(
+        math.floor(safari / 60), safari % 60))
+    end
   end
 
   -- the loadout, applied to the fresh skeleton (save.new_game).  Only when a
@@ -513,7 +560,15 @@ return function(mod)
     if not BR.arming then return save end
     local Pokemon = require("src.pokemon.Pokemon")
     local Data = require("src.core.Data")
-    save.party = { Pokemon.new(Data, START_SPECIES, START_LEVEL) }
+    if BR.arming.safari then
+      -- no starter: the Safari is where the team comes from.  The admission
+      -- is the gate's own -- thirty balls and the step budget -- so the
+      -- start menu's steps/500 and BALL counter read true.
+      save.party = {}
+      save.safari = { balls = SAFARI_BALLS, steps = SAFARI_STEPS }
+    else
+      save.party = { Pokemon.new(Data, START_SPECIES, START_LEVEL) }
+    end
     save.inventory = {}
     for id, n in pairs(START_ITEMS) do save.inventory[id] = n end
     -- a badge or an HM this build does not carry is skipped rather than
@@ -564,7 +619,7 @@ return function(mod)
       p.map, p.x, p.y, p.facing = msg.map, msg.x, msg.y, msg.facing
       p.sprite = msg.sprite or p.sprite
       p.status = msg.status
-      if msg.status == "out" and self.phase == "match" then self:checkWinner() end
+      if msg.status == "out" and self:inRound() then self:checkWinner() end
 
     elseif msg.t == "step" then
       if p then
@@ -608,13 +663,13 @@ return function(mod)
 
     elseif msg.t == "out" then
       if p then p.status = "out" end
-      if self.phase == "match" then self:checkWinner() end
+      if self:inRound() then self:checkWinner() end
 
     elseif msg.t == "botout" then
       -- whoever beat it says so; everyone marks it down, the host recounts
       local bot = Bots.isBot(msg.id) and self.players[msg.id]
       if bot then bot.status = "out" end
-      if self.phase == "match" then self:checkWinner() end
+      if self:inRound() then self:checkWinner() end
 
     elseif msg.t == "loot" then
       -- ours only if we actually beat them; their message can outrun our
@@ -636,6 +691,10 @@ return function(mod)
     elseif msg.t == "took" then
       self.spills:take(msg.key)
 
+    elseif msg.t == "safari" then
+      -- the Safari clock is the host's too
+      if fromId == self.relay.hostId then self:onSafariBeat(msg.left) end
+
     elseif msg.t == "ring" then
       -- the fog is the host's to declare, like the winner
       if fromId == self.relay.hostId then
@@ -655,6 +714,12 @@ return function(mod)
   -- so both machines start it the same way round.
 
   function BR:onChallenge(fromId, nonce)
+    -- nobody fights before the drop (POK-21): a peer whose clock ran ahead
+    -- of ours is told we are busy, which is true
+    if self.phase ~= "match" then
+      self.relay:send(fromId, Wire.decline(nonce, "busy"))
+      return
+    end
     -- a challenge from the player we are already challenging is an accept
     if self.pending and self.pending.to == fromId then
       self.pending = nil
@@ -760,7 +825,7 @@ return function(mod)
   end
 
   function BR:tickBots()
-    if not (self.relay and self.relay:isHost() and self.phase == "match") then return end
+    if not (self.relay and self.relay:isHost() and self:inRound()) then return end
     local now = clock()
     for id, p in pairs(self.players) do
       if p.bot and p.status == "alive" and p.map then
@@ -778,8 +843,10 @@ return function(mod)
           -- hunt the nearest trainer sharing this map, bot or human, so a
           -- crowded route resolves itself instead of two strangers pacing
           -- opposite ends of it forever
+          -- (not in the Safari: nobody fights there, and a ghost body
+          -- closing in on you is a wall in a phase with no way past it)
           local prey
-          for otherId, o in pairs(self.players) do
+          for otherId, o in pairs(self.phase == "match" and self.players or {}) do
             if otherId ~= id and o.status == "alive" and o.map == p.map then
               if not prey or (math.abs(o.x - p.x) + math.abs(o.y - p.y))
                  < (math.abs(prey.x - p.x) + math.abs(prey.y - p.y)) then
@@ -828,8 +895,212 @@ return function(mod)
     return out
   end
 
+  -- ------- the Safari opening (POK-21) and the drop (POK-22)
+  --
+  -- A match opens with everyone in the SAFARI ZONE together: thirty SAFARI
+  -- BALLs, the vanilla step budget, a clock the host owns, and nobody able
+  -- to fight anybody.  The buzzer is the vanilla PA -- "Ding-dong!  Time's
+  -- up!" and the walk to the gate -- and the gate's exit is a picker:
+  -- choose the town you drop into, land on a random cell of it, and the
+  -- match proper begins.  A player who caught nothing is out at the
+  -- buzzer: they brought no team to a team-as-health mode.
+  --
+  -- Phases: "safari" (the round), "drop" (the buzzer has sounded; PA, gate
+  -- and picker in flight, per client), then "match".  The fog's clock
+  -- starts with the host's own landing (tickRing stamps it on its first
+  -- call), so the Safari never eats into the first ring.
+
+  function BR:inRound()
+    return self.phase == "safari" or self.phase == "drop" or self.phase == "match"
+  end
+
+  function BR:safariLeft()
+    local now = clock()
+    if not (self.safariEndsAt and now) then return 0 end
+    return math.max(0, math.ceil(self.safariEndsAt - now))
+  end
+
+  -- host only: keep the room's clock in step, and sound the buzzer
+  function BR:tickSafari()
+    if not (self.relay and self.relay:isHost() and self.phase == "safari") then return end
+    local now = clock()
+    if not (now and self.safariEndsAt) then return end
+    local left = self:safariLeft()
+    if left <= 0 then
+      self.relay:broadcast(Wire.safari(0))
+      self:onBuzzer()
+      return
+    end
+    if not self.lastSafariBeat or (now - self.lastSafariBeat) >= SAFARI_BEAT_SECONDS then
+      self.lastSafariBeat = now
+      self.relay:broadcast(Wire.safari(left))
+    end
+  end
+
+  -- a guest hears the host's clock; zero is the buzzer
+  function BR:onSafariBeat(left)
+    if self.phase ~= "safari" then return end
+    local now = clock()
+    if now then self.safariEndsAt = now + left end
+    if left <= 0 then self:onBuzzer() end
+  end
+
+  function BR:onBuzzer()
+    if self.phase ~= "safari" then return end
+    self.phase = "drop"
+    self.buzzed = true
+    self:dropBots()
+  end
+
+  -- The engine refuses to open a battle with nobody on your side
+  -- (BattleState.newWild: "no healthy party; skipping"), and a Safari
+  -- battle never draws or uses your lead anyway.  So while the party is
+  -- empty a stand-in is lent for exactly one encounter -- inserted as the
+  -- roll lands, gone with the battle screen -- and after the first catch
+  -- it is never needed again.  It is never on the overworld, in the START
+  -- menu, or in a spill.
+  function BR:lendGhostLead()
+    local save = self.game and self.game.save
+    if not (save and self.phase == "safari") then return end
+    if self.safariGhost or #(save.party or {}) > 0 then return end
+    local Pokemon = require("src.pokemon.Pokemon")
+    local Data = require("src.core.Data")
+    local ghost = Pokemon.new(Data, START_SPECIES, START_LEVEL)
+    save.party = save.party or {}
+    table.insert(save.party, ghost)
+    self.safariGhost = ghost
+  end
+
+  function BR:reclaimGhostLead()
+    local ghost = self.safariGhost
+    if not ghost then return end
+    self.safariGhost = nil
+    local save = self.game and self.game.save
+    for i, mon in ipairs((save and save.party) or {}) do
+      if mon == ghost then table.remove(save.party, i) break end
+    end
+  end
+
+  -- the named places a drop can choose, in the Town Map's own order
+  function BR:dropTowns()
+    local towns = townList()
+    local maps = (self.game and self.game.data and self.game.data.maps) or {}
+    table.sort(towns, function(a, b)
+      local ia = maps[a.id] and maps[a.id].index or 0
+      local ib = maps[b.id] and maps[b.id].index or 0
+      if ia ~= ib then return ia < ib end
+      return a.id < b.id
+    end)
+    return towns
+  end
+
+  -- host only: at the buzzer every bot picks a town like everyone else
+  function BR:dropBots()
+    if not (self.relay and self.relay:isHost()) then return end
+    local towns = self:dropTowns()
+    if #towns == 0 then return end
+    local now = clock() or 0
+    for id, p in pairs(self.players) do
+      if p.bot and p.status == "alive" then
+        p.rng = p.rng or Bots.rng(self.matchSeed, id)
+        local town = towns[p.rng(1, #towns)]
+        local cells = walkableCells(town.id)
+        if #cells > 0 then
+          local c = cells[p.rng(1, #cells)]
+          p.map, p.x, p.y, p.facing = town.id, c.x, c.y, "down"
+          p.lastRoam = now
+          self.ghosts:despawn(id)
+          self.relay:broadcast(Wire.place(p.map, p.x, p.y, "down", p.status, p.sprite, id))
+        end
+      end
+    end
+  end
+
+  -- The buzzer's work, once we are standing on the overworld with no battle
+  -- open (a catch in flight finishes first; the PA is patient).  Caught
+  -- nothing: out.  Still in the zone: the vanilla game-over -- the PA
+  -- jingle, "Time's up!", the walk to the gate.  Then the picker, at the
+  -- gate -- or straight away for a player the PA already sent there.
+  function BR:tickDrop()
+    if self.phase ~= "drop" then return end
+    local game = self.game
+    local ow = mod.world:overworld()
+    if not (game and ow and game.stack:top() == ow and not ow.transitioning) then return end
+    if self:liveLocalBattle() then return end
+    local save = game.save
+    if self.buzzed then
+      self.buzzed = nil
+      if #(save.party or {}) == 0 then
+        pcall(function() require("src.core.Sound").play(game.data, "Safari_Zone_PA") end)
+        save.safari = nil
+        self:eliminate("PA: Ding-dong!\nTime's up!\fYou caught nothing.\nYou are out of\nthe match.")
+        self.phase = "match"      -- a spectator from here on
+        return
+      end
+      self.pickingTown = true
+      if save.safari and ow.safariGameOver then
+        local t = game.data and game.data.text
+        ow:safariGameOver((t and t._TimesUpText) or "PA: Ding-dong!\nTime's up!")
+        return
+      end
+    end
+    if self.pickingTown and not save.safari then
+      self:openTownPicker()
+    end
+  end
+
+  function BR:openTownPicker()
+    local game = self.game
+    local towns = self:dropTowns()
+    if #towns == 0 then
+      -- no town data to choose from: land where we stand
+      self:landIn(nil)
+      return
+    end
+    local items = {}
+    for _, town in ipairs(towns) do
+      items[#items + 1] = { label = town.name, value = town.id }
+    end
+    -- B closes the list like any other; the tick opens it again, because
+    -- there is no staying at the gate
+    game.stack:push(mod.ui.ListMenu.new(game, "DROP WHERE?", items, {
+      onChoose = function(item, list)
+        list:close()
+        self:landIn(item.value)
+      end,
+    }))
+  end
+
+  -- the exact cell is random (POK-22): a popular town does not stack
+  -- everyone on one square
+  function BR:landIn(mapId)
+    self.pickingTown = nil
+    self.phase = "match"
+    local game = self.game
+    local data = game and game.data
+    if not (mapId and data) then return end
+    local rng = Spawn.rng(love.math.random(1, 2 ^ 30))
+    local spot = Spawn.pickIn(data.maps, data.tilesets, mapId, 1, rng)
+    local cell = spot and spot[1]
+    if not cell then return end
+    local save = game.save
+    -- a whiteout returns here, not to a Safari that is closed
+    save.lastHeal = { map = mapId, x = cell.x, y = cell.y }
+    save.lastOutdoor = { id = mapId, x = cell.x, y = cell.y }
+    local ok, err = mod.world:warpTo(mapId, cell.x, cell.y, "down", { arrive = "fly" })
+    if not ok then
+      mod.log:warn("could not drop into %s (%s)", tostring(mapId), tostring(err))
+    end
+  end
+
   function BR:fogSeconds()
     return tonumber(mod.options:get("fog")) or Fog.DEFAULT_PHASE_SECONDS
+  end
+
+  function BR:safariSeconds()
+    local n = tonumber(mod.options:get("safari"))
+    if n == nil then return DEFAULT_SAFARI_SECONDS end
+    return math.max(0, math.floor(n))
   end
 
 
@@ -1159,6 +1430,28 @@ return function(mod)
       ctx.reason = "spectating"
       return false
     end
+    -- the Safari opening (POK-21): the way out of the zone is the buzzer,
+    -- and once it has sounded the gate is shut for the rest of the match
+    if ow and ctx and ctx.mover == ow.player and ctx.map then
+      local mapId = ctx.map.id
+      if BR.phase == "safari" and mapId == SAFARI_MAP then
+        for _, w in ipairs(SAFARI_EXIT_WARPS) do
+          if ctx.toX == w.x and ctx.toY == w.y then
+            ctx.reason = "safari"
+            return false
+          end
+        end
+      elseif (BR.phase == "drop" or BR.phase == "match") and mapId == SAFARI_DOOR.map
+             and ctx.toX == SAFARI_DOOR.x and ctx.toY == SAFARI_DOOR.y then
+        ctx.reason = "closed"
+        local now = clock() or 0
+        if now - (BR.lastClosedSay or -10) > 3 then
+          BR.lastClosedSay = now
+          say("The SAFARI ZONE\nis closed for\nthe match.")
+        end
+        return false
+      end
+    end
     return next(allowed, ctx)
   end)
 
@@ -1241,7 +1534,7 @@ return function(mod)
   -- One way out of a match, however it happened: a battle whiteout, or the
   -- fog finishing the job outside one.
   function BR:eliminate(message)
-    if self.status == "out" or self.phase ~= "match" then return end
+    if self.status == "out" or not self:inRound() then return end
     self.status = "out"
     -- Where the match ended for us, captured here rather than in any one
     -- caller: a whiteout, a PvP loss and the fog all arrive by different
@@ -1612,7 +1905,8 @@ return function(mod)
   -- Everything here holds from the drop until the match ends, and nowhere
   -- else: a real playthrough must be untouched by the mod being installed.
 
-  local function inMatch() return BR.phase == "match" end
+  -- "in a match" is from the Safari on: every rule below holds there too
+  local function inMatch() return BR:inRound() end
 
   -- Every battle is at the rung.  Trainer parties already ride it through
   -- trainer.party above; wild encounters did not, so the Safari handed out
@@ -1621,7 +1915,10 @@ return function(mod)
   -- at the same point the spectator guard already sits.
   mod.hooks:wrap("encounter.species", function(next, enc, ctx)
     local rolled = next(enc, ctx)
-    if rolled and inMatch() then rolled.level = BR:level() end
+    if rolled and inMatch() then
+      rolled.level = BR:level()
+      BR:lendGhostLead()
+    end
     return rolled
   end)
 
@@ -1630,7 +1927,10 @@ return function(mod)
   -- is not touched, so Old Rod still hooks its MAGIKARP, just at the rung.
   mod.hooks:wrap("encounter.fishing", function(next, rod, mapId, candidates)
     local catch = next(rod, mapId, candidates)
-    if catch and inMatch() then catch.level = BR:level() end
+    if catch and inMatch() then
+      catch.level = BR:level()
+      BR:lendGhostLead()
+    end
     return catch
   end)
 
@@ -1719,7 +2019,7 @@ return function(mod)
   -- BattleState says battle.started -- LinkBattle never emits it -- and
   -- PvP and bot fights hold tickFog off via status anyway.
   mod.events:on("battle.started", function(ev)
-    if BR.phase == "match" and ev and ev.battle then BR.localBattle = ev.battle end
+    if BR:inRound() and ev and ev.battle then BR.localBattle = ev.battle end
   end)
 
   -- Custody taken on a shimmed engine (catch.party_full above): the deposit
@@ -1729,7 +2029,7 @@ return function(mod)
     local claimed = BR.claimedCatch
     BR.claimedCatch = nil
     if not (claimed and ev and ev.mon and claimed == ev.mon) then return end
-    if not (BR.phase == "match" and ev.battle) then return end
+    if not (BR:inRound() and ev.battle) then return end
     BR:offerDropForCatch(ev.battle, ev.mon)
   end)
 
@@ -1739,6 +2039,7 @@ return function(mod)
   mod.events:on("battle.ended", function(ev)
     BR.localBattle = nil
     BR.claimedCatch = nil   -- custody never consumed: nothing is pending
+    BR:reclaimGhostLead()   -- the Safari's stand-in leaves with the screen
     local npc = BR.npcFight
     BR.npcFight = nil
     if npc and BR.phase == "match" and ev.result == "win" and not BR.botFight then
@@ -1846,7 +2147,7 @@ return function(mod)
   end
 
   function BR:checkWinner()
-    if not (self.relay and self.relay:isHost() and self.phase == "match") then return end
+    if not (self.relay and self.relay:isHost() and self:inRound()) then return end
     -- survivors among everyone still in the room
     local survivors = {}
     if self.status ~= "out" then survivors[#survivors + 1] = self.myId end
@@ -1867,6 +2168,7 @@ return function(mod)
     self.phase = "over"
     self.ghosts:despawnAll()
     self.pendingDrop = nil   -- the match ended before the release could land
+    self.buzzed, self.pickingTown = nil, nil
     if id == self.myId then
       say("You are the last\ntrainer standing!\nYou win!")
     elseif id then
@@ -1944,7 +2246,7 @@ return function(mod)
       end
     end
 
-    if relay and relay:isOpen() and BR.phase == "match" then
+    if relay and relay:isOpen() and BR:inRound() then
       local h = here()
       if h then
         if BR.status ~= "battle" then
@@ -1960,26 +2262,33 @@ return function(mod)
           end
           BR.ghosts:sync(game, h.mapId, BR.players)
           BR.spills:sync(h.mapId)
-          BR:tryEngage()
+          -- nobody fights in the Safari (POK-21), nor at the gate on the
+          -- way out of it
+          if BR.phase == "match" then BR:tryEngage() end
         end
       end
+      -- the Safari opening: its clock, then the buzzer's work
+      BR:tickSafari()
+      BR:tickDrop()
       -- bots keep walking while we are in a battle or a menu: their world
       -- does not pause because ours did
       BR:tickBots()
-      BR:tickBotFights()
-      BR:tickRing()
-      BR:tickBotFog()
-      BR:tickNpcFog()
-      -- status == "battle" is PvP or a bot fight: either machine biting HP
-      -- outside the lockstep is a desync (both players sit in the same fog
-      -- anyway, so it stays fair).  A LOCAL battle the fog reaches into,
-      -- both sides -- see tickFog (POK-31).
-      if BR.status ~= "battle" then
-        BR:tickFog()
-        BR:tickLevels()
+      if BR.phase == "match" then
+        BR:tickBotFights()
+        BR:tickRing()
+        BR:tickBotFog()
+        BR:tickNpcFog()
+        -- status == "battle" is PvP or a bot fight: either machine biting
+        -- HP outside the lockstep is a desync (both players sit in the
+        -- same fog anyway, so it stays fair).  A LOCAL battle the fog
+        -- reaches into, both sides -- see tickFog (POK-31).
+        if BR.status ~= "battle" then
+          BR:tickFog()
+          BR:tickLevels()
+        end
+        BR:spectatorInput(game)
+        BR:tickWatch()
       end
-      BR:spectatorInput(game)
-      BR:tickWatch()
     end
 
     -- A released team member (POK-34) lands where you stand, once you are
@@ -1987,7 +2296,7 @@ return function(mod)
     -- the ball belongs to the overworld's loot language.  The guards are
     -- openSpill's -- on the map, not mid-warp -- so the ball never lands
     -- under a transition.
-    if BR.pendingDrop and BR.phase == "match" then
+    if BR.pendingDrop and BR:inRound() then
       local ow = mod.world:overworld()
       if ow and game.stack:top() == ow and not ow.transitioning then
         local mon = BR.pendingDrop
@@ -2012,7 +2321,7 @@ return function(mod)
   mod.events:on("map.entered", function()
     BR.ghosts:despawnAll()
     BR.spills:despawnAll()
-    if BR.relay and BR.relay:isOpen() and BR.phase == "match" then broadcastPlace() end
+    if BR.relay and BR.relay:isOpen() and BR:inRound() then broadcastPlace() end
   end)
 
   -- ------- talking to another trainer
@@ -2036,7 +2345,8 @@ return function(mod)
     if not (BR.game and BR.relay and BR.relay:isOpen()) then return end
     npc:facePlayer(ow.player)
     -- talking counts as engaging if they are alive and we are
-    if BR.status == "alive" and BR.players[id] and BR.players[id].status == "alive"
+    if BR.phase == "match" and BR.status == "alive" and BR.players[id]
+       and BR.players[id].status == "alive"
        and not BR.battle and not BR.pending and not BR.botFight then
       if Bots.isBot(id) then
         BR:startBotBattle(id)
@@ -2135,7 +2445,7 @@ return function(mod)
 
   mod.hooks:wrap("render.hud", function(next, game, viewport)
     local out = next(game, viewport)
-    if not (BR.phase == "match" and viewport and game.stack) then return out end
+    if not (BR:inRound() and viewport and game.stack) then return out end
     local ow = mod.world:overworld()
     if not ow or game.stack:top() ~= ow then return out end
     local okFont, Font = pcall(require, "src.render.Font")
@@ -2158,6 +2468,13 @@ return function(mod)
       local p = BR.watching and BR.players[BR.watching]
       local who = p and p.name or "<  >"
       hudBox(("<%s>"):format(who), 0, 0)
+    elseif BR.phase == "safari" then
+      -- the Safari clock, blinking through its last ten seconds
+      local left = BR:safariLeft()
+      local t = clock() or 0
+      if left > 10 or math.floor(t * 2) % 2 == 0 then
+        hudBox(("SAFARI %d:%02d"):format(math.floor(left / 60), left % 60), 0, 0)
+      end
     elseif BR.wasInFog then
       -- blink on the fog's own beat, so the box pulses with the bite
       local t = clock() or 0
@@ -2174,12 +2491,12 @@ return function(mod)
   mod.hooks:wrap("ui.start_menu.items", function(next, game, items)
     local out = next(game, items)
     if type(out) ~= "table" then return out end
-    local label = (BR.phase == "match" or BR.phase == "over") and "ROYALE*"
+    local label = (BR:inRound() or BR.phase == "over") and "ROYALE*"
       or (BR.relay and "ROYALE." or "ROYALE")
     -- the engine's own link play has no business in a match: the mod owns
     -- the transport for PvP, and a second session from inside one is
     -- undefined at best.  Back the moment the match is over.
-    if BR.phase == "match" then
+    if BR:inRound() then
       mod.ui.removeLabel(out, "LINK")
       -- SAVE would run the whole vanilla ceremony -- confirmation, jingle,
       -- "...saved the game!" -- and write nothing (save.write is vetoed
@@ -2280,15 +2597,31 @@ return function(mod)
     BR.botCount = math.max(0, math.min(Bots.MAX, math.floor(tonumber(n) or 0)))
     return BR.botCount
   end
-  mod.exports.setFog = function(seconds)
+  -- the drivers' way to set a clock: re-declare the rows with new defaults
+  -- (options:define replaces the whole set, so every row rides along)
+  local function redefineOptions(fog, safari)
     mod.options:define({
       { key = "relay", label = "RELAY", type = "text",
         default = BR:relayAddress() },
       { key = "fog", label = "FOG SECONDS", type = "number",
-        default = math.max(1, math.floor(tonumber(seconds) or 0)),
-        min = 1, max = 600 },
+        default = math.max(1, math.floor(tonumber(fog) or 0)), min = 1, max = 600 },
+      { key = "safari", label = "SAFARI SECONDS", type = "number",
+        default = math.max(0, math.floor(tonumber(safari) or 0)), min = 0, max = 600 },
     })
+  end
+  mod.exports.setFog = function(seconds)
+    redefineOptions(seconds, BR:safariSeconds())
     return BR:fogSeconds()
+  end
+  mod.exports.setSafari = function(seconds)
+    redefineOptions(BR:fogSeconds(), seconds)
+    return BR:safariSeconds()
+  end
+  mod.exports.safariLeft = function() return BR:safariLeft() end
+  -- run the Safari clock out now; the host's own tick sounds the buzzer
+  mod.exports.buzz = function()
+    if BR.phase == "safari" then BR.safariEndsAt = clock() or 0 end
+    return BR.phase
   end
   mod.exports.ring = function()
     local r = BR.ring

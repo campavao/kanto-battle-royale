@@ -1,7 +1,7 @@
 {
   "id": "battle_royale",
   "name": "Kanto Battle Royale",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "api": 2,
   "entry": "main.lua",
   "profile": "content",
@@ -13,5 +13,5 @@
   "dependencies": [],
   "optional_dependencies": [],
   "conflicts": [],
-  "description": "Last trainer standing. Everyone drops onto a random spot in Kanto with a level 5 RATTATA, six POKe BALLs and a POTION; walk into another trainer and the battle is on; a whiteout puts you out. Plays over a relay server (see relay/)."
+  "description": "Last trainer standing. Everyone starts together in the SAFARI ZONE with 30 SAFARI BALLs and two minutes to build a team; when the PA calls time you pick the town you drop into, and the fog closes in. Walk into another trainer and the battle is on; a whiteout puts you out. Plays over a relay server (see relay/)."
 }

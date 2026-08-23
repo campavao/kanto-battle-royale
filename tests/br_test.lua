@@ -46,6 +46,23 @@ do
   eq(st and #st.spawns, 2, "start carries both spawns")
   ok(Wire.decode({ t = "start", seed = 1, spawns = {} }) == nil, "empty start is refused")
 
+  -- the Safari opening (POK-21): start carries the round, beats carry the clock
+  eq(Wire.PROTOCOL, 3, "the Safari opening is PROTOCOL 3")
+  local safariStart = Wire.decode(Wire.start(7,
+    { { id = 1, map = "SAFARI_ZONE_CENTER", x = 2, y = 3 } }, 120))
+  ok(safariStart ~= nil, "a start with a Safari round decodes")
+  eq(safariStart and safariStart.safari, 120, "carrying the round's length")
+  eq(st and st.safari, 0, "no round is 0, not nil")
+  ok(Wire.decode({ t = "start", seed = 7, safari = -5,
+     spawns = { { id = 1, map = "ROUTE_1", x = 2, y = 3 } } }) == nil,
+     "a negative round is refused")
+  local beat = Wire.decode(Wire.safari(42))
+  ok(beat ~= nil, "a clock beat decodes")
+  eq(beat and beat.left, 42, "with the seconds left")
+  eq(Wire.decode(Wire.safari(0)).left, 0, "zero is the buzzer, and it travels")
+  ok(Wire.decode({ t = "safari" }) == nil, "a beat without a clock is refused")
+  ok(Wire.decode({ t = "safari", left = 9999 }) == nil, "and so is an absurd one")
+
   eq(Wire.decode(Wire.challenge(7)).nonce, 7, "challenge nonce")
   eq(Wire.decode(Wire.accept(7)).nonce, 7, "accept nonce")
   eq(Wire.decode(Wire.winner(3)).id, 3, "winner id")
@@ -565,6 +582,36 @@ do
       eq(again and again[1].map, drops[1].map, "same seed reproduces the drop map")
       eq(again and again[1].x, drops[1].x, "same seed reproduces the drop cell")
     end
+
+    -- the Safari opening (POK-21): everyone on the centre map, together
+    local safari, why = Spawn.pickIn(maps, tilesets, "SAFARI_ZONE_CENTER", 8, Spawn.rng(42))
+    ok(safari ~= nil, "deals 8 Safari spawns (" .. tostring(why) .. ")")
+    if safari then
+      eq(#safari, 8, "one per trainer")
+      local seen, unique, allCentre, allWalkable = {}, true, true, true
+      for _, d in ipairs(safari) do
+        local key = d.x .. ":" .. d.y
+        if seen[key] then unique = false end
+        seen[key] = true
+        if d.map ~= "SAFARI_ZONE_CENTER" then allCentre = false end
+        if not Spawn.walkable(maps, tilesets, d.map, d.x, d.y) then allWalkable = false end
+      end
+      ok(unique, "no two trainers share a cell")
+      ok(allCentre, "all of them in the centre")
+      ok(allWalkable, "and every cell is walkable")
+      ok(#Spawn.outdoorMaps({ SAFARI_ZONE_CENTER = maps.SAFARI_ZONE_CENTER }) == 0,
+         "which the outdoor drop could never reach (FOREST tileset)")
+    end
+    -- a crowd bigger than the map shares cells rather than failing to drop
+    local crowd = Spawn.pickIn(maps, tilesets, "SAFARI_ZONE_CENTER", 2000, Spawn.rng(1))
+    eq(crowd and #crowd, 2000, "a crowd bigger than the map still all lands")
+    ok(Spawn.pickIn(maps, tilesets, "NOT_A_MAP", 1, Spawn.rng(1)) == nil,
+       "an unknown map is refused")
+    -- the drop after the buzzer (POK-22): a random cell of the chosen town
+    local landing = Spawn.pickIn(maps, tilesets, "PALLET_TOWN", 1, Spawn.rng(9))
+    ok(landing and landing[1] and landing[1].map == "PALLET_TOWN", "a town landing is on that town")
+    ok(landing and Spawn.walkable(maps, tilesets, "PALLET_TOWN", landing[1].x, landing[1].y),
+       "on a walkable cell")
   end
 end
 
@@ -700,6 +747,9 @@ end
 -- ------------------------------------------------------------------
 do
   local CodeEntry = require("src.link.CodeEntry")
+  -- fromText is an RFC 0014 seam; on a stock engine the shim supplies it,
+  -- exactly as it does for the running mod (shim_test covers both worlds)
+  if not CodeEntry.fromText then require("mods.battle_royale.lib.shim").apply() end
   -- Entry.ADDRESS without pulling in the screen (which wants love + a game)
   local ADDRESS = { charset = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:",
                     length = 40 }

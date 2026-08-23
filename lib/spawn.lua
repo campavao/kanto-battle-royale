@@ -80,6 +80,30 @@ function Spawn.cellsOf(def, tilesetDef)
   return out
 end
 
+-- n drop points on ONE map: the Safari opening puts everyone in the centre
+-- together (POK-21), and the drop after it lands each player on a random
+-- cell of the town they chose (POK-22).  Cells are dealt off a shuffled
+-- deck, so nobody shares one until the map is full -- and then they do,
+-- rather than a crowded room failing to drop.
+--
+-- Returns an array of { map=, x=, y= } of length n, or nil + reason.
+function Spawn.pickIn(maps, tilesets, mapId, n, rng)
+  rng = rng or Spawn.rng(os.time())
+  local def = maps and maps[mapId]
+  local cells = Spawn.cellsOf(def, def and tilesets and tilesets[def.tileset])
+  if #cells == 0 then return nil, "no free cells on " .. tostring(mapId) end
+  for i = #cells, 2, -1 do
+    local j = rng(1, i)
+    cells[i], cells[j] = cells[j], cells[i]
+  end
+  local out = {}
+  for i = 1, n do
+    local c = cells[(i - 1) % #cells + 1]
+    out[i] = { map = mapId, x = c.x, y = c.y }
+  end
+  return out
+end
+
 -- n drop points for n players: maps are dealt round-robin off a shuffled
 -- deck so two players only share a map once every map has someone on it,
 -- and no two players ever share a cell.
