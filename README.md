@@ -8,6 +8,10 @@ Your party is your health, so when your last Pokemon faints you are out. A
 Weezing fog closes in on the Town Map until whoever is left is standing in
 the same few squares.
 
+The fog shrinks the world on a shared clock, everyone's level rides the
+same clock, and a fallen team spills onto the ground as Poké Balls anyone
+can claim. See "What's here / what's next" below.
+
 A mod for [gen1recomp](https://github.com/bryanthaboi/gen1recomp).
 
 ## Install
@@ -24,8 +28,8 @@ A mod for [gen1recomp](https://github.com/bryanthaboi/gen1recomp).
 Nothing else to install, **no server to run** (the mod ships pointed at a
 hosted relay, so `QUICK PLAY` works immediately), and **no engine patch
 required**: the mod carries a
-compatibility shim, so it runs on a stock gen1recomp build. (See "Running on
-a stock engine" below. The seams it needs are proposed upstream in
+compatibility shim, so it runs on a stock gen1recomp build. (See "...and
+running without them" below. The seams it needs are proposed upstream in
 [PR #1746](https://github.com/bryanthaboi/gen1recomp/pull/1746); when that
 lands the shim stands down on its own.)
 
@@ -89,12 +93,73 @@ Meanwhile the **fog** closes in. See below.
 Walk into another trainer — be on the tile facing them — and the battle
 begins. Win, lose or run; a lost battle only ends your match if it was your
 last Pokémon. **Knock someone out and you take their bag and their money**
-(the first slice of the loot spill). Reopen `ROYALE` any time to see how
-many trainers are left, or to leave.
+(the first slice of the loot spill), and their team hits the ground as
+Poké Balls where they fell. **Opening a ball is a gift, not a fight**: it
+shows the prompt Oak's lab uses —
+
+> This contains a NIDORINO.
+> Do you want it?
+
+— take or leave. The Pokémon joins your party at 1 HP, exactly as it fell;
+leaving puts the ball back for the next trainer, and a full party leaves it
+too. Reopen `ROYALE` any time to leave the match.
+
+**Beaten means gone.** When anything falls — a player, a bot, or one of
+Kanto's own route trainers — its sprite disappears for every client and
+only the Poké Balls stay. Walking into an area and finding balls with no
+trainer is how you read that somebody else got there first: the world is a
+record of the match. Kanto's trainers drop their teams too (at the rung
+they fought at), which gives PvE a point beyond levels — and means a route
+can be *picked over*.
+
+**The HUD.** Two small boxes in the top corners of the overworld, drawn in
+the game's own font: `7 LEFT` on the right is how many trainers are still
+in it, and `FOG!` pulses on the left while you are standing outside the
+ring. Each bite of the fog is the overworld-poison beat you already know —
+the screen flickers dark and the poison chime plays — so you can feel it
+without opening a menu.
+
+**Once you are out, you watch.** `LEFT` / `RIGHT` hop between the trainers
+still in the match; the box on the left names who you are watching, and
+the view follows them — when they leave the map, or get five cells away,
+you are warped back to their side. You cannot walk, catch, or fight; you
+can turn on the spot and open your (empty) menus, and nothing you do
+reaches the match.
 
 A match plays in a throwaway world: **SAVE is disabled from the drop until
 you return to the title** and start or continue a real game, so a match can
 never overwrite your actual playthrough.
+
+**The rules of a match**, from the drop until it ends and nowhere else:
+
+- Every battle is at the current rung — trainers, bots, wild grass and
+  water, the Safari, a bite on a rod. A Lv5 drop never meets a Lv22 Safari
+  mon, and a route's PIDGEY is worth catching in the last ring.
+- Battles are **SET** style whatever your OPTION row says: no "will you
+  change POKéMON?" when the foe faints. SHIFT is free information and a free
+  swap, and party-as-health is meant to bite.
+- **No nickname prompt** on a catch. The team is disposable and you may
+  catch a dozen under fog pressure.
+- **A full party means choosing who to release.** At 6/6, a catch or a
+  loot-ball take opens the party screen as a picker: drop one to make room,
+  or keep the team you have. The released Pokémon lands as a ball at your
+  feet, claimable by anyone — trading up leaves a trace. Nothing ever
+  reaches a box.
+- **Game speed is 1X.** A match has a shared clock and other people in it;
+  fast-forward through the fog or slow-motion in a fight is cheating. The
+  hotkey and the OPTION rows are ignored until the match ends.
+- **LINK is off the START menu.** The mod owns the transport for PvP.
+- **SAVE is off the START menu too.** The veto above already made saving
+  impossible, but the row still ran the whole vanilla ceremony — the
+  confirmation, the jingle, "...saved the game!" — and wrote nothing. A
+  menu row that lies gets removed; the veto stays as the guarantee.
+- **Every PC is OUT OF ORDER.** Boxes are a second health bar in a mode
+  where the party IS your health — deposit fresh Pokémon, fight with one,
+  withdraw and repeat — so storage, Pokémon and items both, is unreachable
+  until the match ends.
+
+None of these write to your saved options — they hold while a match is live
+and your own settings are back the moment it is over.
 
 The start-menu row reads `ROYALE.` while you're in a lobby and `ROYALE*`
 once a match is live. The same screen is on the title menu, so a match is
@@ -223,7 +288,10 @@ limitation is gone.
 
 **The fog** (`lib/fog.lua`) is what turns this from a deathmatch into a
 battle royale: a ring that tightens on a shared clock until everyone left is
-in the same few squares.
+in the same few squares — and then keeps tightening. The last phase is fog
+over the whole of Kanto, so a match with survivors who refuse to fight each
+other still ends: whoever lasts longest inside it wins, and that is a
+tiebreak, not the plan.
 
 Drawing it took one decision worth knowing about. Kanto here is not a single
 canvas the way Hoenn was in the sibling project — it is 222 separate maps
@@ -241,19 +309,36 @@ HP every four seconds** — about forty seconds from full to fainted. It is a
 fraction rather than Gen 1's flat 1-HP-per-4-steps because a flat point does
 not survive level scaling: it would kill a Lv5 starter in a minute and take
 twenty patient minutes against a Lv100 team, which is exactly backwards. The
-fog has to bite hardest when the ring is smallest. A **Poison-type lead is
-immune**: the fog is its element
-(DESIGN D11), and it gives an unloved type a real reason to be on your team.
-Losing your last Pokémon to the fog eliminates you exactly like a whiteout.
+fog has to bite hardest when the ring is smallest. Nothing is immune to it:
+a Poison lead used to be (DESIGN D11), and it played badly — Kanto is full
+of Zubat and Nidoran, so the common case was a team that ignored the ring
+for a whole match. Losing your last Pokémon to the fog eliminates you
+exactly like a whiteout.
+
+The fog does not stop at the battle screen. In a wild or route-trainer
+fight outside the ring **both sides keep taking the bite** — but the two
+Pokémon actually on the field are drained only to 1 HP, never fainted: the
+engine only knows how to faint a mon through its own move flow, so the fog
+brings a battle to the brink and the killing blow is thrown inside it.
+(PvP and bot fights are exempt: two machines biting HP outside the
+lockstep is a desync, and both players sit in the same fog anyway.)
 
 The host owns the clock and announces each shrink; nobody derives it from
-their own wall clock, which would drift. Bots caught outside walk out of it
-off-screen — real pathing across Kanto's warp graph is a much bigger
-feature, and relocating them keeps the match converging instead of quietly
-wiping the roster on the first shrink.
+their own wall clock, which would drift. Bots take the fog on the same terms
+you do — they cannot walk between maps, so a bot the ring leaves behind is
+a bot that dies in it, and its team hits the ground like anyone else's.
 
-`FOG SECONDS` (a mod option, default 120) is how long each ring lasts, so a
-default match runs about ten minutes and a quick one can be far shorter.
+Kanto's own trainers are not spared either: a map the ring has left gets
+one shared clock with the same grace you get, and when it runs out every
+trainer on it is gone, on every client. They spill nothing — balls on the
+ground mark a kill somebody *earned* — so a route the fog has taken is
+simply empty, and the survivors' PvE shrinks with the world.
+
+`FOG SECONDS` (a mod option, default 120) is how long each ring lasts. The
+schedule is eight rings — the whole map, then 9, 7, 5, 3 and 1.5 squares
+around the centre, then the centre's own square, then nothing — so a default
+match reaches the all-fog endgame at sixteen minutes and a quick one can be
+far shorter.
 
 **Open the TOWN MAP to see it.** The ring is a circle in town-map space and
 the TOWN MAP draws that exact grid, so the item you already reach for to
@@ -311,10 +396,11 @@ clock means a fast-forwarding player floods the relay off its own connection.
 ## Engine additions
 
 This mod needs a few small, generic engine seams that stock gen1recomp does
-not have. They are proposed upstream in
-[PR #1746](https://github.com/bryanthaboi/gen1recomp/pull/1746) (RFC 0014);
-until that lands, `lib/shim.lua` installs them from outside, so you do not
-need a patched build:
+not have. They are proposed upstream -- the first batch as
+[PR #1746](https://github.com/bryanthaboi/gen1recomp/pull/1746) (RFC 0014),
+the battle-rule hooks and the full-party catch hook as RFCs 0015 and 0016 to
+follow; until they land, `lib/shim.lua` installs them from outside, so you do
+not need a patched build:
 
 | Where | What | Why |
 | --- | --- | --- |
@@ -322,10 +408,14 @@ need a patched build:
 | `src/world/OverworldController.lua` | the `world.talk` hook around the NPC talk path | a runtime object has no `TEXT_*` id, so the mod claims the `A` press |
 | `src/link/LinkState.lua` | `LinkState.newFromSession` + the `adopted` stage, and the `link.battle_ended` event | adopt an already-paired transport and skip the connect UI; report the battle's outcome + party so a mode above it can react |
 | `src/core/Game.lua` | `Game:startNewGame(opts)` (with `intro=false`) | start a fresh game straight into the world, so a match can drop you in without Oak's speech |
+| `src/battle/BattleState.lua` | the `battle.style` and `catch.nickname` hooks | force SET and skip the nickname prompt for a match without writing the player's OPTION row |
+| `src/battle/BattleState.lua` | the `catch.party_full` hook (`partyFullDestination`) | hand a full-party catch to the mod's own picker instead of laundering it through a PC the mode has locked |
 
-All four are generic — any mod with a self-driven actor, an adopted link
-transport, or its own new-game flow wants them. They are proposed upstream
-as **RFC 0014**.
+All of them are generic — any mod with a self-driven actor, an adopted link
+transport, its own new-game flow, or a rule it wants to hold for a while
+wants them. The first four are proposed upstream as **RFC 0014**, the two
+battle-rule hooks as **RFC 0015**, and the full-party catch hook as
+**RFC 0016**.
 
 ### ...and running without them
 
@@ -345,7 +435,7 @@ an upstream refactor breaks it silently. Each patch therefore touches one
 function, and the summary line keeps "still shimming X" visible instead of
 letting it become the permanent normal.
 
-Four of the five are values that are either there or not. `world.talk` is
+Five of the six are values that are either there or not. `world.talk` is
 the awkward one: a call site in the *middle* of `interact()`, so there is
 nothing to extend and no way for a mod to see whether it exists. The shim
 raises the hook first and hands the press back to the untouched original
@@ -358,6 +448,27 @@ not claimed by the shimmed path (a ghost is never behind a mart counter),
 and `os.time` is denied to mods, so a shimmed `startNewGame` does not stamp
 `sessionStartedAt` — a match world is thrown away, and nothing reads it.
 
+The two battle-rule hooks are the newest and the least clean to shim.
+`catch.nickname` is fine: the prompt is its own method, so the patch asks the
+hook first and, when it declines, fills the engine's reserved queue slot with
+a text box that closes itself. `battle.style` is not: the stock engine reads
+the OPTION value inline at the moment the foe faints, inside a function far
+too big to replace, so the shim swaps the value for the battle's duration
+(`enter` to `finish`) and puts it back. That is exactly the write-the-row
+workaround the seam exists to avoid — one speed-hotkey press mid-battle
+persists SET to disk, and the restore repairs it on the next press. It is
+reported in the boot line like everything else, so it cannot quietly become
+the normal.
+
+`catch.party_full` is the same shape of problem as `world.talk` — a call
+site in the middle of `storeCaughtMon` — but it has a name to check: a seam
+engine answers through `BattleState:partyFullDestination()`, so the shim
+stands down by looking for the method. Without it, the shim asks the hook
+from inside `Boxes.deposit`, and a claim refuses the deposit so nothing
+reaches a box either way. What that cannot repair is the text: the stock
+branch prints "But every BOX is full!" before the mod's picker opens — the
+wrong reason for the right decision, and the argument for the seam.
+
 `tests/shim_test.lua` runs the same assertions on both engines and is the
 thing that proves the fallback is honest; run it in either tree.
 
@@ -366,16 +477,17 @@ thing that proves the fallback is honest; run it in either tree.
 **Here (v0):** rooms + lobby over a relay with name entry, bots (up to 30,
 so a match is playable solo), random Kanto drop, the shared loadout plus all
 badges and HMs, real-time presence, forced face-to-face battles, the
-shrinking fog on a shared clock with Poison immunity, party-as-health
+shrinking fog on a shared clock that closes all the way, party-as-health
 elimination from any whiteout, victor-takes-the-bag loot, a save-slot guard
-(matches can't overwrite a real save), last-trainer-standing. Route/gym
-trainers stay live as PvE.
+(matches can't overwrite a real save), last-trainer-standing. Route
+trainers are PvE that pays out: beat one and its team spills, its sprite
+goes, for everyone.
 
 **Next** (from the design in the sibling `pokemon-battle-royale` project's
 `docs/DESIGN.md`): loose item/money pickups on the ground to finish D8 (the
 bag still transfers straight to the victor); the per-pair re-engage cooldown
 and escape tools of D9; Repel shrinking your own eyeline; type-based
-overworld abilities (D18/D20); a public relay deployment; and bots that pick
+overworld abilities (D18/D20); and bots that pick
 a fight with a *player* on sight rather than only closing distance.
 
 ## Tests

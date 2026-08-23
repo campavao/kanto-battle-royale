@@ -1,9 +1,11 @@
 -- Run on an engine that does not have the seams yet.
 --
--- The mod needs five things the stock engine has no public way to do (they
--- are proposed upstream as RFC 0014).  On a build that has them, this file
--- does nothing at all.  On a build that does not, it installs the same
--- behaviour from outside, so one mod folder works on both.
+-- The mod needs eight things the stock engine has no public way to do (five
+-- are proposed upstream as RFC 0014, two more -- the battle.style and
+-- catch.nickname hooks -- as RFC 0015, and the catch.party_full hook as
+-- RFC 0016).  On a build that has them, this file does nothing at all.  On
+-- a build that does not, it installs the same behaviour from outside, so
+-- one mod folder works on both.
 --
 -- Everything here is a LAST RESORT and says so.  Patching engine modules
 -- from a mod is worse than a hook in every way that matters: two mods
@@ -365,6 +367,163 @@ local function shimStartNewGame()
   note("patched", "Game:startNewGame", "intro=false path")
 end
 
+-- ---------------------------------------------------------- BattleState
+--
+-- Two rule hooks (RFC 0015).  The engine's versions are methods on the
+-- class, so "native" is a plain presence check.
+--
+-- catch.nickname: the prompt is its own method, so the patch sits on it and
+-- asks the hook first.  When the hook declines, the queue slot the engine
+-- already reserved for the prompt still has to be filled with a state --
+-- BattleState pushes whatever the slot's factory returns -- so it gets a
+-- text box that closes itself on its first frame.
+--
+-- battle.style: the stock engine reads save.options.battleStyle inline at
+-- the moment the foe's Pokemon faints, inside a function far too big to
+-- replace.  So BattleState:battleStyle() is installed (the same method the
+-- seam adds, so the question reads the same on both engines), and
+-- enter/finish are wrapped: when a battle starts the hook is asked and, if
+-- it answers "set"/"shift", the OPTION value is swapped for that battle and
+-- put back when it finishes.  One baseline for all battles, not one per
+-- battle, so a battle that never reaches finish (a dead one, a link
+-- teardown) cannot make the next one remember "set" as what the player
+-- chose.  The window is one battle wide; the one way it can leak is the
+-- speed hotkey, which rewrites the options file whenever it is pressed, and
+-- the restore at finish repairs that on the next press.  The engine's seam
+-- has none of this, which is the argument for the seam.
+
+local function shimBattleRules()
+  local BattleState = tryRequire("src.battle.BattleState")
+  local Runtime = tryRequire("src.mods.Runtime")
+  if not (BattleState and Runtime) then
+    return note("failed", "BattleState", "not requirable")
+  end
+
+  if BattleState.offerNickname then
+    note("native", "catch.nickname")
+  else
+    local TextBox = tryRequire("src.render.TextBox")
+    local original = BattleState.askNicknameUI
+    if not (TextBox and original) then
+      note("failed", "catch.nickname", "no askNicknameUI/TextBox")
+    else
+      local function alwaysAsk() return true end
+      BattleState.askNicknameUI = function(self, mon, displayName)
+        local verdict = Runtime.call("catch.nickname", alwaysAsk, mon,
+          { battle = self, name = displayName, game = self.game })
+        if verdict == false or type(verdict) == "string" then
+          if type(verdict) == "string" then
+            verdict = verdict:sub(1, 10)
+            if #verdict > 0 then mon.nickname = verdict end
+          end
+          return TextBox.new(self.game, "", nil,
+                             { auto = { delay = 0 }, instant = true })
+        end
+        return original(self, mon, displayName)
+      end
+      note("patched", "catch.nickname", "askNicknameUI asks the hook first")
+    end
+  end
+
+  if BattleState.battleStyle then
+    note("native", "battle.style")
+  else
+    local enter, finish = BattleState.enter, BattleState.finish
+    if not (enter and finish) then
+      note("failed", "battle.style", "no enter/finish to wrap")
+    else
+      local function styleFromOptions(battle)
+        return tostring(((battle.game.save or {}).options or {}).battleStyle
+                        or "shift"):lower()
+      end
+
+      function BattleState:battleStyle()
+        if not Runtime.wantsHook("battle.style") then return styleFromOptions(self) end
+        local style = Runtime.call("battle.style", styleFromOptions, self)
+        if style == "set" then return "set" end
+        if style == "shift" then return "shift" end
+        return styleFromOptions(self)
+      end
+
+      local baseline = nil   -- what the row said before any swap
+
+      local function optionsOf(battle)
+        local save = battle and battle.game and battle.game.save
+        return save and save.options
+      end
+
+      BattleState.enter = function(self, ...)
+        local result = enter(self, ...)
+        local opts = optionsOf(self)
+        if opts and not (self.dead and not self.player) then
+          local style = self:battleStyle()
+          if style ~= opts.battleStyle then
+            if baseline == nil then baseline = opts.battleStyle end
+            opts.battleStyle = style
+          end
+        end
+        return result
+      end
+
+      BattleState.finish = function(self, ...)
+        local opts = optionsOf(self)
+        if opts and baseline ~= nil then
+          opts.battleStyle = baseline
+          baseline = nil
+        end
+        return finish(self, ...)
+      end
+
+      note("patched", "battle.style", "battleStyle() + OPTION swapped per battle")
+    end
+  end
+end
+
+-- ----------------------------------------------------------- Boxes.deposit
+--
+-- catch.party_full (RFC 0016): the seam is a call site in the middle of
+-- storeCaughtMon, invisible to a mod on a build that predates it -- the same
+-- shape of problem as world.talk, and with the same answer: raise the hook
+-- from the one call the old branch makes that a patch can reach.  A claim
+-- refuses the deposit, so nothing reaches a box on either engine; on a seam
+-- engine the call site raises first and a claim never gets here, so this
+-- fires a second time only for a hook that already declined, which is
+-- stateless and declines again.  The mod takes custody from the
+-- pokemon.caught emit, which carries the mon the deposit refused.
+--
+-- What the shim cannot repair is the text: the old branch answers a refused
+-- deposit with "But every BOX is full!" before the mod's picker opens --
+-- the wrong reason for the right decision, and the argument for the seam.
+
+local function shimCatchPartyFull()
+  local BattleState = tryRequire("src.battle.BattleState")
+  if BattleState and BattleState.partyFullDestination then
+    return note("native", "catch.party_full")
+  end
+  local Boxes = tryRequire("src.pokemon.Boxes")
+  local Runtime = tryRequire("src.mods.Runtime")
+  if not (Boxes and Runtime) then
+    return note("failed", "catch.party_full", "no Boxes/Runtime")
+  end
+  if Boxes.__brPartyFullShim then return end
+  local original = Boxes.deposit
+  if type(original) ~= "function" then
+    return note("failed", "catch.party_full", "no deposit to wrap")
+  end
+
+  Boxes.deposit = function(save, mon)
+    if Runtime.wantsHook("catch.party_full") then
+      local claimed = Runtime.call("catch.party_full", function() return false end,
+                                   { save = save, mon = mon })
+      if claimed then return nil end
+    end
+    return original(save, mon)
+  end
+
+  Boxes.__brPartyFullShim = true
+  note("patched", "catch.party_full", "deposit asks the hook first")
+end
+
 -- ------------------------------------------------------------------ apply
 
 -- Idempotent: safe to call from more than one place, and a second call is a
@@ -380,6 +539,8 @@ function Shim.apply()
   shimWorldAPI()
   shimLinkState()
   shimStartNewGame()
+  shimBattleRules()
+  shimCatchPartyFull()
   return report
 end
 

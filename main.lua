@@ -134,7 +134,6 @@ return function(mod)
     relay = nil,
     ghosts = Ghosts.new(mod),
     spills = Spills.new(mod),
-    spillFight = nil,     -- the ball we are currently fighting out of
     game = nil,
     phase = "off",        -- off | lobby | match | over
     status = "lobby",     -- my status: lobby | alive | battle | out
@@ -376,7 +375,6 @@ return function(mod)
   function BR:reset()
     self.ghosts:despawnAll()
     self.spills:clear()
-    self.spillFight = nil
     if self.battle then
       self.battle.channel:peerGone()
       self.battle = nil
@@ -396,9 +394,13 @@ return function(mod)
     self.pendingLoot = {}
     self.lootFrom = nil
     self.lastOpponent = nil
+    self.pendingDrop = nil   -- a release that never landed (POK-34)
+    self.claimedCatch = nil  -- custody taken on a shimmed engine, unconsumed
+    self.dropSeq = nil
     self.matchSeed = nil
     self.botFight = nil
     self.botParty = nil
+    self.npcFight = nil
     self.ring = nil
     self.ringCenter = nil
     self.matchStartedAt = nil
@@ -406,6 +408,8 @@ return function(mod)
     self.wasInFog = false
     self.lastLevelTick = nil
     self.announcedLevel = nil
+    self.watching = nil
+    self.lastHopAt = nil
   end
 
   -- Leaving has to actually leave.  A match runs in a throwaway world, so
@@ -625,6 +629,10 @@ return function(mod)
     elseif msg.t == "spill" then
       self.spills:add(msg)
 
+    elseif msg.t == "npcout" then
+      -- somebody beat one of Kanto's own; the sprite goes away here too
+      pcall(function() mod.world:toggleObject(msg.map, msg.obj, false) end)
+
     elseif msg.t == "took" then
       self.spills:take(msg.key)
 
@@ -740,7 +748,12 @@ return function(mod)
     local c = cells[p.rng(1, #cells)]
     p.map, p.x, p.y = dest, c.x, c.y
     p.lastRoam = now
-    p.fogTicks = nil -- a new map is a fresh verdict from the fog
+    -- fogTicks deliberately survive the move.  They used to reset here ("a
+    -- new map is a fresh verdict"), and with a roam every 25 seconds against
+    -- a 40-second kill, a bot that kept walking could never die in the fog
+    -- -- which is exactly the match-never-ends that POK-5 was about.  The
+    -- ticks are the damage a player would still be carrying; whether the NEW
+    -- map is inside the ring is re-asked every tick anyway.
     BR.ghosts:despawn(id)
     BR.relay:broadcast(Wire.place(p.map, p.x, p.y, p.facing or "down",
                                   p.status, p.sprite, id))
@@ -825,7 +838,11 @@ return function(mod)
     self.ring = { phase = phase, center = { x = cx, y = cy, name = place },
                   radius = radius }
     if was ~= phase and phase > 1 then
-      say(("The fog closes in\non %s!"):format(place or "KANTO"))
+      if Fog.coversAll(radius) then
+        say("The fog covers\nall of KANTO!")
+      else
+        say(("The fog closes in\non %s!"):format(place or "KANTO"))
+      end
     end
   end
 
@@ -865,20 +882,16 @@ return function(mod)
     for id, p in pairs(self.players) do
       if p.bot and p.status == "alive" and p.map
          and not Fog.isSafe(locations, p.map, self.ring.center, self.ring.radius) then
-        local party = Bots.party(self.matchSeed, id, data, level)
-        -- a Poison lead is at home in the fog, bot or not
-        if not Fog.immune(party[1], data) then
-          -- ticks, not hit points: the bite is a fraction of maximum HP, so
-          -- the same count of them finishes a team at any rung of the ladder
-          -- and nothing here has to know how big a level 100 bot is
-          if (now - (p.lastFogTick or 0)) >= Fog.TICK_SECONDS then
-            p.lastFogTick = now
-            p.fogTicks = (p.fogTicks or 0) + 1
-            if p.fogTicks >= Fog.TICKS_TO_KILL then
-              -- same exit as losing a fight, so the fog leaves a team on the
-              -- ground too rather than quietly deleting one
-              self:eliminateBot(id, p, nil)
-            end
+        -- ticks, not hit points: the bite is a fraction of maximum HP, so the
+        -- same count of them finishes a team at any rung of the ladder, and
+        -- nothing here has to know how big a level 100 bot is
+        if (now - (p.lastFogTick or 0)) >= Fog.TICK_SECONDS then
+          p.lastFogTick = now
+          p.fogTicks = (p.fogTicks or 0) + 1
+          if p.fogTicks >= Fog.TICKS_TO_KILL then
+            -- same exit as losing a fight, so the fog leaves a team on the
+            -- ground too rather than quietly deleting one
+            self:eliminateBot(id, p, nil)
           end
         end
       else
@@ -887,7 +900,99 @@ return function(mod)
     end
   end
 
-  -- Are we standing in it, and what it costs.
+  -- Kanto's own trainers die to the fog too (POK-35).  Host-run, like the
+  -- bots' fog: every map that holds trainers gets one shared clock once
+  -- the ring leaves it (per-trainer would be overkill), and when it runs
+  -- out each trainer object on the map is toggled off everywhere -- the
+  -- npcout the beaten path already speaks.  No spill: balls mark a kill
+  -- site somebody EARNED; fog-killed teams would be litter on maps nobody
+  -- can safely loot.
+  function BR:tickNpcFog()
+    if not (self.relay and self.relay:isHost() and self.phase == "match"
+            and self.ring) then return end
+    local now, data = clock(), self.game and self.game.data
+    if not (now and data) then return end
+    if (now - (self.npcFogScanAt or 0)) < 1 then return end
+    self.npcFogScanAt = now
+    if not self.trainerMaps then
+      self.trainerMaps = {}
+      for id, map in pairs(data.maps or {}) do
+        for _, obj in ipairs(map.objects or {}) do
+          if obj.trainerClass then
+            self.trainerMaps[#self.trainerMaps + 1] = id
+            break
+          end
+        end
+      end
+      table.sort(self.trainerMaps)     -- pairs order is not a schedule
+    end
+    self.npcFog = self.npcFog or {}
+    local died = Fog.tickMaps(self.npcFog, self.trainerMaps, townLocations(),
+                              self.ring.center, self.ring.radius, now)
+    for _, mapId in ipairs(died) do
+      local took = 0
+      for _, obj in ipairs((data.maps[mapId] and data.maps[mapId].objects) or {}) do
+        if obj.trainerClass and obj.name then
+          took = took + 1
+          pcall(function() mod.world:toggleObject(mapId, obj.name, false) end)
+          if self.relay then self.relay:broadcast(Wire.npcout(mapId, obj.name)) end
+        end
+      end
+      if took > 0 then
+        -- the measurement POK-35 asks for: how much PvE each phase removes
+        mod.log:info("the fog took %d trainer(s) on %s", took, tostring(mapId))
+      end
+    end
+  end
+
+  -- The live LOCAL battle, if any (wild, or one of Kanto's own trainers).
+  -- PvP and bot fights set status = "battle", which holds tickFog off
+  -- entirely, so anything this returns is by construction a battle the
+  -- fog may reach into (POK-31).  battle.ended clears it; the stack walk
+  -- covers any exit that never said so.
+  function BR:liveLocalBattle()
+    local b = self.localBattle
+    if not b then return nil end
+    local stack = self.game and self.game.stack
+    local states = (stack and stack.states) or {}
+    for i = #states, 1, -1 do
+      if states[i] == b then return b end
+    end
+    self.localBattle = nil
+    return nil
+  end
+
+  -- The other half of POK-31: the enemy's bench ticks like ours, and the
+  -- two ACTIVE battlers are floored at 1 HP -- the engine only knows how
+  -- to faint a mon through its own move flow (an active at 0 outside it
+  -- wedges the menu: ChooseNextMon with no healthy pick just returns
+  -- forever, #core.asm:1086).  The fog drains a battle to the brink; the
+  -- killing blow has to be thrown inside it.  Display: a running drain
+  -- re-reads mon.hp as its goal and lands true on its own; otherwise the
+  -- bar is snapped, on the poison beat the tick already plays.
+  function BR:fogBiteBattle(battle)
+    local seen = {}
+    local function bite(mon, floor)
+      if not (mon and mon.hp and mon.hp > 0) or seen[mon] then return end
+      seen[mon] = true
+      mon.hp = math.max(floor, mon.hp - Fog.bite(mon.stats and mon.stats.hp))
+    end
+    bite(battle.enemy and battle.enemy.mon, 1)
+    for _, mon in ipairs(battle.enemyParty or {}) do bite(mon, 0) end
+    if not battle.draining then
+      local Timing = require("src.core.Timing")
+      for _, b in ipairs({ battle.player, battle.enemy }) do
+        if b and b.mon and b.shownHP then
+          b.shownHP = b.mon.hp
+          b.shownPx = Timing.hpBarPixels(b.mon.hp,
+            math.max(1, (b.mon.stats and b.mon.stats.hp) or 1))
+        end
+      end
+    end
+  end
+
+  -- Are we standing in it, and what it costs.  The fog does not stop at a
+  -- LOCAL battle's screen (POK-31): both sides keep taking the bite.
   function BR:tickFog()
     if not (self.phase == "match" and self.status == "alive" and self.ring) then return end
     local game, now = self.game, clock()
@@ -901,37 +1006,161 @@ return function(mod)
       return
     end
 
-    -- a Poison lead is at home in it (DESIGN D11)
-    local lead = game.save.party and game.save.party[1]
-    if Fog.immune(lead, game.data) then
-      if not self.wasInFog then
-        self.wasInFog = true
-        say("The fog does not\nharm your POKeMON.")
-      end
-      return
-    end
+    local battle = self:liveLocalBattle()
 
     if not self.wasInFog then
       self.wasInFog = true
       self.lastFogTick = now
-      say(("You are in the fog!\nGet to %s!")
-        :format((self.ring.center and self.ring.center.name) or "safety"))
+      -- the ring moved past us mid-fight: no textbox over a battle screen;
+      -- start the clock quietly and let the poison beat carry the news
+      if battle then return end
+      if Fog.coversAll(self.ring.radius) then
+        -- nowhere to send them: the announcement already said so, and a
+        -- "get to X" here would be a lie
+        say("You are in the fog!")
+      else
+        say(("You are in the fog!\nGet to %s!")
+          :format((self.ring.center and self.ring.center.name) or "safety"))
+      end
       return
     end
 
     if (now - (self.lastFogTick or now)) < Fog.TICK_SECONDS then return end
     self.lastFogTick = now
+    -- makeBattler holds the party table itself, so identity finds the mon
+    -- on the field right now; it is floored at 1 like the enemy's (above)
+    local active = battle and battle.player and battle.player.mon
     local anyLeft = false
     for _, mon in ipairs(game.save.party or {}) do
       if mon.hp > 0 then
-        mon.hp = math.max(0, mon.hp - Fog.bite(mon.stats and mon.stats.hp))
+        mon.hp = math.max((mon == active) and 1 or 0,
+                          mon.hp - Fog.bite(mon.stats and mon.stats.hp))
       end
       if mon.hp > 0 then anyLeft = true end
     end
+    if battle then self:fogBiteBattle(battle) end
+    -- the bite has to be FELT: one text box on entry and then silence read
+    -- as "the fog is broken" in play.  So each tick is the overworld-poison
+    -- beat Gen 1 players already know -- the screen flickers dark and the
+    -- poison chime plays -- on the engine's own flash so it looks exactly
+    -- like walking poisoned does.
+    local ow = mod.world:overworld()
+    if ow then ow.poisonFlash = 12 end
+    pcall(function() require("src.core.Sound").play(game.data, "Poisoned") end)
     if not anyLeft then
       self:eliminate("The fog took your\nlast POKeMON!")
     end
   end
+
+  -- ------- spectating (after elimination)
+  --
+  -- Being out used to mean standing where you fell with nothing to do.  Now
+  -- LEFT / RIGHT hop between the trainers still in it, and the view follows
+  -- whoever you picked: the spectator's own sprite is warped to a free cell
+  -- beside them, again whenever they get away, so the camera -- which only
+  -- ever follows the player -- keeps them in frame.  Nothing the spectator
+  -- does reaches the match: steps are refused (movement.collision below),
+  -- encounters and trainers already are, and a hop is a warp, which the
+  -- wire never carries.
+
+  local FOLLOW_CELLS = 5        -- re-warp when the watched trainer is this far
+  local FOLLOW_SECONDS = 2      -- and no more often than this
+
+  -- the trainers still in it, in a stable order so LEFT/RIGHT mean something
+  function BR:watchable()
+    local ids = {}
+    for id, p in pairs(self.players) do
+      if p.status ~= "out" and p.map and p.x and p.y then ids[#ids + 1] = id end
+    end
+    table.sort(ids, function(a, b) return tostring(a) < tostring(b) end)
+    return ids
+  end
+
+  -- warp beside them, on a cell nobody is standing on
+  function BR:warpBeside(p)
+    local data = self.game and self.game.data
+    if not (data and p and p.map) then return false end
+    local cells = Spills.placeAround(p.x, p.y, 1, function(x, y)
+      if x == p.x and y == p.y then return false end
+      return Spawn.walkable(data.maps, data.tilesets, p.map, x, y)
+    end)
+    local c = cells[1] or { x = p.x, y = p.y }
+    -- face them, so the hop reads as "looking at" rather than "standing by"
+    local facing = "down"
+    if c.x < p.x then facing = "right" elseif c.x > p.x then facing = "left"
+    elseif c.y > p.y then facing = "up" end
+    local ok = mod.world:warpTo(p.map, c.x, c.y, facing, { arrive = "teleport" })
+    self.lastHopAt = clock()
+    return ok
+  end
+
+  function BR:hop(dir)
+    local ids = self:watchable()
+    if #ids == 0 then return false end
+    local idx = 0
+    for i, id in ipairs(ids) do if id == self.watching then idx = i break end end
+    if idx == 0 then
+      idx = (dir or 1) > 0 and 1 or #ids
+    else
+      idx = ((idx - 1 + (dir or 1)) % #ids) + 1
+    end
+    self.watching = ids[idx]
+    self.fellAt = nil              -- a deliberate move, nothing to undo
+    return self:warpBeside(self.players[self.watching])
+  end
+
+  -- keep the watched trainer in frame
+  function BR:tickWatch()
+    if not (self.phase == "match" and self.status == "out" and self.watching) then return end
+    local p = self.players[self.watching]
+    if not p or p.status == "out" then
+      self.watching = nil           -- they fell; the next LEFT/RIGHT picks anew
+      return
+    end
+    local now = clock()
+    if not now or (now - (self.lastHopAt or 0)) < FOLLOW_SECONDS then return end
+    local here = mod.world:current()
+    if not here then return end
+    local ow = mod.world:overworld()
+    if ow and ow.transitioning then return end
+    local far = here.mapId ~= p.map
+      or math.abs(here.x - p.x) + math.abs(here.y - p.y) > FOLLOW_CELLS
+    if far then self:warpBeside(p) end
+  end
+
+  -- LEFT / RIGHT while out: a hop, not a turn.  input.step runs before the
+  -- engine promotes this tick's presses, so the queue is where they can
+  -- still be taken back.
+  function BR:spectatorInput(game)
+    if not (self.phase == "match" and self.status == "out") then return end
+    local input = game and game.input
+    local ow = mod.world:overworld()
+    if not (input and input.pressQueue and ow and game.stack:top() == ow) then return end
+    local queue, kept, hop = input.pressQueue, {}, nil
+    for _, btn in ipairs(queue) do
+      if btn == "left" then hop = -1
+      elseif btn == "right" then hop = 1
+      else kept[#kept + 1] = btn end
+    end
+    if hop then
+      input.pressQueue = kept
+      input.state.left, input.state.right = false, false
+      self:hop(hop)
+    end
+  end
+
+  -- a spectator does not walk.  They may turn on the spot (harmless, and
+  -- refusing it would fight the engine's turn-in-place), but no step of
+  -- theirs ever lands.
+  mod.hooks:wrap("movement.collision", function(next, allowed, ctx)
+    local ow = mod.world:overworld()
+    if BR.phase == "match" and BR.status == "out" and ow and ctx
+       and ctx.mover == ow.player then
+      ctx.reason = "spectating"
+      return false
+    end
+    return next(allowed, ctx)
+  end)
 
   -- ------- level scaling (DESIGN D12)
   --
@@ -1065,11 +1294,16 @@ return function(mod)
     say("Your POKeMON\nscattered!")
   end
 
-  -- Open one: a wild battle against that Pokemon at 1 HP, which is what
-  -- makes a spill "trivially catchable" rather than another fight.  The ball
-  -- is claimed the moment it is opened rather than when the battle ends --
-  -- otherwise two players who engaged the same ball would both expect it,
-  -- and one of them would be told no after spending a ball on it.
+  -- Open one: the prompt Oak's lab uses for the starters, take or leave.
+  -- It used to start a catch battle against the fallen Pokemon at 1 HP; the
+  -- hard part was the battle its owner already lost, and fighting it again
+  -- to earn it was ceremony -- and slow, under fog pressure.  A beaten team
+  -- is yours if you reach it first.
+  --
+  -- The ball is claimed for everyone only on YES.  NO -- or backing out of
+  -- the drop picker at a full party -- leaves it on the ground for the next
+  -- trainer, and a claim that lands while a menu is still open is answered
+  -- by the ball being gone.
   function BR:openSpill(key)
     local ball = self.spills:get(key)
     local game = self.game
@@ -1078,37 +1312,138 @@ return function(mod)
     local ow = mod.world:overworld()
     if not ow then return nil, "no overworld" end
     if ow.transitioning then return nil, "mid-warp" end
-    local BattleTransition = require("src.render.BattleTransition")
-    for _, state in ipairs(game.stack and game.stack.states or {}) do
-      if state.awardExp or getmetatable(state) == BattleTransition then
-        return nil, "a battle is already running"
-      end
-    end
-    local Party = require("src.pokemon.Party")
-    if not Party.firstHealthy(game.save.party or {}) then
-      return nil, "no healthy party"
-    end
+    local data = game.data
+    local def = data.pokemon and data.pokemon[ball.species]
+    local name = (def and def.name) or tostring(ball.species)
+    local TextBox = require("src.render.TextBox")
+    game.stack:push(TextBox.new(game,
+      ("This contains a\n%s.\nDo you want it?"):format(name), nil, {
+      choice = function(yes)
+        if not yes then return end
+        if not self.spills:get(key) then
+          say("It's gone --\nsomeone was\nquicker.")
+          return
+        end
+        local save = game.save
+        if #(save.party or {}) >= 6 then
+          -- POK-34: full is not a refusal any more -- you choose who makes
+          -- room, and what you release lands here as a ball.  Cancel (or
+          -- losing the race while the picker is up) keeps the status quo:
+          -- the ball stays right where it is.
+          self:offerDropForBall(key, ball, name)
+          return
+        end
+        self:claimSpill(key, ball, name)
+      end,
+    }))
+    return true
+  end
 
+  -- Take a claimed spill ball: build the mon at 1 HP exactly as it fell,
+  -- mark the dex, tell the room.  Shared by the plain take and the
+  -- full-party trade (POK-34).
+  function BR:claimSpill(key, ball, name)
+    local game = self.game
+    local save = game.save
     -- claimed now, everywhere
     self.spills:take(key)
     if self.relay then self.relay:broadcast(Wire.took(key)) end
+    local Pokemon = require("src.pokemon.Pokemon")
+    local Party = require("src.pokemon.Party")
+    local BattleState = require("src.battle.BattleState")
+    local mon = Pokemon.new(game.data, ball.species, ball.level)
+    mon.hp = 1                 -- on its last legs, exactly as it fell
+    BattleState.stampOT(save, mon)
+    Party.add(save.party, mon)
+    local dex = save.pokedex
+    if dex then
+      dex.seen[ball.species] = true
+      dex.owned[ball.species] = true
+    end
+    say(("%s joined\nyour party!"):format(name))
+  end
 
-    local ok, battle = pcall(function()
-      return require("src.battle.BattleState")
-        .newWild(game, ball.species, ball.level)
+  -- One mon on the ground, in the spill's own language: the same placement
+  -- search, the same wire message, the same claim flow as the balls a
+  -- beaten trainer leaves (POK-34).  Trading up leaves a trace anyone can
+  -- profit from.
+  function BR:spillDropped(mon)
+    local game, relay = self.game, self.relay
+    local here = game and mod.world:current()
+    if not (game and here and here.mapId and mon and mon.species) then return end
+    local data = game.data
+    local cells = Spills.placeAround(here.x, here.y, 1, function(x, y)
+      return Spawn.walkable(data.maps, data.tilesets, here.mapId, x, y)
     end)
-    if not ok or not battle then
-      mod.log:warn("couldn't open a spilled ball: %s", tostring(battle))
-      return nil, "battle build failed: " .. tostring(battle)
-    end
-    -- on its last legs, exactly as D8 describes
-    if battle.enemy and battle.enemy.mon then
-      battle.enemy.mon.hp = 1
-    end
-    self.spillFight = key
-    battle.onFinish = function(result) ow:afterBattle(result, battle) end
-    ow:pushBattle(battle)
-    return true
+    local cell = cells[1] or { x = here.x, y = here.y }
+    self.dropSeq = (self.dropSeq or 0) + 1
+    local spill = { map = here.mapId, mons = {
+      { key = (self.myId or 0) .. ":drop:" .. self.dropSeq,
+        x = cell.x, y = cell.y, species = mon.species, level = mon.level or 5 },
+    } }
+    if relay then relay:broadcast(Wire.spill(spill.map, spill.mons)) end
+    self.spills:add(spill)
+  end
+
+  -- The full-party trade for a claimed ball: the party screen as a picker
+  -- (PartyMenu's pickOnly -- A picks, B keeps what you have).  The pick
+  -- re-checks the race, because the ball could change hands while the
+  -- picker was up.
+  function BR:offerDropForBall(key, ball, ballName)
+    local game = self.game
+    local save = game.save
+    local PartyMenu = require("src.ui.PartyMenu")
+    game.stack:push(PartyMenu.new(game, {
+      party = save.party,
+      pickOnly = true,
+      onSwitch = function(dropped)
+        if not self.spills:get(key) then
+          say("It's gone --\nsomeone was\nquicker.")
+          return
+        end
+        for i, member in ipairs(save.party) do
+          if member == dropped then table.remove(save.party, i) break end
+        end
+        self:spillDropped(dropped)
+        self:claimSpill(key, ball, ballName)
+      end,
+    }))
+  end
+
+  -- The catch picker (POK-34): a 6/6 catch hands you the decision the PC
+  -- used to make silently.  Pick a member to release and the catch takes
+  -- their slot; B keeps your six and the catch is gone.  The release itself
+  -- waits for the overworld -- the pick happens inside the battle screen,
+  -- and the ball lands where you stand (pendingDrop, flushed by the tick
+  -- below once the stack is back on the map).
+  function BR:offerDropForCatch(battle, mon)
+    local data = battle.game and battle.game.data
+    local def = data and data.pokemon and data.pokemon[mon.species]
+    local caughtName = (def and def.name) or tostring(mon.species)
+    battle:uiNext(function()
+      return battle:buildScreen("PartyMenu", {
+        battle = battle,
+        party = battle:playerPartyView(),
+        pickOnly = true,
+        onSwitch = function(dropped)
+          local save = battle.game.save
+          local ddef = data and data.pokemon and data.pokemon[dropped.species]
+          local droppedName = (ddef and ddef.name) or tostring(dropped.species)
+          for i, member in ipairs(save.party) do
+            if member == dropped then table.remove(save.party, i) break end
+          end
+          if not require("src.pokemon.Party").add(save.party, mon) then
+            -- cannot happen at 5/6, but a catch is never lost to a table
+            save.party[#save.party + 1] = mon
+          end
+          self.pendingDrop = dropped
+          battle:sayNext(("%s was\nreleased."):format(droppedName))
+        end,
+        onCancel = function()
+          battle:sayNext(("%s was\nreleased."):format(caughtName))
+        end,
+      })
+    end)
   end
 
   -- ------- bots roaming, and bots fighting each other
@@ -1272,16 +1607,148 @@ return function(mod)
     return next(game, context, continue)
   end)
 
+  -- ------- the rules of a match
+  --
+  -- Everything here holds from the drop until the match ends, and nowhere
+  -- else: a real playthrough must be untouched by the mod being installed.
+
+  local function inMatch() return BR.phase == "match" end
+
+  -- Every battle is at the rung.  Trainer parties already ride it through
+  -- trainer.party above; wild encounters did not, so the Safari handed out
+  -- Lv22+ against a Lv5 drop and a route's Pidgey stayed Lv3 at the end.
+  -- The roll keeps its species and its odds -- only the level is rewritten,
+  -- at the same point the spectator guard already sits.
+  mod.hooks:wrap("encounter.species", function(next, enc, ctx)
+    local rolled = next(enc, ctx)
+    if rolled and inMatch() then rolled.level = BR:level() end
+    return rolled
+  end)
+
+  -- ...and a bite is a wild encounter by another rod.  The chain hands back
+  -- the catch ({ species, level }) from the candidate list; the list itself
+  -- is not touched, so Old Rod still hooks its MAGIKARP, just at the rung.
+  mod.hooks:wrap("encounter.fishing", function(next, rod, mapId, candidates)
+    local catch = next(rod, mapId, candidates)
+    if catch and inMatch() then catch.level = BR:level() end
+    return catch
+  end)
+
+  -- SET style, whatever the OPTION row says.  SHIFT's "will you change
+  -- POKeMON?" is free information and a free swap, which makes
+  -- party-as-health softer than it is meant to be.  The row itself is left
+  -- alone: the hook wins without writing to the player's preference.
+  mod.hooks:wrap("battle.style", function(next, battle)
+    if inMatch() then return "set" end
+    return next(battle)
+  end)
+
+  -- No nickname prompt on a catch.  A match team is disposable and you may
+  -- catch a dozen under fog pressure; the naming grid is friction with
+  -- nothing behind it.  false keeps the species name with no prompt.
+  mod.hooks:wrap("catch.nickname", function(next, mon, ctx)
+    if inMatch() then return false end
+    return next(mon, ctx)
+  end)
+
+  -- A full party never sends a catch to the box -- there is no box in a
+  -- match (POK-36) -- so the decision is the player's: release a team
+  -- member for it, or let the catch go (POK-34).  On an engine with the
+  -- seam the hook carries the battle and the picker opens right here; on a
+  -- shimmed one it carries only the mon, so custody is taken now and the
+  -- pokemon.caught event (which has the battle) drives the same picker.
+  mod.hooks:wrap("catch.party_full", function(next, ctx)
+    if not inMatch() then return next(ctx) end
+    if ctx.battle then
+      BR:offerDropForCatch(ctx.battle, ctx.mon)
+      return true
+    end
+    BR.claimedCatch = ctx.mon
+    return true
+  end)
+
+  -- 1X, whatever the speed rows say.  A match has a shared clock (the fog),
+  -- other people, and a lockstep battle at the end of a walk; fast-forward
+  -- through any of it is cheating, and slow-motion in a fight is too.  The
+  -- engine asks this hook AFTER its own link-play and --speed overrides, so
+  -- a scripted run (POKEPORT_SPEED) still works and the touch skin's hold
+  -- button is the one control this cannot reach.
+  mod.hooks:wrap("core.logic_speed", function(next, game)
+    if inMatch() then return 1 end
+    return next(game)
+  end)
+
+  -- Kanto's own trainers are in the match too (POK-14): beating one leaves
+  -- its team on the ground and takes its sprite away, for every client --
+  -- balls with no trainer is how you read that somebody got there first,
+  -- and a fallen trainer cannot pay out twice.  The engagement is stashed
+  -- here because battle.ended only knows the battle, not which map object
+  -- started it; a bot battle never comes through engageTrainer, so a set
+  -- npcFight is exactly "this was one of Kanto's own".
+  mod.events:on("world.trainer_engaged", function(ev)
+    if BR.phase ~= "match" or BR.status ~= "alive" or BR.botFight then return end
+    local here = mod.world:current()
+    local npc = ev and ev.npc
+    local obj = npc and npc.def and npc.def.name
+    if not (here and npc and obj) then
+      BR.npcFight = nil
+      return
+    end
+    BR.npcFight = { map = here.mapId, obj = obj, x = npc.cellX, y = npc.cellY }
+  end)
+
+  function BR:npcDefeated(npc, party)
+    local data = self.game and self.game.data
+    if not data then return end
+    local spill = Spills.build("npc:" .. npc.map .. ":" .. npc.obj,
+                               npc.map, npc.x, npc.y, party, function(x, y)
+      return Spawn.walkable(data.maps, data.tilesets, npc.map, x, y)
+    end)
+    -- the toggle store is the engine's own "this object is gone" switch; a
+    -- reload mid-fade can refuse, and then the sprite lingers until the map
+    -- is next entered, which is the acceptable failure
+    pcall(function() mod.world:toggleObject(npc.map, npc.obj, false) end)
+    if self.relay then
+      self.relay:broadcast(Wire.npcout(npc.map, npc.obj))
+      if spill then self.relay:broadcast(Wire.spill(spill.map, spill.mons)) end
+    end
+    if spill then self.spills:add(spill) end
+  end
+
+  -- Remember the battle the fog may reach into (POK-31).  Only a local
+  -- BattleState says battle.started -- LinkBattle never emits it -- and
+  -- PvP and bot fights hold tickFog off via status anyway.
+  mod.events:on("battle.started", function(ev)
+    if BR.phase == "match" and ev and ev.battle then BR.localBattle = ev.battle end
+  end)
+
+  -- Custody taken on a shimmed engine (catch.party_full above): the deposit
+  -- was refused, the box text lied, and the mon is only in this payload.
+  -- On a seam engine the destination is "mod" and this never matches.
+  mod.events:on("pokemon.caught", function(ev)
+    local claimed = BR.claimedCatch
+    BR.claimedCatch = nil
+    if not (claimed and ev and ev.mon and claimed == ev.mon) then return end
+    if not (BR.phase == "match" and ev.battle) then return end
+    BR:offerDropForCatch(ev.battle, ev.mon)
+  end)
+
   -- A bot battle is an ordinary engine battle, so its outcome arrives on
   -- battle.ended rather than link.battle_ended.  A loss blacks the player
   -- out, which world.blacked_out below turns into elimination.
   mod.events:on("battle.ended", function(ev)
-    if BR.spillFight then
-      -- the ball was claimed when it was opened, so nothing to settle here
-      -- beyond letting the world go again
-      BR.spillFight = nil
-      broadcastPlace()
-      return
+    BR.localBattle = nil
+    BR.claimedCatch = nil   -- custody never consumed: nothing is pending
+    local npc = BR.npcFight
+    BR.npcFight = nil
+    if npc and BR.phase == "match" and ev.result == "win" and not BR.botFight then
+      local party = {}
+      for _, mon in ipairs((ev.battle and ev.battle.enemyParty) or {}) do
+        if mon.species then
+          party[#party + 1] = { species = mon.species, level = mon.level, hp = 0 }
+        end
+      end
+      if #party > 0 then BR:npcDefeated(npc, party) end
     end
     local botId = BR.botFight
     if not botId then return end
@@ -1399,6 +1866,7 @@ return function(mod)
     if self.phase == "over" then return end
     self.phase = "over"
     self.ghosts:despawnAll()
+    self.pendingDrop = nil   -- the match ended before the release could land
     if id == self.myId then
       say("You are the last\ntrainer standing!\nYou win!")
     elseif id then
@@ -1448,37 +1916,31 @@ return function(mod)
     -- Spectating happens where you fell, not in a POKeMON CENTER two towns
     -- away.
     --
-    -- The engine's whiteout warp is asynchronous and lands well after
-    -- world.blacked_out, so this cannot simply warp once and stop: doing that
-    -- put us back on the right tile, saw the position match, let go -- and
-    -- then the engine's warp completed and moved us anyway.  So the position
-    -- has to be observed HOLDING before we stop asserting it.
+    -- Racing the engine's whiteout warp does not work and looks terrible:
+    -- retrying until the position stuck meant a fade to the CENTER, a fade
+    -- back, and the player spinning on the spot for as long as the two warps
+    -- fought.  So this does not race it at all -- it WAITS to be moved, then
+    -- moves back exactly once.  If nothing ever moves us (the fog, a PvP
+    -- loss) there is nothing to undo and this never fires.
     if BR.fellAt and BR.status == "out" then
       local target = BR.fellAt
       local here = mod.world:current()
       local now = clock() or 0
-      target.giveUpAt = target.giveUpAt or (now + 15)
+      target.giveUpAt = target.giveUpAt or (now + 20)
       if here and here.mapId then
-        if here.mapId == target.map and here.x == target.x
-           and here.y == target.y then
-          target.settledAt = target.settledAt or now
-          if now - target.settledAt >= 1.5 then BR.fellAt = nil end
-        else
-          target.settledAt = nil
-          if now >= (target.nextTry or 0) then
-            target.nextTry = now + 0.4
-            local ok, err = mod.world:warpTo(target.map, target.x, target.y,
-                                             target.facing, { arrive = "teleport" })
-            if not ok then
-              mod.log:warn("could not return the spectator to %s (%s)",
-                           tostring(target.map), tostring(err))
-            end
+        local moved = here.mapId ~= target.map
+          or here.x ~= target.x or here.y ~= target.y
+        if moved then
+          BR.fellAt = nil       -- one attempt, after the engine has had its turn
+          local ok, err = mod.world:warpTo(target.map, target.x, target.y,
+                                           target.facing)
+          if not ok then
+            mod.log:warn("could not return the spectator to %s (%s)",
+                         tostring(target.map), tostring(err))
           end
+        elseif now > target.giveUpAt then
+          BR.fellAt = nil       -- never moved: we are already where we fell
         end
-      end
-      if BR.fellAt and now > target.giveUpAt then
-        BR.fellAt = nil
-        mod.log:warn("gave up returning the spectator to %s", tostring(target.map))
       end
     end
 
@@ -1507,13 +1969,30 @@ return function(mod)
       BR:tickBotFights()
       BR:tickRing()
       BR:tickBotFog()
-      -- the fog does not reach into a battle: taking the last of your party
-      -- while the battle screen is up would leave the engine holding a
-      -- fainted lead it never saw faint.  Scaling is held back for the same
-      -- reason -- BattleState has already built its battlers from the party.
+      BR:tickNpcFog()
+      -- status == "battle" is PvP or a bot fight: either machine biting HP
+      -- outside the lockstep is a desync (both players sit in the same fog
+      -- anyway, so it stays fair).  A LOCAL battle the fog reaches into,
+      -- both sides -- see tickFog (POK-31).
       if BR.status ~= "battle" then
         BR:tickFog()
         BR:tickLevels()
+      end
+      BR:spectatorInput(game)
+      BR:tickWatch()
+    end
+
+    -- A released team member (POK-34) lands where you stand, once you are
+    -- standing somewhere: the pick happened inside the battle screen, and
+    -- the ball belongs to the overworld's loot language.  The guards are
+    -- openSpill's -- on the map, not mid-warp -- so the ball never lands
+    -- under a transition.
+    if BR.pendingDrop and BR.phase == "match" then
+      local ow = mod.world:overworld()
+      if ow and game.stack:top() == ow and not ow.transitioning then
+        local mon = BR.pendingDrop
+        BR.pendingDrop = nil
+        BR:spillDropped(mon)
       end
     end
     return next(game, dt)
@@ -1608,22 +2087,82 @@ return function(mod)
     -- one shaded square per town-map cell the fog has taken.  Walking the
     -- grid rather than the location table: several maps share a square, and
     -- shading it once per map would stack the alpha into a solid black blot.
+    local all = Fog.coversAll(radius)
     g.setColor(0.25, 0.15, 0.35, 0.55)
-    for gy = 0, 15 do
-      for gx = 0, 15 do
+    -- the LOCATION grid is 16x16, but the town map SCREEN is 20x18 tiles
+    -- and the art runs to its edges -- shading only the location grid left
+    -- a bright strip down the right and along the bottom, glaring once the
+    -- fog covered everything.  A cell past the grid can never be inside the
+    -- ring, so walking the whole screen is correct in every phase.
+    for gy = 0, 17 do
+      for gx = 0, 19 do
         local dx, dy = gx - center.x, gy - center.y
-        if (dx * dx + dy * dy) > (radius * radius) then
+        if all or (dx * dx + dy * dy) > (radius * radius) then
           g.rectangle("fill", ox + gx * GRID * sx, oy + gy * GRID * sy,
                       GRID * sx, GRID * sy)
         end
       end
     end
     -- and a box round the eye of it, so the safe place is named as well as
-    -- merely un-shaded
-    g.setColor(1, 1, 1, 0.9)
-    g.setLineWidth(math.max(1, sx))
-    g.rectangle("line", ox + center.x * GRID * sx, oy + center.y * GRID * sy,
-                GRID * sx, GRID * sy)
+    -- merely un-shaded.  Not once the fog has taken the eye too: a box round
+    -- a shaded square would promise a safety that is not there.
+    if not all then
+      g.setColor(1, 1, 1, 0.9)
+      g.setLineWidth(math.max(1, sx))
+      g.rectangle("line", ox + center.x * GRID * sx, oy + center.y * GRID * sy,
+                  GRID * sx, GRID * sy)
+    end
+    g.pop()
+    return out
+  end)
+
+  -- ------- the overworld HUD
+  --
+  -- Three things a match needs on screen without a menu: how many trainers
+  -- are left, that you are standing in the fog, and -- once you are out --
+  -- whose match you are watching.  Drawn as the small bordered boxes Gen 1
+  -- draws everything in, on the font the game is already using, in the top
+  -- corners where no text box ever goes.  Only over the overworld itself:
+  -- a battle, a menu or the town map has its own screen.
+
+  local function hudBox(text, tx, ty)
+    local Font = require("src.render.Font")
+    local w = #text + 2
+    Font.drawBox(tx, ty, w, 3)
+    Font.draw(text, (tx + 1) * 8, (ty + 1) * 8)
+    return w
+  end
+
+  mod.hooks:wrap("render.hud", function(next, game, viewport)
+    local out = next(game, viewport)
+    if not (BR.phase == "match" and viewport and game.stack) then return out end
+    local ow = mod.world:overworld()
+    if not ow or game.stack:top() ~= ow then return out end
+    local okFont, Font = pcall(require, "src.render.Font")
+    if not okFont or not Font.drawBox then return out end
+
+    local sx = (viewport.gameWidth or 160) / 160
+    local sy = (viewport.gameHeight or 144) / 144
+    local g = love.graphics
+    g.push("all")
+    g.translate(viewport.gameX or 0, viewport.gameY or 0)
+    g.scale(sx, sy)
+    g.setColor(1, 1, 1, 1)
+
+    -- top-right: the count
+    local left = ("%d LEFT"):format(BR:aliveCount())
+    hudBox(left, 20 - (#left + 2), 0)
+
+    -- top-left: the fog, or who you are watching
+    if BR.status == "out" then
+      local p = BR.watching and BR.players[BR.watching]
+      local who = p and p.name or "<  >"
+      hudBox(("<%s>"):format(who), 0, 0)
+    elseif BR.wasInFog then
+      -- blink on the fog's own beat, so the box pulses with the bite
+      local t = clock() or 0
+      if math.floor(t * 2) % 2 == 0 then hudBox("FOG!", 0, 0) end
+    end
     g.pop()
     return out
   end)
@@ -1637,10 +2176,37 @@ return function(mod)
     if type(out) ~= "table" then return out end
     local label = (BR.phase == "match" or BR.phase == "over") and "ROYALE*"
       or (BR.relay and "ROYALE." or "ROYALE")
+    -- the engine's own link play has no business in a match: the mod owns
+    -- the transport for PvP, and a second session from inside one is
+    -- undefined at best.  Back the moment the match is over.
+    if BR.phase == "match" then
+      mod.ui.removeLabel(out, "LINK")
+      -- SAVE would run the whole vanilla ceremony -- confirmation, jingle,
+      -- "...saved the game!" -- and write nothing (save.write is vetoed
+      -- below).  A row that lies leaves the menu (POK-33); the veto stays
+      -- as the guarantee for anything else that tries.
+      mod.ui.removeLabel(out, "SAVE")
+    end
     return mod.ui.insertBefore(out, "OPTION", {
       label = label,
       onSelect = function() mod.ui.push(game, SCREEN) end,
     })
+  end)
+
+  -- No storage in a battle royale (POK-36): the party you carry is all you
+  -- have.  Boxes launder party-as-health (deposit healthy, fight with one,
+  -- withdraw fresh), so every row the PC offers -- boxes, item storage,
+  -- the dex rating -- is replaced with one that says so.  LOG OFF is
+  -- appended by the engine AFTER this hook, so the exit cannot be orphaned.
+  mod.hooks:wrap("ui.pc.items", function(next, game, items)
+    if not inMatch() then return next(game, items) end
+    return { {
+      label = "OUT OF ORDER",
+      keepOpen = true,
+      onSelect = function()
+        say("The storage system\nis out of bounds\nduring a match!")
+      end,
+    } }
   end)
 
   -- ...and from the title screen, because everything a match needs it makes
@@ -1732,6 +2298,17 @@ return function(mod)
              x = r.center and r.center.x, y = r.center and r.center.y }
   end
   mod.exports.level = function() return BR:level() end
+  mod.exports.inFog = function() return BR.wasInFog == true end
+  mod.exports.spillBalls = function()
+    local out = {}
+    for key, b in pairs(BR.spills.balls) do
+      out[#out + 1] = { key = key, map = b.map, x = b.x, y = b.y,
+                        species = b.species, level = b.level }
+    end
+    return out
+  end
+  mod.exports.watching = function() return BR.watching end
+  mod.exports.hop = function(dir) return BR:hop(dir) end
   mod.exports.spills = function()
     local out = {}
     for key, b in pairs(BR.spills.balls) do

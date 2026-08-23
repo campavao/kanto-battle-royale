@@ -16,9 +16,10 @@
 -- message correct any drift.
 --
 -- This is coop/lib/ghosts.lua generalised from one peer to a table keyed by
--- room id, because a battle royale room has many.  Eliminated players stay
--- visible but walk-through (status "out"), so the world still shows who is
--- around to ambush the survivors.
+-- room id, because a battle royale room has many.  An eliminated trainer's
+-- ghost despawns entirely: what stays behind is their Poke Balls, and balls
+-- with no trainer is how you read that somebody else got there first --
+-- the world is a record of the match, not a field of corpses.
 
 local Ghosts = {}
 Ghosts.__index = Ghosts
@@ -119,16 +120,17 @@ end
 -- id -> { map, x, y, facing, sprite, status }.
 
 function Ghosts:sync(game, myMapId, peers)
-  -- drop ghosts for peers that vanished or left my map
+  -- drop ghosts for peers that vanished, left my map, or fell -- a beaten
+  -- trainer leaves only their balls behind
   for id, g in pairs(self.ghosts) do
     local p = peers[id]
-    if not p or p.map ~= myMapId then self:despawn(id) end
+    if not p or p.map ~= myMapId or p.status == "out" then self:despawn(id) end
     if g == nil then end -- luacheck appeasement
   end
   if not myMapId then return end
 
   for id, p in pairs(peers) do
-    if p.map == myMapId then
+    if p.map == myMapId and p.status ~= "out" then
       self:_syncOne(game, id, myMapId, p)
     end
   end

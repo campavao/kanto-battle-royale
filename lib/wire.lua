@@ -26,7 +26,10 @@
 --   {t="botout", id=}                             I beat that bot
 --   {t="spill", map=, mons={{key,x,y,species,lv}}} my team hit the ground
 --   {t="took", key=}                              that ball is mine
+--   {t="npcout", map=, obj=}                     a map's own trainer fell:
+--                                                 hide the sprite everywhere
 --   {t="ring", phase=, cx=, cy=, r=, place=}      host: the fog closed in
+--                                                 (r < 0: over everything)
 --   {t="winner", id=}                             host: the match is over
 --
 -- Statuses: "lobby" (not in the world yet), "alive", "battle" (locked in
@@ -37,7 +40,10 @@
 
 local Wire = {}
 
-Wire.PROTOCOL = 1
+-- 2: npcout joined the vocabulary, spills may stack on one cell, and a
+--    loot ball is a gift prompt -- a v1 peer would keep beaten trainers
+--    standing and fight balls, silently diverging from the room
+Wire.PROTOCOL = 2
 
 Wire.DIRS = { up = true, down = true, left = true, right = true }
 Wire.STATUS = { lobby = true, alive = true, battle = true, out = true }
@@ -116,6 +122,10 @@ function Wire.spill(map, mons)
   return { t = "spill", map = map, mons = rows }
 end
 function Wire.took(key) return { t = "took", key = key } end
+
+-- one of Kanto's own trainers has been beaten: the sprite goes away for
+-- everyone, and only its balls (a separate spill message) stay
+function Wire.npcout(map, obj) return { t = "npcout", map = map, obj = obj } end
 
 -- the host's word on where the fog is now; `place` is the centre's name,
 -- carried so every client can announce it without a location table lookup
@@ -262,6 +272,14 @@ decoders.spill = function(m)
   return { t = "spill", map = m.map, mons = mons }
 end
 
+decoders.npcout = function(m)
+  if not isMapId(m.map) then return nil, "bad map" end
+  if type(m.obj) ~= "string" or m.obj == "" or #m.obj > MAX_ID then
+    return nil, "bad object"
+  end
+  return { t = "npcout", map = m.map, obj = m.obj }
+end
+
 decoders.took = function(m)
   if type(m.key) ~= "string" or m.key == "" or #m.key > MAX_ID then
     return nil, "bad key"
@@ -278,7 +296,9 @@ decoders.ring = function(m)
     return nil, "bad phase"
   end
   if not (isCoord(m.cx) and isCoord(m.cy)) then return nil, "bad centre" end
-  if type(m.r) ~= "number" or m.r ~= m.r or m.r < 0 or m.r > 64 then
+  -- a negative radius is the fog over everything (Fog.EVERYWHERE), not an
+  -- error: the final ring has to cross the wire like any other
+  if type(m.r) ~= "number" or m.r ~= m.r or m.r < -1 or m.r > 64 then
     return nil, "bad radius"
   end
   return { t = "ring", phase = math.floor(m.phase), cx = m.cx, cy = m.cy,

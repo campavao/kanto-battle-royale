@@ -80,6 +80,20 @@ do
      "phase 0 is refused")
   ok(Wire.decode({ t = "ring", phase = 1, cx = "x", cy = 1, r = 2 }) == nil,
      "a malformed centre is refused")
+  local npcout = Wire.decode(Wire.npcout("ROUTE_1", "TRAINER_3"))
+  ok(npcout ~= nil, "npcout round-trips")
+  eq(npcout and npcout.map, "ROUTE_1", "npcout carries the map")
+  eq(npcout and npcout.obj, "TRAINER_3", "and the object to hide")
+  ok(Wire.decode({ t = "npcout", map = "ROUTE_1" }) == nil,
+     "npcout without an object is refused")
+  ok(Wire.decode({ t = "npcout", map = "ROUTE_1", obj = ("X"):rep(65) }) == nil,
+     "and an oversized object name is refused")
+
+  local everywhere = Wire.decode(Wire.ring(8, 8, 9, -1, "CELADON CITY"))
+  eq(everywhere and everywhere.r, -1,
+     "the all-fog ring (a negative radius) crosses the wire intact")
+  ok(Wire.decode({ t = "ring", phase = 1, cx = 1, cy = 1, r = -7 }) == nil,
+     "but an arbitrary negative radius is still refused")
 
   -- `as`: the host relaying a bot's movement
   eq(Wire.decode(Wire.step("up", 1, 2, "ROUTE_1", 1001)).as, 1001,
@@ -237,6 +251,19 @@ do
   ok(Fog.isFinalPhase(Fog.phaseCount()), "the last phase is final")
   ok(not Fog.isFinalPhase(1), "the first phase is not")
 
+  -- the ring never clamps: the last phase is fog over everything, so a match
+  -- whose survivors will not fight each other still ends
+  ok(Fog.coversAll(Fog.radius(Fog.phaseCount())),
+     "the final phase covers the whole map")
+  ok(not Fog.coversAll(Fog.radius(Fog.phaseCount() - 1)),
+     "the phase before it still has an inside")
+  eq(Fog.radius(Fog.phaseCount() - 1), 0,
+     "and that inside is the centre's own square only")
+  ok(not Fog.coversAll(0), "radius 0 is a place, not the absence of one")
+  ok(Fog.coversAll(Fog.EVERYWHERE), "EVERYWHERE is the absence of one")
+  ok(Fog.radius(Fog.phaseCount() + 50) == Fog.EVERYWHERE,
+     "past the schedule the fog stays everywhere -- no clamp back to a ring")
+
   -- geometry on a town-map grid
   local locations = {
     HOME      = { x = 8, y = 8, name = "HOME" },
@@ -254,6 +281,19 @@ do
   ok(Fog.isSafe(locations, "FARAWAY", center, 15), "everything is in at phase 1")
   ok(Fog.isSafe(locations, "NOWHERE", center, 1.5),
      "a map with no square is never punished")
+  ok(Fog.isSafe(locations, "HOME", center, 0), "at radius 0 the centre is safe")
+  ok(Fog.isSafe(locations, "INDOORS", center, 0),
+     "and so are the buildings on its square")
+  ok(not Fog.isSafe(locations, "NEXTDOOR", center, 0),
+     "but the next square over is not")
+  ok(not Fog.isSafe(locations, "HOME", center, Fog.EVERYWHERE),
+     "once the fog covers everything, even the centre is in it")
+  ok(not Fog.isSafe(locations, "NOWHERE", center, Fog.EVERYWHERE),
+     "and an unplaced map is no longer a loophole")
+  ok(not Fog.isSafe(nil, "HOME", nil, Fog.EVERYWHERE),
+     "nor is having no location table at all")
+  ok(Fog.distanceOutside(locations, "HOME", center, Fog.EVERYWHERE) > 0,
+     "everything reads as outside the all-fog ring")
 
   ok(Fog.distanceOutside(locations, "FARAWAY", center, 1.5) > 0, "outside is positive")
   ok(Fog.distanceOutside(locations, "HOME", center, 1.5) < 0, "inside is negative")
@@ -306,10 +346,11 @@ do
   local open = function() return true end
   local cells = Spills.placeAround(10, 10, 4, open)
   eq(#cells, 4, "a cell per Pokemon")
-  -- never on the faller's own cell: they are still standing there, and two
-  -- objects on one cell makes pressing A a coin toss between them
+  -- the ring is preferred over the faller's own cell, so an open-field pile
+  -- spreads instead of stacking
   for _, c in ipairs(cells) do
-    ok(not (c.x == 10 and c.y == 10), "no ball on the cell they fell on")
+    ok(not (c.x == 10 and c.y == 10),
+       "an open field puts no ball on the cell they fell on")
   end
   local seen, dup = {}, false
   for _, c in ipairs(cells) do
@@ -320,14 +361,20 @@ do
   end
   ok(not dup, "no two Pokemon share a cell")
 
-  -- a wall means fewer places to put them, not a crash
+  -- a wall must not mean lost loot: the shortfall stacks on the faller's
+  -- own cell, which is walkable by definition (they stood on it) and free
+  -- now that a beaten trainer's sprite despawns
   local onlyOne = function(x, y) return x == 11 and y == 10 end
-  eq(#Spills.placeAround(10, 10, 4, onlyOne), 1,
-     "a spill with one free cell drops one ball")
-  eq(#Spills.placeAround(10, 10, 4, function(x, y) return x == 10 and y == 10 end), 0,
-     "and the faller's own cell does not count as free")
-  eq(#Spills.placeAround(10, 10, 4, function() return false end), 0,
-     "nowhere to put them is empty, not an error")
+  local walled = Spills.placeAround(10, 10, 4, onlyOne)
+  eq(#walled, 4, "a walled-in spill still drops every ball")
+  eq(walled[1].x .. "," .. walled[1].y, "11,10", "the one free ring cell is used first")
+  local stacked = 0
+  for _, c in ipairs(walled) do
+    if c.x == 10 and c.y == 10 then stacked = stacked + 1 end
+  end
+  eq(stacked, 3, "and the rest stack where they fell")
+  eq(#Spills.placeAround(10, 10, 4, function() return false end), 4,
+     "even nowhere-free drops the whole team where they fell")
 
   -- the wire payload
   local party = { { species = "RATTATA", level = 12, hp = 0 },
@@ -351,6 +398,13 @@ do
      species = "RATTATA" } } }) == nil, "a keyless ball is refused")
   ok(Wire.decode({ t = "spill", map = "R", mons = {} }) == nil,
      "an empty spill is refused")
+  -- a 6/6 release travels as a one-ball spill under its own key namespace,
+  -- which the elimination keys (ownerId:i) can never collide with
+  local drop = Wire.decode(Wire.spill("ROUTE_1",
+    { { key = "5:drop:1", x = 5, y = 6, species = "PIDGEY", level = 8 } }))
+  ok(drop ~= nil, "a single released mon travels as a spill")
+  eq(#drop.mons, 1, "of one ball")
+  eq(drop.mons[1].key, "5:drop:1", "with its drop key intact")
   eq(Wire.decode(Wire.took("7:1")).key, "7:1", "took carries the key")
   ok(Wire.decode({ t = "took" }) == nil, "took without a key is refused")
 
@@ -374,8 +428,13 @@ do
   local Levels = require("mods.battle_royale.lib.levels")
   local Fog = require("mods.battle_royale.lib.fog")
 
-  eq(Levels.rungs(), Fog.phaseCount(),
-     "one level rung per fog phase -- one clock, not two")
+  -- one clock, not two: the ladder is indexed by the fog's phase.  The fog
+  -- keeps closing after the ladder tops out (the last rungs are the endgame
+  -- at level 100), so the ladder is never LONGER than the schedule.
+  ok(Levels.rungs() <= Fog.phaseCount(),
+     "every level rung has a fog phase to ride")
+  eq(Levels.at(Fog.phaseCount()), Levels.MAX,
+     "the all-fog phase is at the level cap")
   eq(Levels.at(1), 5, "the drop is the starting level")
   eq(Levels.at(Levels.rungs()), Levels.MAX, "the last ring is level 100")
   eq(Levels.at(0), 5, "a phase below the ladder clamps to the drop")
@@ -665,6 +724,64 @@ do
   -- blank is the first slot, so an untouched widget is empty rather than AAAA
   eq(CodeEntry.text(CodeEntry.new(ADDRESS)):gsub("%s", ""), "",
      "a fresh address entry starts blank")
+end
+
+
+-- ------- the fog takes Kanto's own trainers (POK-35): Fog.tickMaps
+
+do
+  local Fog = require("mods.battle_royale.lib.fog")
+  -- a 3-map world: A inside the ring, B and C outside it
+  local locations = { A = { x = 0, y = 0 }, B = { x = 9, y = 0 }, C = { x = 0, y = 9 } }
+  local center = { x = 0, y = 0 }
+  local maps = { "A", "B", "C" }
+  local state, t = {}, 1000
+
+  -- first sight of an unsafe map arms its clock but takes nothing
+  local died = Fog.tickMaps(state, maps, locations, center, 2, t)
+  eq(#died, 0, "arming the clocks takes nobody")
+  ok(state.B and state.B.ticks == 0, "an unsafe map's clock is armed")
+  ok(state.A == nil, "a safe map has no clock")
+
+  -- the same grace players get: TICKS_TO_KILL beats, TICK_SECONDS apart
+  for i = 1, Fog.TICKS_TO_KILL - 1 do
+    t = t + Fog.TICK_SECONDS
+    died = Fog.tickMaps(state, maps, locations, center, 2, t)
+    eq(#died, 0, "still counting at beat " .. i)
+  end
+  t = t + Fog.TICK_SECONDS
+  died = Fog.tickMaps(state, maps, locations, center, 2, t)
+  eq(#died, 2, "both fogged maps die on the last beat")
+  ok(state.B.dead and state.C.dead, "and are marked dead")
+
+  -- the dead stay dead, and are not reported twice
+  t = t + Fog.TICK_SECONDS
+  died = Fog.tickMaps(state, maps, locations, center, 2, t)
+  eq(#died, 0, "a dead map is not taken twice")
+
+  -- a beat needs the full TICK_SECONDS
+  local s2, t2 = {}, 5000
+  Fog.tickMaps(s2, { "B" }, locations, center, 2, t2)
+  Fog.tickMaps(s2, { "B" }, locations, center, 2, t2 + Fog.TICK_SECONDS - 1)
+  eq(s2.B.ticks, 0, "a beat needs the full TICK_SECONDS")
+
+  -- a recentred ring reprieves a counting map...
+  local s3 = {}
+  Fog.tickMaps(s3, { "B" }, locations, center, 2, 100)
+  Fog.tickMaps(s3, { "B" }, locations, { x = 9, y = 0 }, 2, 104)
+  eq(s3.B, nil, "a map the ring re-admits is reprieved")
+
+  -- ...but never resurrects a dead one
+  local s4 = { B = { ticks = Fog.TICKS_TO_KILL, dead = true, last = 0 } }
+  local d4 = Fog.tickMaps(s4, { "B" }, locations, { x = 9, y = 0 }, 2, 200)
+  eq(#d4, 0, "the dead stay dead")
+  ok(s4.B.dead, "even when the ring re-admits their map")
+
+  -- the all-covering ring (radius -1) counts every map down
+  local s5 = {}
+  Fog.tickMaps(s5, maps, locations, center, -1, 300)
+  ok(s5.A ~= nil and s5.B ~= nil and s5.C ~= nil,
+     "the final ring arms every clock")
 end
 
 

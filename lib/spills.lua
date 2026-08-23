@@ -32,11 +32,14 @@ local SEARCH_RADIUS = 4
 -- so a spill reads as a pile around the trainer rather than a scatter
 -- across the route.
 --
--- NOT the cell they fell on, deliberately.  An eliminated trainer is still
--- standing there (they spectate on foot), and two objects on one cell means
--- OverworldState:interact picks whichever its NPC list happens to reach
--- first -- so half the time pressing A on the pile talked to the corpse
--- instead of opening the ball, and nothing happened.
+-- The ring is preferred over the cell they fell on so the pile spreads --
+-- but the search is not allowed to come up short.  It used to give up
+-- silently on a walled-in or map-edge cell, and "sometimes a beaten player
+-- drops a ball, sometimes not" was exactly how that looked in play.
+-- Whatever the ring cannot place lands on the faller's own cell, which is
+-- walkable by definition (they were standing on it) and free again now
+-- that a beaten trainer's sprite despawns.  Stacked balls open one at a
+-- time.
 function Spills.placeAround(x, y, count, walkable)
   local out, taken = {}, {}
   local function tryCell(cx, cy)
@@ -55,6 +58,7 @@ function Spills.placeAround(x, y, count, walkable)
     end
     if #out >= count then break end
   end
+  while #out < count do out[#out + 1] = { x = x, y = y } end
   return out
 end
 
