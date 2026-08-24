@@ -3378,6 +3378,29 @@ return function(mod)
              lastSync = BR.spills.lastSync }
   end
   mod.exports.openSpill = function(key) return BR:openSpill(key) end
+  -- a test hook, like debugSpill: the host drops a bot at a cell, so a
+  -- smoke can stage an engage instead of praying for one
+  mod.exports.debugPlaceBot = function(id, map, x, y)
+    local p = BR.players[id]
+    if not (p and BR.relay) then return false end
+    p.map, p.x, p.y, p.facing = map, x, y, "down"
+    BR.ghosts:despawn(id)
+    BR.relay:broadcast(Wire.place(p.map, p.x, p.y, "down", p.status, p.sprite, id))
+    return true
+  end
+  -- a diagnostic window into the fog gate, for the smokes
+  mod.exports.fogProbe = function()
+    local here = mod.world:current()
+    return {
+      phase = BR.phase, status = BR.status,
+      botFight = BR.botFight, botFightAt = BR.botFightAt,
+      now = (love.timer and love.timer.getTime and love.timer.getTime()) or 0,
+      ring = BR.ring and BR.ring.phase,
+      radius = BR.ring and BR.ring.radius,
+      mapId = (here and here.mapId) or "nil",
+      wasInFog = BR.wasInFog, lastFogTick = BR.lastFogTick,
+    }
+  end
   mod.exports.inFog = function()
     local here = BR.game and mod.world:current()
     if not (here and BR.ring) then return false end
