@@ -20,6 +20,10 @@ The fog shrinks the world on a shared clock, everyone's level rides the
 same clock, and a fallen team spills onto the ground as Poké Balls anyone
 can claim. See "What's here / what's next" below.
 
+The fog shrinks the world on a shared clock, everyone's level rides the
+same clock, and a fallen team spills onto the ground as Poké Balls anyone
+can claim. See "What's here / what's next" below.
+
 A mod for [gen1recomp](https://github.com/bryanthaboi/gen1recomp).
 
 ## Install
@@ -167,6 +171,14 @@ never overwrite your actual playthrough.
   swap, and party-as-health is meant to bite.
 - **No nickname prompt** on a catch. The team is disposable and you may
   catch a dozen under fog pressure.
+- **Running from another trainer is hard.** RUN in a PvP battle is a
+  roll — one in four at equal speed, half at twice their speed, never
+  better than five in eight, a little better each retry — and a failed
+  attempt means you fight this turn. Every earlier escape from the *same*
+  pursuer halves your odds: a determined pursuer wears down prey. A POKé
+  DOLL is a guaranteed bail, and it is spent. After a flee neither of you
+  engages the other for four seconds (the head start), and the runner
+  cannot start that fight again for thirty.
 - **A full party means choosing who to release.** At 6/6, a catch or a
   loot-ball take opens the party screen as a picker: drop one to make room,
   or keep the team you have. The released Pokémon lands as a ball at your
@@ -533,8 +545,8 @@ goes, for everyone.
 
 **Next** (from the design in the sibling `pokemon-battle-royale` project's
 `docs/DESIGN.md`): loose item/money pickups on the ground to finish D8 (the
-bag still transfers straight to the victor); the per-pair re-engage cooldown
-and escape tools of D9; Repel shrinking your own eyeline; type-based
+bag still transfers straight to the victor); the rest of D9 — Teleport /
+Roar as escape moves, and Repel shrinking your own eyeline; type-based
 overworld abilities (D18/D20); and bots that pick
 a fight with a *player* on sight rather than only closing distance.
 

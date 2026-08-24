@@ -60,17 +60,21 @@ end
 
 -- me:     { id=, map=, x=, y=, facing=, moving=, status=, busy= }
 -- others: array of the same shape
--- opts:   { range =, blocked = function(x, y) }
--- Returns the id of the nearest trainer in our sights, or nil.
+-- opts:   { range =, blocked = function(x, y), avoid = { [id] = true } }
+-- Returns the id of the nearest trainer in our sights, or nil.  An avoided
+-- trainer (a flee's grace or lockout, POK-24) is not a target, and does not
+-- shield anyone standing behind them either.
 function Engage.target(me, others, opts)
   if not canFight(me) then return nil end
   local line = Engage.sightLine(me, opts and opts.range, opts and opts.blocked)
+  local avoid = opts and opts.avoid
   -- nearest cell first, so someone standing between us and a further
   -- trainer is the one we engage
   for _, cell in ipairs(line) do
     local best
     for _, o in ipairs(others or {}) do
-      if o.map == me.map and o.x == cell.x and o.y == cell.y and canFight(o) then
+      if o.map == me.map and o.x == cell.x and o.y == cell.y and canFight(o)
+         and not (avoid and avoid[o.id]) then
         if not best or o.id < best then best = o.id end
       end
     end
@@ -87,11 +91,12 @@ end
 -- What to do with an incoming challenge.
 --   "accept"  -> answer and start (also when it crosses our own challenge
 --                to the same player)
---   "busy"    -> decline: we are fighting, pending with someone else, or
---                not able to fight
-function Engage.answer(me, fromId, pending)
+--   "busy"    -> decline: we are fighting, pending with someone else, not
+--                able to fight, or inside a flee's grace with them (POK-24)
+function Engage.answer(me, fromId, pending, avoid)
   if me.status ~= "alive" or me.inBattle then return "busy" end
   if pending and pending.to ~= fromId then return "busy" end
+  if avoid and avoid[fromId] then return "busy" end
   return "accept"
 end
 

@@ -615,6 +615,187 @@ do
   end
 end
 
+-- ------- fleeing a PvP battle is not free (POK-24)
+
+do
+  local Flee = require("mods.battle_royale.lib.flee")
+  local Engage = require("mods.battle_royale.lib.engage")
+
+  -- the roll
+  eq(Flee.chance(100, 100, 1, 0), 64, "one in four at equal speed")
+  eq(Flee.chance(200, 100, 1, 0), 128, "half at twice their speed")
+  eq(Flee.chance(1000, 100, 1, 0), 160, "never better than five in eight")
+  eq(Flee.chance(100, 100, 2, 0), 84, "a retry adds a little")
+  eq(Flee.chance(1000, 100, 10, 0), 240, "retries never make it certain")
+  eq(Flee.chance(100, 100, 1, 1), 32, "an earlier escape from this pursuer halves it")
+  eq(Flee.chance(100, 100, 1, 3), 8, "and again, every time")
+  eq(Flee.chance(0, nil, 1, 0), 64, "nonsense speeds fall back to equal")
+  ok(Flee.roll(100, 100, 1, 0, function() return 64 end),
+     "rng at the chance escapes (the <= keeps the equal case)")
+  ok(not Flee.roll(100, 100, 1, 0, function() return 65 end), "one above it does not")
+
+  -- the wrap, on a stand-in battle with no battlers (equal speed)
+  local function fakeBattle()
+    local b = { submitted = 0, said = {} }
+    b.tryRun = function(s) s.submitted = s.submitted + 1 end
+    b.say = function(s, t) s.said[#s.said + 1] = t end
+    return b
+  end
+  ok(not Flee.wrap({}, {}), "nothing to wrap is reported")
+  local roll = 255
+  local b = fakeBattle()
+  local save = { inventory = {} }
+  local flees = {}
+  ok(Flee.wrap(b, { save = save, prior = 0, rng = function() return roll end,
+                    onFlee = function(how) flees[#flees + 1] = how end }),
+     "a battle with a tryRun is wrapped")
+  b:tryRun()
+  eq(b.submitted, 0, "a failed roll submits nothing")
+  eq(b.said[1], "Can't escape!", "and says so")
+  eq(b.afterQueue, "menu", "and hands the menu back")
+  eq(#flees, 0, "no flee recorded")
+  roll = 84
+  b:tryRun()
+  eq(b.submitted, 1, "the retry's better odds let it through")
+  eq(flees[1], "ran", "and it is a flee")
+  local doll = fakeBattle()
+  save.inventory.POKE_DOLL = 2
+  Flee.wrap(doll, { save = save, prior = 9, rng = function() return 255 end,
+                    onFlee = function(how) flees[#flees + 1] = how end })
+  doll:tryRun()
+  eq(doll.submitted, 1, "a POKe DOLL bails whatever the odds")
+  eq(save.inventory.POKE_DOLL, 1, "and is spent")
+  eq(flees[2], "doll", "recorded as a doll")
+  doll:tryRun()
+  eq(save.inventory.POKE_DOLL, nil, "the last one leaves the bag entirely")
+  eq(doll.submitted, 2, "and still bails")
+
+  -- the grace and the lockout: an avoided trainer is not a target, and
+  -- does not shield anyone behind them
+  local me = { id = 1, map = "R", x = 5, y = 5, facing = "up", moving = false,
+               status = "alive", busy = false }
+  local function at(id, x, y)
+    return { id = id, map = "R", x = x, y = y, facing = "down", moving = false,
+             status = "alive", busy = false }
+  end
+  eq(Engage.target(me, { at(2, 5, 3) }), 2, "in sight: a target")
+  eq(Engage.target(me, { at(2, 5, 3) }, { avoid = { [2] = true } }), nil,
+     "avoided: not a target")
+  eq(Engage.target(me, { at(2, 5, 3), at(3, 5, 2) }, { avoid = { [2] = true } }), 3,
+     "and not a shield for the one behind")
+  eq(Engage.answer({ status = "alive", inBattle = false }, 2, nil, { [2] = true }), "busy",
+     "a challenge inside the grace is declined")
+  eq(Engage.answer({ status = "alive", inBattle = false }, 2, nil, { [3] = true }), "accept",
+     "somebody else's grace is not ours")
+end
+
+-- ------- ...and on the real lockstep (needs the imported data, like the
+-- engine's own link tests): a loopback host/guest pair, the guest's RUN
+-- wrapped.  A failed roll leaves the battle running and the host hears
+-- nothing; a passing roll -- or a POKe DOLL -- ends it as a draw on both.
+
+do
+  -- the engine's own link tests run under the love stub; so does this block,
+  -- and only this block -- the room tests below time themselves without one
+  local hadLove = _G.love
+  local okAll, err = pcall(function()
+    _G.love = _G.love or require("tests.love_stub")
+    local Data = require("src.core.Data")
+    Data:load()
+    local Input = require("src.core.Input")
+    Input:init()
+    require("src.render.Font").load(Data)
+    local Net = require("src.link.Net")
+    local Protocol = require("src.link.Protocol")
+    local Pokemon = require("src.pokemon.Pokemon")
+    local SaveData = require("src.core.SaveData")
+    local LinkBattle = require("src.link.LinkBattle")
+    local Flee = require("mods.battle_royale.lib.flee")
+
+    local function makeFakeGame(species)
+      local save = SaveData.newGame()
+      table.insert(save.party, Pokemon.new(Data, species, 50))
+      local stack = { list = {} }
+      function stack:push(s, ...) table.insert(self.list, s) if s.enter then s:enter(...) end end
+      function stack:pop() table.remove(self.list) end
+      function stack:top() return self.list[#self.list] end
+      function stack:update(dt) local t = self:top() if t and t.update then t:update(dt) end end
+      return { data = Data, input = Input, stack = stack, save = save }
+    end
+    local function pair(seed)
+      local gA, gB = makeFakeGame("RATTATA"), makeFakeGame("RATTATA")
+      gB.save.player.name = "BLUE"
+      local nA, nB = Net.loopbackPair()
+      local pA, pB = Protocol.packParty(gA.save.party), Protocol.packParty(gB.save.party)
+      local bA = LinkBattle.newHost(gA, nA, { myParty = pA, theirParty = pB, theirName = "BLUE", seed = seed })
+      local bB = LinkBattle.newGuest(gB, nB, { myParty = pB, theirParty = pA, theirName = "RED", seed = seed })
+      local rA, rB
+      bA.onFinish = function(r) rA = r end
+      bB.onFinish = function(r) rB = r end
+      gA.stack:push(bA)
+      gB.stack:push(bB)
+      return gA, gB, bA, bB, function() return rA, rB end
+    end
+    -- step both sides; a side that is not at its menu gets A mashed so the
+    -- intro and the messages advance, a side at its menu is left waiting
+    local function pump(gA, gB, bA, bB, n)
+      for _ = 1, n do
+        Input.pressed = (bA.phase ~= "menu") and { a = true } or {}
+        gA.stack:update(1 / 60)
+        Input.pressed = (bB.phase ~= "menu") and { a = true } or {}
+        gB.stack:update(1 / 60)
+      end
+    end
+    local function settle(gA, gB, bA, bB, n)   -- mash A on both until they finish
+      for _ = 1, n do
+        Input.pressed = { a = true }
+        gA.stack:update(1 / 60)
+        gB.stack:update(1 / 60)
+      end
+    end
+
+    local gA, gB, bA, bB, results = pair(4242)
+    eq(bB.kind, "link", "the guest's battle is a link battle")
+    local roll, flees = 255, {}
+    ok(Flee.wrap(bB, { save = gB.save, prior = 0, rng = function() return roll end,
+                       onFlee = function(how) flees[#flees + 1] = how end }),
+       "the guest's RUN is wrappable on the real lockstep")
+    pump(gA, gB, bA, bB, 600)
+    eq(bB.phase, "menu", "the guest reaches its menu")
+    bB:tryRun()
+    eq(bB.afterQueue, "menu", "lockstep: a failed roll hands the menu back")
+    pump(gA, gB, bA, bB, 300)
+    local rA, rB = results()
+    ok(rA == nil and rB == nil, "and the host never hears of it: the battle is still on")
+    eq(#flees, 0, "no flee recorded")
+    roll = 0
+    bB:tryRun()
+    eq(flees[1], "ran", "a passing roll is a flee")
+    settle(gA, gB, bA, bB, 2000)
+    rA, rB = results()
+    eq(rA, "draw", "host: the run ends it as a draw")
+    eq(rB, "draw", "guest: a draw too")
+
+    local gA2, gB2, bA2, bB2, results2 = pair(777)
+    gB2.save.inventory.POKE_DOLL = 1
+    local how
+    Flee.wrap(bB2, { save = gB2.save, prior = 5, rng = function() return 255 end,
+                     onFlee = function(h) how = h end })
+    pump(gA2, gB2, bA2, bB2, 600)
+    bB2:tryRun()
+    eq(how, "doll", "lockstep: the doll bails at any odds")
+    eq(gB2.save.inventory.POKE_DOLL, nil, "and is spent")
+    settle(gA2, gB2, bA2, bB2, 2000)
+    local r2A, r2B = results2()
+    eq(r2A, "draw", "host: the doll's draw")
+    eq(r2B, "draw", "guest: the doll's draw")
+  end)
+  if not hadLove then _G.love = nil end
+  if not okAll then
+    io.write("  (skipping the lockstep flee: " .. tostring(err) .. ")\n")
+  end
+end
+
 -- ------- one lobby screen, not a menu round-trip (POK-32)
 --
 -- The screen's rows are a function of BR, rebuilt every frame; the rows

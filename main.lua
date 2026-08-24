@@ -35,6 +35,7 @@ local Bots = require("mods.battle_royale.lib.bots")
 local Fog = require("mods.battle_royale.lib.fog")
 local Levels = require("mods.battle_royale.lib.levels")
 local Spills = require("mods.battle_royale.lib.spills")
+local Flee = require("mods.battle_royale.lib.flee")
 local BRMenu = require("mods.battle_royale.lib.menu")
 
 local SCREEN = "BattleRoyaleMenu"
@@ -178,6 +179,10 @@ return function(mod)
     -- link.battle_ended reaches us, so reading the opponent off self.battle
     -- in that handler finds nil and the loot goes nowhere.
     lastOpponent = nil,
+    fledFrom = {},        -- opponent id -> how often we ran from them (POK-24)
+    fleeGrace = {},       -- opponent id -> clock until neither of us engages
+    fleeLockout = {},     -- opponent id -> clock until we may initiate on them
+    fleeing = nil,        -- who we are running from, while the battle unwinds
     botCount = 0,         -- how many bots the host will add at start
     fillTo = 0,           -- ...or top the roster up to this many, 0 = off
     solo = false,         -- hosting a room of one, with no server
@@ -416,6 +421,7 @@ return function(mod)
     self.pendingLoot = {}
     self.lootFrom = nil
     self.lastOpponent = nil
+    self.fledFrom, self.fleeGrace, self.fleeLockout, self.fleeing = {}, {}, {}, nil
     self.pendingDrop = nil   -- a release that never landed (POK-34)
     self.claimedCatch = nil  -- custody taken on a shimmed engine, unconsumed
     self.dropSeq = nil
@@ -729,13 +735,33 @@ return function(mod)
       return
     end
     local decision = Engage.answer(
-      { status = self.status, inBattle = self.battle ~= nil }, fromId, self.pending)
+      { status = self.status, inBattle = self.battle ~= nil }, fromId, self.pending,
+      self:fleeAvoid(false))
     if decision ~= "accept" then
       self.relay:send(fromId, Wire.decline(nonce, "busy"))
       return
     end
     self.relay:send(fromId, Wire.accept(nonce))
     self:beginBattle(fromId, Engage.isHost(self.myId, fromId), nonce)
+  end
+
+  -- Fleeing is not free (POK-24, lib/flee.lua).  After a flee neither of
+  -- the pair engages the other for a few seconds -- the head start a flee
+  -- promises -- and the runner may not initiate on who they fled from for
+  -- longer.  `initiating` asks for both sets; an inbound challenge only
+  -- honours the grace, so a pursuer who catches up again gets their fight.
+  function BR:fleeAvoid(initiating)
+    local now = clock() or 0
+    local avoid = {}
+    for id, until_ in pairs(self.fleeGrace) do
+      if until_ > now then avoid[id] = true else self.fleeGrace[id] = nil end
+    end
+    if initiating then
+      for id, until_ in pairs(self.fleeLockout) do
+        if until_ > now then avoid[id] = true else self.fleeLockout[id] = nil end
+      end
+    end
+    return avoid
   end
 
   function BR:tryEngage()
@@ -762,6 +788,7 @@ return function(mod)
       blocked = function(x, y)
         return not (map:inBounds(x, y) and map:isWalkableCell(x, y))
       end,
+      avoid = self:fleeAvoid(true),
     })
     if not target then return end
     -- A bot has no client to lockstep with, so its fight is a local trainer
@@ -2061,6 +2088,16 @@ return function(mod)
   -- PvP and bot fights hold tickFog off via status anyway.
   mod.events:on("battle.started", function(ev)
     if BR:inRound() and ev and ev.battle then BR.localBattle = ev.battle end
+    -- a PvP lockstep battle: RUN on our side goes through the flee roll
+    -- (POK-24); the other side only ever sees a run we actually submitted
+    local opponent = BR.battle and BR.battle.opponentId
+    if opponent and ev and ev.battle and ev.battle.kind == "link" and BR.game then
+      Flee.wrap(ev.battle, {
+        save = BR.game.save,
+        prior = BR.fledFrom[opponent] or 0,
+        onFlee = function() BR.fleeing = opponent end,
+      })
+    end
   end)
 
   -- Custody taken on a shimmed engine (catch.party_full above): the deposit
@@ -2145,6 +2182,19 @@ return function(mod)
         mon.status = after.status
       end
     end
+    -- a flee (POK-24): ours counts against us with this pursuer and locks
+    -- us out of restarting it; either way the pair gets a breather
+    if opponent then
+      local now = clock() or 0
+      if BR.fleeing == opponent then
+        BR.fledFrom[opponent] = (BR.fledFrom[opponent] or 0) + 1
+        BR.fleeLockout[opponent] = now + Flee.LOCKOUT_SECONDS
+        BR.fleeGrace[opponent] = now + Flee.GRACE_SECONDS
+      elseif ev.result == "draw" then
+        BR.fleeGrace[opponent] = now + Flee.GRACE_SECONDS
+      end
+    end
+    BR.fleeing = nil
     if ev.result == "lose" then
       -- the victor takes the bag, so it has to go out while it still has
       -- anything in it: eliminate() empties it (and spills the team) below
