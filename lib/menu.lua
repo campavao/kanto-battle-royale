@@ -60,6 +60,10 @@ function Menu.items(mod, BR, game)
     if ring and ring.phase and ring.phase > 1 then
       row("FOG: " .. tostring((ring.center and ring.center.name) or "CLOSING"))
     end
+    -- the host can run it back (POK-20); everyone else waits to be sent
+    if BR.phase == "over" and BR.relay and BR.relay:isHost() then
+      items[#items + 1] = { label = "PLAY AGAIN", onSelect = function() BR:playAgain() end }
+    end
     items[#items + 1] = {
       label = "LEAVE MATCH",
       onSelect = function() BR:teardown("You left the match.") end,

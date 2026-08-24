@@ -47,7 +47,8 @@ do
   ok(Wire.decode({ t = "start", seed = 1, spawns = {} }) == nil, "empty start is refused")
 
   -- the Safari opening (POK-21): start carries the round, beats carry the clock
-  eq(Wire.PROTOCOL, 3, "the Safari opening is PROTOCOL 3")
+  eq(Wire.PROTOCOL, 4, "PLAY AGAIN is PROTOCOL 4")
+  eq(Wire.decode(Wire.again()).t, "again", "again round-trips")
   local safariStart = Wire.decode(Wire.start(7,
     { { id = 1, map = "SAFARI_ZONE_CENTER", x = 2, y = 3 } }, 120))
   ok(safariStart ~= nil, "a start with a Safari round decodes")
@@ -893,6 +894,17 @@ do
     BR.ring = { phase = 3, center = { name = "CELADON CITY" } }
     items = BRMenu.items({}, BR, {})
     eq(labels(items), "SPECTATING|LEVEL: 5|FOG: CELADON CITY|LEAVE MATCH", "spectating, with the fog")
+    -- the match is over: the host can run it back, a guest waits to be sent
+    BR.phase = "over"
+    BR.relay = room(true)
+    items = BRMenu.items({}, BR, {})
+    eq(labels(items), "SPECTATING|LEVEL: 5|FOG: CELADON CITY|PLAY AGAIN|LEAVE MATCH",
+       "over, as the host: PLAY AGAIN")
+    ok(not find(items, "PLAY AGAIN").keepOpen, "which closes the report (the world is about to go)")
+    BR.relay = room(false)
+    items = BRMenu.items({}, BR, {})
+    eq(labels(items), "SPECTATING|LEVEL: 5|FOG: CELADON CITY|LEAVE MATCH",
+       "over, as a guest: the host decides")
   end
 end
 

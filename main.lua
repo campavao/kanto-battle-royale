@@ -399,25 +399,22 @@ return function(mod)
   -- Back to a clean slate without leaving the world (a closed relay, a
   -- cancelled lobby).  teardown() is the deliberate exit that also tells the
   -- relay goodbye.
-  function BR:reset()
+  -- Everything one match owns, cleared for the next: a leave (reset) or
+  -- PLAY AGAIN (onAgain), which keeps the room.
+  function BR:resetMatch()
     self.ghosts:despawnAll()
     self.spills:clear()
     if self.battle then
       self.battle.channel:peerGone()
       self.battle = nil
     end
-    self.relay = nil
-    self.solo = false
-    self.quick = false
     self.fellAt = nil
-    self.autoStartAt = nil
-    self.lastRoster = 0
     self.players = {}
     self.pending = nil
-    self.phase = "off"
+    self.phase = "lobby"
     self.status = "lobby"
-    self.myId = nil
     self.started = false
+    self.matchWorld = false
     self.pendingLoot = {}
     self.lootFrom = nil
     self.lastOpponent = nil
@@ -446,6 +443,17 @@ return function(mod)
     self:releaseCamera()
   end
 
+  function BR:reset()
+    self:resetMatch()
+    self.relay = nil
+    self.solo = false
+    self.quick = false
+    self.autoStartAt = nil
+    self.lastRoster = 0
+    self.phase = "off"
+    self.myId = nil
+  end
+
   -- Leaving has to actually leave.  A match runs in a throwaway world, so
   -- dropping the relay while standing in it left the player in a Kanto that
   -- was no longer a match and no longer a save -- the menu said "you left"
@@ -466,6 +474,42 @@ return function(mod)
       return
     end
     if message then say(message) end
+  end
+
+  -- PLAY AGAIN (POK-20): the host sends the room back to the lobby -- the
+  -- roster kept, the code kept, the room unlocked for anyone else who wants
+  -- in -- and everyone leaves the finished world for the lobby screen.  The
+  -- next START MATCH rolls a new seed and new spawns exactly as the first
+  -- did.  Nobody exchanges a code twice.
+  function BR:playAgain()
+    local relay = self.relay
+    if not (relay and relay:isHost() and self.phase == "over") then return false end
+    relay:broadcast(Wire.again())
+    relay:lock(false)
+    self:onAgain()
+    return true
+  end
+
+  function BR:onAgain()
+    if not (self.relay and self.relay:isOpen()) then return end
+    local game = self.game
+    local wasMatchWorld = self.matchWorld
+    self:resetMatch()
+    -- an open room keeps driving itself, as quick play promised
+    if self.relay:isHost() and self:isOpen() then
+      local now = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
+      self.autoStartAt = now + QUICK_START_SECONDS
+    end
+    if wasMatchWorld and game then
+      local ok, err = pcall(function()
+        while game.stack:top() do game.stack:pop() end
+        game.stack:push(game:makeTitleState())
+        mod.ui.push(game, SCREEN)
+      end)
+      if not ok then
+        mod.log:warn("could not return to the lobby: %s", tostring(err))
+      end
+    end
   end
 
   -- ------- starting a match
@@ -710,6 +754,9 @@ return function(mod)
 
     elseif msg.t == "winner" then
       if fromId == self.relay.hostId then self:onWinner(msg.id) end
+
+    elseif msg.t == "again" then
+      if fromId == self.relay.hostId then self:onAgain() end
     end
   end
 
@@ -2684,6 +2731,7 @@ return function(mod)
   mod.exports.join = function(code) return BR:join(code) end
   mod.exports.start = function() return BR:startMatch() end
   mod.exports.leave = function() return BR:teardown() end
+  mod.exports.playAgain = function() return BR:playAgain() end
   mod.exports.setRelay = function(addr) return BR:setRelayAddress(addr) end
   mod.exports.setName = function(name) return BR:setName(name) end
   mod.exports.setBots = function(n)

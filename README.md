@@ -24,6 +24,10 @@ The fog shrinks the world on a shared clock, everyone's level rides the
 same clock, and a fallen team spills onto the ground as Poké Balls anyone
 can claim. See "What's here / what's next" below.
 
+The fog shrinks the world on a shared clock, everyone's level rides the
+same clock, and a fallen team spills onto the ground as Poké Balls anyone
+can claim. See "What's here / what's next" below.
+
 A mod for [gen1recomp](https://github.com/bryanthaboi/gen1recomp).
 
 ## Install
@@ -207,7 +211,11 @@ world away anyway. It is one screen: picking SOLO VS BOTS, QUICK PLAY,
 HOST GAME or JOIN BY CODE turns it into the lobby in place — the code, the
 roster filling in, BOTS / FILL TO, OPEN, the countdown — and you leave it
 by starting the match or backing out. During a match the same row is the
-report: who's left, the Safari clock, the level, where the fog is.
+report: who's left, the Safari clock, the level, where the fog is. When a
+match ends the host's report gains **PLAY AGAIN**: the room goes back to
+the lobby with everyone in it — same code, roster kept, unlocked again for
+anyone else who wants in — and START MATCH rolls a fresh drop. Nobody
+exchanges a code twice.
 
 ## Running the relay
 

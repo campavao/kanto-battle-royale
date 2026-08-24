@@ -46,7 +46,9 @@ local Wire = {}
 -- 3: a match opens in the Safari (start carries the round's length, and a
 --    safari beat carries the host's clock) -- a v2 peer would drop into
 --    the zone with a RATTATA and fight whoever it met there
-Wire.PROTOCOL = 3
+-- 4: again -- the host sends the room back to the lobby for another match;
+--    a v3 peer would sit in a finished world while the others re-dropped
+Wire.PROTOCOL = 4
 
 Wire.DIRS = { up = true, down = true, left = true, right = true }
 Wire.STATUS = { lobby = true, alive = true, battle = true, out = true }
@@ -138,6 +140,8 @@ end
 -- the host's Safari clock (POK-21): seconds left, zero being the buzzer
 function Wire.safari(left) return { t = "safari", left = left } end
 function Wire.winner(id) return { t = "winner", id = id } end
+-- PLAY AGAIN (POK-20): host only, back to the lobby with the roster kept
+function Wire.again() return { t = "again" } end
 
 -- ------- decoding
 --
@@ -329,6 +333,8 @@ decoders.winner = function(m)
   if m.id ~= nil and not isId(m.id) then return nil, "bad id" end
   return { t = "winner", id = m.id }
 end
+
+decoders.again = function() return { t = "again" } end
 
 function Wire.decode(m)
   if type(m) ~= "table" then return nil, "not a table" end
