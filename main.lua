@@ -36,6 +36,7 @@ local Fog = require("mods.battle_royale.lib.fog")
 local Levels = require("mods.battle_royale.lib.levels")
 local Spills = require("mods.battle_royale.lib.spills")
 local Flee = require("mods.battle_royale.lib.flee")
+local MoveKit = require("mods.battle_royale.lib.moves")
 local BRMenu = require("mods.battle_royale.lib.menu")
 
 local SCREEN = "BattleRoyaleMenu"
@@ -2081,6 +2082,70 @@ return function(mod)
     BR.claimedCatch = ctx.mon
     return true
   end)
+
+  -- Free move management (POK-19): a MOVES row on the party submenu, in a
+  -- round and out of battle.  Any move the species could ever learn --
+  -- level-up moves at any level, every compatible TM and HM -- with no
+  -- tutor, no item and no ceremony: a list to learn from, and when all four
+  -- slots are taken, a list to forget from.  A real playthrough never sees
+  -- the row.
+  mod.hooks:wrap("ui.party.submenu", function(next, game, items, mon, ctx)
+    local out = next(game, items, mon, ctx)
+    if not (inMatch() and type(out) == "table" and mon and not (ctx and ctx.battle)) then
+      return out
+    end
+    -- above STATS, where the field moves already sit
+    local at = #out + 1
+    for i, it in ipairs(out) do
+      if it.action == "stats" then at = i break end
+    end
+    table.insert(out, at, { label = "MOVES",
+                            onSelect = function(m, g) BR:openMoves(g, m) end })
+    return out
+  end)
+
+  function BR:openMoves(game, mon)
+    local data = game.data
+    local def = data.pokemon[mon.species]
+    local name = mon.nickname or (def and def.name) or tostring(mon.species)
+    local function tell(text)
+      game.stack:push(mod.ui.TextBox.new(game, text))
+    end
+    local learnable = MoveKit.learnable(data, mon)
+    if #learnable == 0 then
+      tell(("%s can't learn\nanything else."):format(name))
+      return
+    end
+    local items = {}
+    for _, m in ipairs(learnable) do
+      items[#items + 1] = { label = m.name, right = m.how, value = m.id }
+    end
+    game.stack:push(mod.ui.ListMenu.new(game, "LEARN WHICH?", items, {
+      onChoose = function(item, list)
+        local moveName = data.moves[item.value].name
+        if #(mon.moves or {}) < 4 then
+          MoveKit.teach(data, mon, item.value)
+          list:close()
+          tell(("%s learned\n%s!"):format(name, moveName))
+          return
+        end
+        local slots = {}
+        for i, mv in ipairs(mon.moves) do
+          local md = data.moves[mv.id]
+          slots[#slots + 1] = { label = (md and md.name) or mv.id, value = i }
+        end
+        game.stack:push(mod.ui.ListMenu.new(game, "FORGET WHICH?", slots, {
+          onChoose = function(slot, forget)
+            local old = MoveKit.teach(data, mon, item.value, slot.value)
+            forget:close()
+            list:close()
+            local oldName = (old and data.moves[old] and data.moves[old].name) or tostring(old)
+            tell(("%s forgot\n%s!\f%s learned\n%s!"):format(name, oldName, name, moveName))
+          end,
+        }))
+      end,
+    }))
+  end
 
   -- 1X, whatever the speed rows say.  A match has a shared clock (the fog),
   -- other people, and a lockstep battle at the end of a walk; fast-forward

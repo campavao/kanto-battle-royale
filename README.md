@@ -28,6 +28,10 @@ The fog shrinks the world on a shared clock, everyone's level rides the
 same clock, and a fallen team spills onto the ground as Poké Balls anyone
 can claim. See "What's here / what's next" below.
 
+The fog shrinks the world on a shared clock, everyone's level rides the
+same clock, and a fallen team spills onto the ground as Poké Balls anyone
+can claim. See "What's here / what's next" below.
+
 A mod for [gen1recomp](https://github.com/bryanthaboi/gen1recomp).
 
 ## Install
@@ -183,6 +187,10 @@ never overwrite your actual playthrough.
   DOLL is a guaranteed bail, and it is spent. After a flee neither of you
   engages the other for four seconds (the head start), and the runner
   cannot start that fight again for thirty.
+- **Moves are free.** From the party menu, MOVES swaps any of a Pokémon's
+  four moves for any move it could ever learn — level-up moves at any
+  level, every compatible TM and HM — no tutor, no item, no ceremony.
+  Catch a water type, teach it SURF, cross the water.
 - **A full party means choosing who to release.** At 6/6, a catch or a
   loot-ball take opens the party screen as a picker: drop one to make room,
   or keep the team you have. The released Pokémon lands as a ball at your

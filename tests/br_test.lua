@@ -797,6 +797,46 @@ do
   end
 end
 
+-- ------- free move management (POK-19)
+
+do
+  local MoveKit = require("mods.battle_royale.lib.moves")
+  local data = {
+    moves = { TACKLE = { name = "TACKLE", pp = 35 }, GROWL = { name = "GROWL", pp = 40 },
+              VINE_WHIP = { name = "VINE WHIP", pp = 10 }, CUT = { name = "CUT", pp = 30 },
+              TOXIC = { name = "TOXIC", pp = 10 }, SOLARBEAM = { name = "SOLARBEAM", pp = 10 } },
+    pokemon = { BULBASAUR = {
+      level1Moves = { "TACKLE", "GROWL" },
+      learnset = { { level = 13, move = "VINE_WHIP" }, { level = 48, move = "SOLARBEAM" } },
+      tmhm = { "TOXIC", "SOLARBEAM", "CUT", "NOT_A_MOVE" },
+    } },
+  }
+  local mon = { species = "BULBASAUR", moves = { { id = "TACKLE", pp = 35 } } }
+  local list = MoveKit.learnable(data, mon)
+  local names, hows = {}, {}
+  for i, m in ipairs(list) do names[i], hows[i] = m.name, m.how end
+  eq(table.concat(names, "|"), "GROWL|VINE WHIP|SOLARBEAM|TOXIC|CUT",
+     "everything it could learn that it does not know, level-ups first")
+  eq(table.concat(hows, "|"), "L1|L13|L48|TM|HM",
+     "tagged by how: a level, a TM, an HM (a move on both lists keeps its level)")
+  eq(#MoveKit.learnable(data, { species = "MEWTHREE" }), 0, "an unknown species learns nothing")
+
+  eq(MoveKit.teach(data, mon, "GROWL"), false, "a free slot: nothing forgotten")
+  eq(mon.moves[2].id, "GROWL", "and the move is in it")
+  eq(mon.moves[2].pp, 40, "with its full PP")
+  eq(select(2, MoveKit.teach(data, mon, "GROWL")), "already known", "no doubles")
+  MoveKit.teach(data, mon, "VINE_WHIP")
+  MoveKit.teach(data, mon, "TOXIC")
+  eq(#mon.moves, 4, "four slots fill up")
+  eq(select(2, MoveKit.teach(data, mon, "CUT")), "which move?", "a fifth needs a slot to forget")
+  eq(MoveKit.teach(data, mon, "CUT", 1), "TACKLE", "forgetting slot 1 reports what went")
+  eq(mon.moves[1].id, "CUT", "and CUT took its place")
+  eq(mon.moves[1].pp, 30, "at full PP")
+  eq(#mon.moves, 4, "still four")
+  eq(select(2, MoveKit.teach(data, mon, "NOT_A_MOVE")), "no such move", "an unknown move is refused")
+  eq(#MoveKit.learnable(data, mon), 2, "SOLARBEAM is left to learn -- and TACKLE, again: forgetting is not forever")
+end
+
 -- ------- one lobby screen, not a menu round-trip (POK-32)
 --
 -- The screen's rows are a function of BR, rebuilt every frame; the rows
