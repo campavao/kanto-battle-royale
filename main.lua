@@ -127,6 +127,8 @@ local PVP_TURN_SECONDS = 30       -- the PvP shot clock: pick or forfeit (POK-59
 local SAFARI_EXIT_WARPS = { { x = 14, y = 25 }, { x = 15, y = 25 } }
 -- the gate's door on FUCHSIA CITY: shut for the rest of the match
 local SAFARI_DOOR = { map = "FUCHSIA_CITY", x = 18, y = 3 }
+-- story rooms locked during a match (POK-51): any warp leading here refuses
+local CLOSED_DOORS = { OAKS_LAB = true }
 
 -- Story flags a fresh Kanto save normally earns in Pallet/Oak's lab.  Set
 -- at match start so the intro scripts never fire and the towns are free to
@@ -679,6 +681,14 @@ return function(mod)
     for id in pairs(Data.pokemon) do
       save.pokedex.seen[id] = true
       save.pokedex.owned[id] = true
+    end
+    -- Every town is a FLY destination from frame one (POK-52): the map is
+    -- the arena, and travel is strategy, not a diary of where you have
+    -- been.  The same trick as the dex above.
+    local WMap = require("src.world.Map")
+    save.visited = save.visited or {}
+    for id, mdef in pairs(Data.maps) do
+      if WMap.isFlyTown(mdef) then save.visited[id] = true end
     end
     save.bagOrder = nil            -- rebuilt from inventory on next open
     save.pcItems = {}
@@ -1705,6 +1715,21 @@ return function(mod)
           say("The SAFARI ZONE\nis closed for\nthe match.")
         end
         return false
+      elseif BR.phase == "drop" or BR.phase == "match" then
+        -- story rooms are locked for the match (POK-51): the rival script
+        -- in OAK's LAB starts a real battle and pays EXP off the ladder
+        local def = BR.game and BR.game.data and BR.game.data.maps[mapId]
+        for _, w in ipairs((def and def.warps) or {}) do
+          if ctx.toX == w.x and ctx.toY == w.y and CLOSED_DOORS[w.destMap] then
+            ctx.reason = "closed"
+            local now = clock() or 0
+            if now - (BR.lastClosedSay or -10) > 3 then
+              BR.lastClosedSay = now
+              say("OAK's LAB is\nclosed for the\nmatch.")
+            end
+            return false
+          end
+        end
       end
     end
     return next(allowed, ctx)
