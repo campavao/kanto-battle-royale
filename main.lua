@@ -867,6 +867,19 @@ return function(mod)
   -- owns every link mode the game has.  The lower room id hosts the lockstep
   -- so both machines start it the same way round.
 
+  -- The aggressor wears the ! (POK-55): the engine's own emotion bubble
+  -- (EXCLAMATION, index 1), held for the classic trainer-sight beat -- and
+  -- the engine freezes NPCs while an emote runs, so the moment reads
+  -- exactly like an NPC trainer spotting you.  Flavor, never a gate: with
+  -- nothing to draw it over, the fight just starts.
+  local ENGAGE_FLASH_FRAMES = 40
+  local function engageFlash(entity, onDone)
+    local ow = mod.world:overworld()
+    if not (ow and entity) then onDone() return end
+    ow.emote = { npc = entity, frames = ENGAGE_FLASH_FRAMES, bubble = 1,
+                 onDone = onDone }
+  end
+
   function BR:onChallenge(fromId, nonce)
     -- nobody fights before the drop (POK-21): a peer whose clock ran ahead
     -- of ours is told we are busy, which is true
@@ -888,8 +901,20 @@ return function(mod)
       self.relay:send(fromId, Wire.decline(nonce, "busy"))
       return
     end
-    self.relay:send(fromId, Wire.accept(nonce))
-    self:beginBattle(fromId, Engage.isHost(self.myId, fromId), nonce)
+    -- the beat over the challenger's ghost, THEN the accept -- both
+    -- machines start after the flash (POK-55)
+    self.pending = { to = fromId, nonce = nonce,
+                     host = Engage.isHost(self.myId, fromId) }
+    engageFlash(self.ghosts:npcOf(fromId), function()
+      if not (BR.pending and BR.pending.to == fromId
+              and BR.pending.nonce == nonce) then return end
+      BR.pending = nil
+      if BR.battle or BR.status ~= "alive" then return end
+      local challenger = BR.players[fromId]
+      if not (challenger and challenger.status == "alive") then return end
+      BR.relay:send(fromId, Wire.accept(nonce))
+      BR:beginBattle(fromId, Engage.isHost(BR.myId, fromId), nonce)
+    end)
   end
 
   function BR:tryEngage()
@@ -922,14 +947,26 @@ return function(mod)
     -- A bot has no client to lockstep with, so its fight is a local trainer
     -- battle against the party every client derives from the seed.  No
     -- challenge/accept: there is nobody to ask.
+    local ow = mod.world:overworld()
     if Bots.isBot(target) then
-      self:startBotBattle(target)
+      -- you are the aggressor: the ! over your own head, then the fight
+      self.pending = { to = target, nonce = -1, host = true }
+      engageFlash(ow and ow.player, function()
+        if BR.pending and BR.pending.to == target then BR.pending = nil end
+        if BR.status == "alive" and not BR.battle and not BR.botFight then
+          BR:startBotBattle(target)
+        end
+      end)
       return
     end
     self.nonceSeq = self.nonceSeq + 1
     self.pending = { to = target, nonce = self.nonceSeq,
                      host = Engage.isHost(self.myId, target) }
     self.relay:send(target, Wire.challenge(self.nonceSeq))
+    -- and the challenger flashes while the challenge flies (POK-55)
+    if ow then
+      ow.emote = { npc = ow.player, frames = ENGAGE_FLASH_FRAMES, bubble = 1 }
+    end
   end
 
   -- ------- bots
@@ -2962,14 +2999,24 @@ return function(mod)
     if BR.phase == "match" and BR.status == "alive" and BR.players[id]
        and BR.players[id].status == "alive"
        and not BR.battle and not BR.pending and not BR.botFight then
+      local owE = mod.world:overworld()
       if Bots.isBot(id) then
-        BR:startBotBattle(id)
+        BR.pending = { to = id, nonce = -1, host = true }
+        engageFlash(owE and owE.player, function()
+          if BR.pending and BR.pending.to == id then BR.pending = nil end
+          if BR.status == "alive" and not BR.battle and not BR.botFight then
+            BR:startBotBattle(id)
+          end
+        end)
         return
       end
       BR.nonceSeq = BR.nonceSeq + 1
       BR.pending = { to = id, nonce = BR.nonceSeq,
                      host = Engage.isHost(BR.myId, id) }
       BR.relay:send(id, Wire.challenge(BR.nonceSeq))
+      if owE then
+        owE.emote = { npc = owE.player, frames = ENGAGE_FLASH_FRAMES, bubble = 1 }
+      end
     end
   end)
 
