@@ -64,6 +64,7 @@ local RESYNC_TICKS = 300
 -- rightly drops the connection as a flood.  Seconds keep bots walking at a
 -- human pace and the traffic bounded, whatever the host's clock is doing.
 local BOT_STEP_SECONDS = 0.45
+local FOG_SHELTER_SECONDS = 30    -- a bot fight blocks the fog this long (POK-63)
 -- what SOLO VS BOTS fills an empty roster with: enough that the match has a
 -- shape to it, few enough that the first fight is not immediate
 local SOLO_BOTS = 8
@@ -1477,7 +1478,15 @@ return function(mod)
   -- Are we standing in it, and what it costs.  The fog does not stop at a
   -- LOCAL battle's screen (POK-31): both sides keep taking the bite.
   function BR:tickFog()
-    if not (self.phase == "match" and self.status == "alive" and self.ring) then return end
+    -- A battle holds the fog off (PvP: biting outside the lockstep is a
+    -- desync) -- but a LOCAL bot fight stops sheltering after thirty
+    -- seconds: the FIGHT menu is not a roof (POK-63).  The body below
+    -- already knows how to bite into a live local battle (POK-31).
+    local shelterOver = self.status == "battle" and self.botFight
+      and self.botFightAt
+      and ((clock() or 0) - self.botFightAt) > FOG_SHELTER_SECONDS
+    if not (self.phase == "match" and self.ring
+            and (self.status == "alive" or shelterOver)) then return end
     local game, now = self.game, clock()
     if not (game and now) then return end
     local here = mod.world:current()
@@ -2259,6 +2268,7 @@ return function(mod)
 
     self.status = "battle"
     self.botFight = botId
+    self.botFightAt = clock()
     self.pending = nil
     broadcastPlace()
 
@@ -2847,12 +2857,13 @@ return function(mod)
         BR:tickRing()
         BR:tickBotFog()
         BR:tickNpcFog()
-        -- status == "battle" is PvP or a bot fight: either machine biting
-        -- HP outside the lockstep is a desync (both players sit in the
-        -- same fog anyway, so it stays fair).  A LOCAL battle the fog
-        -- reaches into, both sides -- see tickFog (POK-31).
+        -- tickFog owns its own battle rules: PvP always holds it off
+        -- (biting outside the lockstep is a desync; both players sit in
+        -- the same fog anyway), and a bot fight only holds it thirty
+        -- seconds (POK-63) before the POK-31 in-battle bite resumes.
+        -- Levels still wait for the overworld.
+        BR:tickFog()
         if BR.status ~= "battle" then
-          BR:tickFog()
           BR:tickLevels()
         end
         BR:spectatorInput(game)
