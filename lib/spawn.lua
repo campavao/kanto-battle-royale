@@ -62,15 +62,75 @@ function Spawn.walkable(maps, tilesets, mapId, x, y)
      and not Map.defIsWaterCell(def, tilesetDef, x, y)
 end
 
--- Every cell a player could be dropped on for one map, in row-major order.
+-- Walkable is not escapable (POK-23).  An island behind Surf water, a
+-- Cut-fenced pocket and a ledge-locked hollow all pass the walkable test,
+-- and all of them strand a Lv5 drop with no way off the map.  One
+-- multi-source flood per map answers "can this cell reach a way out?"
+-- for every cell at once.
+--
+-- The flood itself, pure over a predicate: w x h cells, isWalkable(x, y),
+-- seeds an array of { x=, y= }.  Returns a set keyed y * 4096 + x holding
+-- every walkable cell connected to a seed.
+function Spawn.floodEscapable(w, h, isWalkable, seeds)
+  local seen, queue = {}, {}
+  local function push(x, y)
+    if x < 0 or y < 0 or x >= w or y >= h then return end
+    local k = y * 4096 + x
+    if seen[k] or not isWalkable(x, y) then return end
+    seen[k] = true
+    queue[#queue + 1] = { x = x, y = y }
+  end
+  for _, sd in ipairs(seeds or {}) do push(sd.x, sd.y) end
+  local i = 1
+  while queue[i] do
+    local c = queue[i]
+    i = i + 1
+    push(c.x + 1, c.y)
+    push(c.x - 1, c.y)
+    push(c.x, c.y + 1)
+    push(c.x, c.y - 1)
+  end
+  return seen
+end
+
+-- One map's escapable region: seeded beside every warp (stepping onto the
+-- warp is the way out) and along the walkable edge of every side with a
+-- connection.  A ledge-hop-only hollow never joins the region -- ledge
+-- tiles are not walkable, so nothing floods across them.
+function Spawn.escapableSet(def, tilesetDef)
+  if not (def and tilesetDef) then return {} end
+  local w, h = def.width * 2, def.height * 2
+  local function walk(x, y)
+    return Map.defIsWalkableCell(def, tilesetDef, x, y)
+       and not Map.defIsWaterCell(def, tilesetDef, x, y)
+  end
+  local seeds = {}
+  for _, wp in ipairs(def.warps or {}) do
+    seeds[#seeds + 1] = { x = wp.x + 1, y = wp.y }
+    seeds[#seeds + 1] = { x = wp.x - 1, y = wp.y }
+    seeds[#seeds + 1] = { x = wp.x, y = wp.y + 1 }
+    seeds[#seeds + 1] = { x = wp.x, y = wp.y - 1 }
+  end
+  local conns = def.connections or {}
+  if conns.north then for x = 0, w - 1 do seeds[#seeds + 1] = { x = x, y = 0 } end end
+  if conns.south then for x = 0, w - 1 do seeds[#seeds + 1] = { x = x, y = h - 1 } end end
+  if conns.west then for y = 0, h - 1 do seeds[#seeds + 1] = { x = 0, y = y } end end
+  if conns.east then for y = 0, h - 1 do seeds[#seeds + 1] = { x = w - 1, y = y } end end
+  return Spawn.floodEscapable(w, h, walk, seeds)
+end
+
+-- Every cell a player could be dropped on for one map, in row-major order
+-- -- walkable, unoccupied, and with a way off the map (POK-23).
 function Spawn.cellsOf(def, tilesetDef)
   local out = {}
   if not (def and tilesetDef) then return out end
   local skip = blocked(def)
+  local escape = Spawn.escapableSet(def, tilesetDef)
   local w, h = def.width * 2, def.height * 2
   for cy = 0, h - 1 do
     for cx = 0, w - 1 do
       if not skip[cy * 4096 + cx]
+         and escape[cy * 4096 + cx]
          and Map.defIsWalkableCell(def, tilesetDef, cx, cy)
          and not Map.defIsWaterCell(def, tilesetDef, cx, cy) then
         out[#out + 1] = { x = cx, y = cy }

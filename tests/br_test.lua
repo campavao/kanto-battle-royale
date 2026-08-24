@@ -951,6 +951,29 @@ do
      "TACKLE alone remains: forgetting is not forever, and no bag means no machines")
 end
 
+-- ------- escapable, not merely walkable (POK-23)
+
+do
+  local Spawn = require("mods.battle_royale.lib.spawn")
+  -- an 8x6 pond world: a land ring, and an island at (4..5, 2..3) walled
+  -- in by water (x 3..6, y 1..4 minus the island itself)
+  local water = {}
+  local function key(x, y) return y * 4096 + x end
+  for x = 3, 6 do for y = 1, 4 do water[key(x, y)] = true end end
+  for x = 4, 5 do for y = 2, 3 do water[key(x, y)] = nil end end
+  local function isWalk(x, y) return not water[key(x, y)] end
+
+  local esc = Spawn.floodEscapable(8, 6, isWalk, { { x = 0, y = 5 } })
+  ok(esc[key(0, 0)], "the mainland reaches the seed")
+  ok(esc[key(7, 5)], "all the way around the pond")
+  ok(not esc[key(4, 2)], "the island is walkable and unreachable")
+  ok(not esc[key(3, 2)], "water never joins the region")
+  local none = Spawn.floodEscapable(8, 6, isWalk, {})
+  ok(not none[key(0, 0)], "no seeds, no region")
+  local edge = Spawn.floodEscapable(8, 6, isWalk, { { x = -3, y = 99 } })
+  ok(not edge[key(0, 0)], "an out-of-bounds seed seeds nothing")
+end
+
 -- ------- bots that hunt (POK-42, POK-43)
 
 do
