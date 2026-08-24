@@ -437,6 +437,7 @@ return function(mod)
     self.announcedLevel = nil
     self.watching = nil
     self.lastHopAt = nil
+    self:releaseCamera()
   end
 
   -- Leaving has to actually leave.  A match runs in a throwaway world, so
@@ -1327,15 +1328,14 @@ return function(mod)
   --
   -- Being out used to mean standing where you fell with nothing to do.  Now
   -- LEFT / RIGHT hop between the trainers still in it, and the view follows
-  -- whoever you picked: the spectator's own sprite is warped to a free cell
-  -- beside them, again whenever they get away, so the camera -- which only
-  -- ever follows the player -- keeps them in frame.  Nothing the spectator
+  -- whoever you picked: a camera, not a body (POK-30) -- the spectator's
+  -- sprite is hidden and walk-through, the camera pans from it to the
+  -- watched trainer, and only a change of map warps it.  Nothing the spectator
   -- does reaches the match: steps are refused (movement.collision below),
   -- encounters and trainers already are, and a hop is a warp, which the
   -- wire never carries.
 
-  local FOLLOW_CELLS = 5        -- re-warp when the watched trainer is this far
-  local FOLLOW_SECONDS = 2      -- and no more often than this
+  local FOLLOW_SECONDS = 2      -- a cross-map catch-up, no more often than this
 
   -- the trainers still in it, in a stable order so LEFT/RIGHT mean something
   function BR:watchable()
@@ -1377,7 +1377,8 @@ return function(mod)
     end
     self.watching = ids[idx]
     self.fellAt = nil              -- a deliberate move, nothing to undo
-    return self:warpBeside(self.players[self.watching])
+    self.lastHopAt = nil           -- catch up at once, wherever they are
+    return true
   end
 
   -- keep the watched trainer in frame
@@ -1388,15 +1389,55 @@ return function(mod)
       self.watching = nil           -- they fell; the next LEFT/RIGHT picks anew
       return
     end
-    local now = clock()
-    if not now or (now - (self.lastHopAt or 0)) < FOLLOW_SECONDS then return end
     local here = mod.world:current()
-    if not here then return end
+    -- on their map the camera has them (tickCamera); only another map warps
+    if not here or here.mapId == p.map then return end
     local ow = mod.world:overworld()
-    if ow and ow.transitioning then return end
-    local far = here.mapId ~= p.map
-      or math.abs(here.x - p.x) + math.abs(here.y - p.y) > FOLLOW_CELLS
-    if far then self:warpBeside(p) end
+    if not ow or ow.transitioning or self.game.stack:top() ~= ow then return end
+    local now = clock()
+    if now and self.lastHopAt and (now - self.lastHopAt) < FOLLOW_SECONDS then return end
+    self:warpBeside(p)
+  end
+
+  -- A camera, not a body (POK-30).  Other clients stopped drawing us when
+  -- we fell (POK-13); now we stop drawing us: the sprite is hidden, the
+  -- body is walk-through, and the view is the engine's own follow plus a
+  -- pan_camera offset pointing from our invisible body to the watched
+  -- trainer -- recomputed every tick off their ghost's pixel position, so
+  -- it walks when they walk.  Nobody picked yet means the first living
+  -- trainer, so being out never reads as standing in a field alone.
+  function BR:tickCamera()
+    local ow = mod.world:overworld()
+    if not (ow and ow.player) then return end
+    if not (self.phase == "match" and self.status == "out") then
+      if self.cameraOwned then self:releaseCamera(ow) end
+      return
+    end
+    self.cameraOwned = true
+    ow.playerHidden = true          -- the engine clears it on every arrival
+    ow.player.passable = true       -- Collision.occupied lets the living through
+    if not self.watching then self:hop(1) end
+    local p = self.watching and self.players[self.watching]
+    local here = mod.world:current()
+    if not (p and here and p.map == here.mapId) or ow.transitioning then
+      ow.cameraPan = nil
+      return
+    end
+    -- their ghost's pixels while it is placed (smooth mid-step); the
+    -- wire's cell until it is
+    local npc = self.ghosts:npcOf(self.watching)
+    local tx = npc and npc.px or (p.x * 16)
+    local ty = npc and npc.py or (p.y * 16)
+    ow.cameraPan = { ox = tx - ow.player.px, oy = ty - ow.player.py }
+  end
+
+  function BR:releaseCamera(ow)
+    self.cameraOwned = nil
+    ow = ow or mod.world:overworld()
+    if not ow then return end
+    ow.cameraPan = nil
+    ow.playerHidden = false
+    if ow.player then ow.player.passable = nil end
   end
 
   -- LEFT / RIGHT while out: a hop, not a turn.  input.step runs before the
@@ -2304,6 +2345,7 @@ return function(mod)
         BR:spillDropped(mon)
       end
     end
+    BR:tickCamera()
     return next(game, dt)
   end)
 
@@ -2343,6 +2385,7 @@ return function(mod)
     local id = BR.ghosts:ownerOf(npc)
     if not id then return next(ow, npc) end
     if not (BR.game and BR.relay and BR.relay:isOpen()) then return end
+    if BR.status == "out" then return end   -- a camera has nobody to face
     npc:facePlayer(ow.player)
     -- talking counts as engaging if they are alive and we are
     if BR.phase == "match" and BR.status == "alive" and BR.players[id]
@@ -2641,6 +2684,10 @@ return function(mod)
     return out
   end
   mod.exports.watching = function() return BR.watching end
+  mod.exports.watchedMap = function()
+    local p = BR.watching and BR.players[BR.watching]
+    return p and p.map
+  end
   mod.exports.hop = function(dir) return BR:hop(dir) end
   mod.exports.spills = function()
     local out = {}

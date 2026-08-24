@@ -16,6 +16,10 @@ The fog shrinks the world on a shared clock, everyone's level rides the
 same clock, and a fallen team spills onto the ground as Poké Balls anyone
 can claim. See "What's here / what's next" below.
 
+The fog shrinks the world on a shared clock, everyone's level rides the
+same clock, and a fallen team spills onto the ground as Poké Balls anyone
+can claim. See "What's here / what's next" below.
+
 A mod for [gen1recomp](https://github.com/bryanthaboi/gen1recomp).
 
 ## Install
@@ -137,12 +141,14 @@ ring. Each bite of the fog is the overworld-poison beat you already know —
 the screen flickers dark and the poison chime plays — so you can feel it
 without opening a menu.
 
-**Once you are out, you watch.** `LEFT` / `RIGHT` hop between the trainers
-still in the match; the box on the left names who you are watching, and
-the view follows them — when they leave the map, or get five cells away,
-you are warped back to their side. You cannot walk, catch, or fight; you
-can turn on the spot and open your (empty) menus, and nothing you do
-reaches the match.
+**Once you are out, you watch — as a camera, not a body.** Your own
+trainer disappears (other players stopped seeing you when you fell; now
+you do too), and the view is glued to whoever you are watching, walking
+when they walk. `LEFT` / `RIGHT` hop between the trainers still in the
+match; the box on the left names who it is, and the first living trainer
+is picked for you the moment you're out. When they leave the map you are
+carried to theirs. You cannot walk, catch, or fight; you can open your
+(empty) menus, and nothing you do reaches the match.
 
 A match plays in a throwaway world: **SAVE is disabled from the drop until
 you return to the title** and start or continue a real game, so a match can
@@ -185,7 +191,11 @@ and your own settings are back the moment it is over.
 The start-menu row reads `ROYALE.` while you're in a lobby and `ROYALE*`
 once a match is live. The same screen is on the title menu, so a match is
 reachable before a save exists — which matters because a match throws its
-world away anyway.
+world away anyway. It is one screen: picking SOLO VS BOTS, QUICK PLAY,
+HOST GAME or JOIN BY CODE turns it into the lobby in place — the code, the
+roster filling in, BOTS / FILL TO, OPEN, the countdown — and you leave it
+by starting the match or backing out. During a match the same row is the
+report: who's left, the Safari clock, the level, where the fog is.
 
 ## Running the relay
 

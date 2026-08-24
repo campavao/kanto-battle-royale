@@ -73,6 +73,14 @@ function Ghosts:isSpawned(id)
   return g ~= nil and g.npcId ~= nil
 end
 
+-- the live NPC object behind a ghost, while it is spawned on the map we
+-- are on (its px/py walk with it, which is what a camera wants)
+function Ghosts:npcOf(id)
+  local g = self.ghosts[id]
+  local handle = g and self:_handle(g)
+  return handle and handle.npc or nil
+end
+
 -- ------- lifecycle
 
 function Ghosts:_spawn(game, id, mapId, x, y, facing, peer)

@@ -615,6 +615,106 @@ do
   end
 end
 
+-- ------- one lobby screen, not a menu round-trip (POK-32)
+--
+-- The screen's rows are a function of BR, rebuilt every frame; the rows
+-- that start a room keep the screen open so it can become the lobby.
+
+do
+  local okMenu, BRMenu = pcall(require, "mods.battle_royale.lib.menu")
+  if not okMenu then
+    io.write("  (skipping lobby screen: " .. tostring(BRMenu) .. ")\n")
+  else
+    local function fakeBR(over)
+      local BR = {
+        phase = "off", status = "lobby", solo = false, botCount = 3, fillTo = 0,
+        ring = nil, relay = nil,
+        aliveCount = function() return 4 end,
+        level = function() return 5 end,
+        safariLeft = function() return 65 end,
+        startsIn = function() return nil end,
+        isOpen = function() return false end,
+        botsAtStart = function(self) return self.botCount end,
+        playerName = function() return "RED" end,
+        relayAddress = function() return "127.0.0.1:7790" end,
+      }
+      for k, v in pairs(over or {}) do BR[k] = v end
+      return BR
+    end
+    local function room(host, over)
+      local r = { code = "ABCDEF", hostId = 1, status = "open",
+                  members = { { id = 1, name = "RED" }, { id = 2, name = "BLUE" } },
+                  isOpen = function() return true end,
+                  isHost = function() return host end }
+      for k, v in pairs(over or {}) do r[k] = v end
+      return r
+    end
+    local function labels(items)
+      local out = {}
+      for i, it in ipairs(items) do out[i] = it.label end
+      return table.concat(out, "|")
+    end
+    local function find(items, prefix)
+      for _, it in ipairs(items) do
+        if it.label:sub(1, #prefix) == prefix then return it end
+      end
+      return nil
+    end
+
+    -- the first face: every row keeps the screen, because the room it
+    -- starts is what turns the screen into the lobby
+    local BR = fakeBR()
+    local items, view = BRMenu.items({}, BR, {})
+    eq(view, "menu", "no room is the first face")
+    eq(labels(items), "QUICK PLAY|SOLO VS BOTS|HOST GAME|JOIN BY CODE|NAME: RED|SERVER...",
+       "the first face, in order")
+    local allOpen = true
+    for _, it in ipairs(items) do if not it.keepOpen then allOpen = false end end
+    ok(allOpen, "and every row keeps the screen open")
+
+    -- connecting
+    BR.relay = room(true, { status = "connecting", isOpen = function() return false end })
+    items, view = BRMenu.items({}, BR, {})
+    eq(view, "connecting", "a relay mid-handshake is the connecting face")
+    eq(labels(items), "CONNECTING...|CANCEL", "which waits, or cancels")
+
+    -- a solo lobby: the two rows that decide the match, and out
+    BR.relay = room(true)
+    BR.solo = true
+    items, view = BRMenu.items({}, BR, {})
+    eq(view, "lobby", "an open room is the lobby")
+    eq(labels(items), "BOTS: 3|START MATCH|LEAVE", "solo: bots, start, leave")
+    ok(find(items, "BOTS").keepOpen, "changing BOTS keeps the screen")
+    ok(not find(items, "START MATCH").keepOpen, "START MATCH is the way out")
+    ok(not find(items, "LEAVE").keepOpen, "and so is LEAVE")
+
+    -- a hosted room with people in it
+    BR.solo = false
+    BR.startsIn = function() return 12 end
+    items = BRMenu.items({}, BR, {})
+    eq(labels(items),
+       "CODE ABCDEF|- RED*|- BLUE|OPEN: NO|BOTS: 3|FILL TO: OFF|TRAINERS: 5|START MATCH (12)|LEAVE",
+       "hosting: code, roster, OPEN, BOTS, FILL TO, the total, the countdown")
+
+    -- a guest waits
+    BR.relay = room(false)
+    items = BRMenu.items({}, BR, {})
+    eq(labels(items), "CODE ABCDEF|- RED*|- BLUE|WAIT FOR HOST|LEAVE", "a guest waits for the host")
+
+    -- the match report, with the Safari clock while it runs
+    BR.phase = "safari"
+    BR.status = "alive"
+    items, view = BRMenu.items({}, BR, {})
+    eq(view, "match", "a round is the match face")
+    eq(labels(items), "ALIVE: 4|SAFARI 1:05|LEVEL: 5|LEAVE MATCH", "the Safari clock rides the report")
+    BR.phase = "match"
+    BR.status = "out"
+    BR.ring = { phase = 3, center = { name = "CELADON CITY" } }
+    items = BRMenu.items({}, BR, {})
+    eq(labels(items), "SPECTATING|LEVEL: 5|FOG: CELADON CITY|LEAVE MATCH", "spectating, with the fog")
+  end
+end
+
 -- ------- relay round-trip over the in-memory hub
 
 do

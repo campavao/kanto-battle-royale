@@ -1,9 +1,12 @@
--- The BATTLE ROYALE screen, reached from the start menu.
+-- The BATTLE ROYALE screen, reached from the title and the START menu.
 --
--- Deliberately thin: it hosts or joins a room, shows the roster while you
--- wait, and lets the host start the match.  Once the match is live this
--- screen only reports -- everything that happens then happens in the
--- overworld.
+-- One lobby, not a menu round-trip (POK-32).  The screen is a Menu whose
+-- rows are rebuilt from BR every frame, so picking SOLO VS BOTS turns this
+-- same screen into the lobby -- the roster filling in, BOTS / FILL TO,
+-- OPEN, the countdown -- instead of closing and making you reopen it to
+-- see what happened.  You leave it by starting the match or backing out.
+-- Once the match is live it only reports; everything that happens then
+-- happens in the overworld.
 
 local Entry = require("mods.battle_royale.lib.entry")
 
@@ -18,181 +21,192 @@ end
 
 Menu.say = say
 
+-- Which face the screen is showing: the match report, the lobby, the
+-- connecting placeholder, or the first menu.  A change of face is what
+-- resets the cursor; anything else keeps it where you left it.
+function Menu.view(BR)
+  local phase, relay = BR.phase, BR.relay
+  if phase == "safari" or phase == "drop" or phase == "match" or phase == "over" then
+    return "match"
+  end
+  if relay and relay:isOpen() then return "lobby" end
+  if relay and relay.status == "connecting" then return "connecting" end
+  return "menu"
+end
+
+-- The rows for the current face.  Pure in the sense that matters: nothing
+-- here pushes a screen or touches a socket until a row is chosen, so the
+-- list can be rebuilt every frame.
+function Menu.items(mod, BR, game)
+  local items = {}
+  local view = Menu.view(BR)
+  local function row(label)
+    items[#items + 1] = { label = label, keepOpen = true, onSelect = function() end }
+  end
+  -- a row that changes a setting stays open; its label is rebuilt next frame
+  local function setting(label, onPress)
+    items[#items + 1] = { label = label, keepOpen = true, onSelect = onPress }
+  end
+
+  if view == "match" then
+    row(BR.status == "out" and "SPECTATING" or ("ALIVE: " .. BR:aliveCount()))
+    if BR.phase == "safari" and BR.safariLeft then
+      local left = BR:safariLeft()
+      row(("SAFARI %d:%02d"):format(math.floor(left / 60), left % 60))
+    end
+    row("LEVEL: " .. tostring(BR:level()))
+    -- where the fog is, and whether you are standing in it
+    local ring = BR.ring
+    if ring and ring.phase and ring.phase > 1 then
+      row("FOG: " .. tostring((ring.center and ring.center.name) or "CLOSING"))
+    end
+    items[#items + 1] = {
+      label = "LEAVE MATCH",
+      onSelect = function() BR:teardown("You left the match.") end,
+    }
+
+  elseif view == "lobby" then
+    local relay = BR.relay
+    local host = relay:isHost()
+    -- A solo room has no code worth reading out, no roster to watch fill
+    -- and nobody to keep seats for, so it shows the two things that
+    -- actually decide the match and nothing else.
+    if not BR.solo then
+      row("CODE " .. tostring(relay.code))
+      for _, m in ipairs(relay.members) do
+        row("- " .. m.name .. ((m.id == relay.hostId) and "*" or ""))
+      end
+      if host then
+        -- an open room is one strangers can QUICK PLAY into without ever
+        -- being told the code
+        setting("OPEN: " .. (BR:isOpen() and "YES" or "NO"),
+                function() BR:setOpen(not BR:isOpen()) end)
+      end
+    end
+    if host then
+      -- steps the ladder 0,1,2,3,5,8,...,30 and wraps
+      setting("BOTS: " .. tostring(BR.botCount),
+              function() BR.botCount = BR:nextBotCount() end)
+      -- Only meaningful when humans might still arrive: it holds seats
+      -- open for them and lets bots take whatever is left.  In a solo
+      -- room nobody can arrive, so it would only ever be a second, more
+      -- confusing way to say BOTS.
+      if not BR.solo then
+        setting(BR.fillTo > 0 and ("FILL TO: " .. BR.fillTo) or "FILL TO: OFF",
+                function() BR:setFill(BR:nextFill()) end)
+        row("TRAINERS: " .. (#relay.members + BR:botsAtStart()))
+      end
+      local countdown = BR:startsIn()
+      items[#items + 1] = {
+        label = countdown and ("START MATCH (" .. countdown .. ")") or "START MATCH",
+        onSelect = function() BR:startMatch() end,
+      }
+    else
+      row("WAIT FOR HOST")
+    end
+    items[#items + 1] = { label = "LEAVE", onSelect = function() BR:teardown() end }
+
+  elseif view == "connecting" then
+    row("CONNECTING...")
+    items[#items + 1] = { label = "CANCEL", onSelect = function() BR:teardown() end }
+
+  else
+    -- Every row here keeps the screen open: the room it starts turns this
+    -- screen into the lobby on the next frame, and a failure lands in a
+    -- text box over it.
+    --
+    -- first, because it is the one that asks least of a newcomer: no
+    -- code from a friend, no server of their own, no decision
+    setting("QUICK PLAY", function()
+      local ok, err = BR:quickPlay()
+      if not ok then say(mod, err or "Couldn't reach\nthe relay.") end
+    end)
+    setting("SOLO VS BOTS", function()
+      local ok, err = BR:hostSolo()
+      if not ok then say(mod, err or "Couldn't start.") end
+    end)
+    setting("HOST GAME", function()
+      local ok, err = BR:host()
+      if not ok then say(mod, err or "Couldn't host.") end
+    end)
+    setting("JOIN BY CODE", function()
+      game.stack:push(Entry.new(game, {
+        title = "ROOM CODE",
+        shape = Entry.CODE,
+        onDone = function(code)
+          if not code or code == "" then return end
+          local ok, err = BR:join(code)
+          if not ok then say(mod, err or "Couldn't join.") end
+        end,
+      }))
+    end)
+    -- the name every other trainer sees (and the winner banner uses);
+    -- the Gen 1 naming grid handles it since names are letters
+    setting("NAME: " .. BR:playerName(), function()
+      game.stack:push(mod.ui.NamingScreen.new(game, {
+        title = "YOUR NAME?",
+        maxLen = 7,
+        default = BR:playerName(),
+        onDone = function(name)
+          if name and name ~= "" then BR:setName(name) end
+        end,
+      }))
+    end)
+    -- the relay address is a mod option; this row surfaces it and lets
+    -- you point at a different server without editing files
+    setting("SERVER...", function()
+      game.stack:push(Entry.new(game, {
+        title = "RELAY HOST:PORT",
+        shape = Entry.ADDRESS,
+        default = BR:relayAddress(),
+        onDone = function(addr)
+          if addr and addr ~= "" then BR:setRelayAddress(addr) end
+        end,
+      }))
+    end)
+  end
+
+  return items, view
+end
+
+-- Size the box to the rows it holds now, the way Menu.new sized it to the
+-- rows it was born with (widest label + 3, nudged on-screen, one row step
+-- per item plus the border).
+local function fit(mod, menu)
+  local Font = mod.ui.Font
+  local widest = 0
+  for _, it in ipairs(menu.items) do
+    local n = #Font.split(it.label)
+    if n > widest then widest = n end
+  end
+  menu.tw = math.max(10, widest + 3)
+  menu.tx = 10
+  if menu.tx + menu.tw > 20 then menu.tx = math.max(0, 20 - menu.tw) end
+  menu.th = #menu.items * menu.rowStep + 2
+end
+
 function Menu.build(mod, BR)
   return {
     new = function(game)
-      local items = {}
-      local relay = BR.relay
-
-      if BR.phase == "match" or BR.phase == "over" then
-        local alive = BR:aliveCount()
-        items[#items + 1] = {
-          label = BR.status == "out" and "SPECTATING" or ("ALIVE: " .. alive),
-          keepOpen = true, onSelect = function() end,
-        }
-        items[#items + 1] = {
-          label = "LEVEL: " .. tostring(BR:level()),
-          keepOpen = true, onSelect = function() end,
-        }
-        -- where the fog is, and whether you are standing in it
-        local ring = BR.ring
-        if ring and ring.phase and ring.phase > 1 then
-          items[#items + 1] = {
-            label = "FOG: " .. tostring((ring.center and ring.center.name)
-                                        or "CLOSING"),
-            keepOpen = true, onSelect = function() end,
-          }
+      local items, view = Menu.items(mod, BR, game)
+      local menu = mod.ui.Menu.new(game, items, { startCloses = true })
+      local baseUpdate = mod.ui.Menu.update
+      menu.view = view
+      -- re-read BR before every frame's input: the rows, the box and --
+      -- when the face changes -- the cursor
+      menu.update = function(self, dt)
+        local fresh, now = Menu.items(mod, BR, game)
+        self.items = fresh
+        if now ~= self.view then
+          self.view = now
+          self.index = 1
+        elseif self.index > #fresh then
+          self.index = math.max(1, #fresh)
         end
-        items[#items + 1] = {
-          label = "LEAVE MATCH",
-          onSelect = function() BR:teardown("You left the match.") end,
-        }
-      elseif relay and relay:isOpen() then
-        -- A row that changes a setting keeps the menu open and rewrites its
-        -- own label, because Menu draws item.label every frame.  Closing and
-        -- re-pushing meant every adjustment cost two more button presses to
-        -- see, which read as the setting not having taken.
-        local function setting(label, onPress)
-          local item
-          item = { label = label(), keepOpen = true,
-                   onSelect = function() onPress() item.label = label() end }
-          items[#items + 1] = item
-          return item
-        end
-        local host = relay:isHost()
-
-        -- A solo room has no code worth reading out, no roster to watch fill
-        -- and nobody to keep seats for, so it shows the two things that
-        -- actually decide the match and nothing else.
-        if not BR.solo then
-          items[#items + 1] = {
-            label = "CODE " .. tostring(relay.code),
-            keepOpen = true, onSelect = function() end,
-          }
-          for _, m in ipairs(relay.members) do
-            local tag = (m.id == relay.hostId) and "*" or ""
-            items[#items + 1] = { label = "- " .. m.name .. tag,
-                                  keepOpen = true, onSelect = function() end }
-          end
-          if host then
-            -- an open room is one strangers can QUICK PLAY into without ever
-            -- being told the code
-            setting(function() return "OPEN: " .. (BR:isOpen() and "YES" or "NO") end,
-                    function() BR:setOpen(not BR:isOpen()) end)
-          end
-        end
-
-        if host then
-          -- steps the ladder 0,1,2,3,5,8,...,30 and wraps
-          setting(function() return "BOTS: " .. tostring(BR.botCount) end,
-                  function() BR.botCount = BR:nextBotCount() end)
-          -- Only meaningful when humans might still arrive: it holds seats
-          -- open for them and lets bots take whatever is left.  In a solo
-          -- room nobody can arrive, so it would only ever be a second, more
-          -- confusing way to say BOTS.
-          if not BR.solo then
-            setting(function()
-                      return BR.fillTo > 0 and ("FILL TO: " .. BR.fillTo)
-                             or "FILL TO: OFF"
-                    end,
-                    function() BR:setFill(BR:nextFill()) end)
-            items[#items + 1] = {
-              label = "TRAINERS: " .. (#relay.members + BR:botsAtStart()),
-              keepOpen = true, onSelect = function() end,
-            }
-          end
-          local countdown = BR:startsIn()
-          items[#items + 1] = {
-            label = countdown and ("START MATCH (" .. countdown .. ")")
-                    or "START MATCH",
-            onSelect = function() BR:startMatch() end,
-          }
-        else
-          items[#items + 1] = {
-            label = "WAIT FOR HOST",
-            keepOpen = true, onSelect = function() end,
-          }
-        end
-        items[#items + 1] = {
-          label = "LEAVE",
-          onSelect = function() BR:teardown() end,
-        }
-      elseif relay and relay.status == "connecting" then
-        items[#items + 1] = { label = "CONNECTING...", keepOpen = true,
-                              onSelect = function() end }
-        items[#items + 1] = { label = "CANCEL",
-                              onSelect = function() BR:teardown() end }
-      else
-        -- first, because it is the one that asks least of a newcomer: no
-        -- code from a friend, no server of their own, no decision
-        items[#items + 1] = {
-          label = "QUICK PLAY",
-          onSelect = function()
-            local ok, err = BR:quickPlay()
-            if not ok then say(mod, err or "Couldn't reach\nthe relay.") end
-          end,
-        }
-        items[#items + 1] = {
-          label = "SOLO VS BOTS",
-          onSelect = function()
-            local ok, err = BR:hostSolo()
-            if not ok then say(mod, err or "Couldn't start.") end
-          end,
-        }
-        items[#items + 1] = {
-          label = "HOST GAME",
-          onSelect = function()
-            local ok, err = BR:host()
-            if not ok then say(mod, err or "Couldn't host.") end
-          end,
-        }
-        items[#items + 1] = {
-          label = "JOIN BY CODE",
-          onSelect = function()
-            game.stack:push(Entry.new(game, {
-              title = "ROOM CODE",
-              shape = Entry.CODE,
-              onDone = function(code)
-                if not code or code == "" then return end
-                local ok, err = BR:join(code)
-                if not ok then say(mod, err or "Couldn't join.") end
-              end,
-            }))
-          end,
-        }
-        -- the name every other trainer sees (and the winner banner uses);
-        -- the Gen 1 naming grid handles it since names are letters
-        items[#items + 1] = {
-          label = "NAME: " .. BR:playerName(),
-          onSelect = function()
-            game.stack:push(mod.ui.NamingScreen.new(game, {
-              title = "YOUR NAME?",
-              maxLen = 7,
-              default = BR:playerName(),
-              onDone = function(name)
-                if name and name ~= "" then BR:setName(name) end
-              end,
-            }))
-          end,
-        }
-        -- the relay address is a mod option; this row surfaces it and lets
-        -- you point at a different server without editing files
-        items[#items + 1] = {
-          label = "SERVER...",
-          onSelect = function()
-            game.stack:push(Entry.new(game, {
-              title = "RELAY HOST:PORT",
-              shape = Entry.ADDRESS,
-              default = BR:relayAddress(),
-              onDone = function(addr)
-                if addr and addr ~= "" then BR:setRelayAddress(addr) end
-              end,
-            }))
-          end,
-        }
+        fit(mod, self)
+        return baseUpdate(self, dt)
       end
-
-      return mod.ui.Menu.new(game, items, { startCloses = true })
+      return menu
     end,
   }
 end
