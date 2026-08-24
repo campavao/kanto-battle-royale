@@ -3198,6 +3198,24 @@ return function(mod)
         default = math.max(0, math.floor(tonumber(safari) or 0)), min = 0, max = 600 },
     })
   end
+  -- The match's two clocks, cycled from the lobby (POK-44) -- the MODS
+  -- manager still works, but nobody should need four screens to find the
+  -- knobs that shape a match.  Defined here so redefineOptions is above.
+  local FOG_LADDER = { 60, 90, 120, 180, 240 }
+  local SAFARI_LADDER = { 0, 60, 120, 180, 240 }
+  local function nextRung(ladder, current)
+    for i, v in ipairs(ladder) do
+      if v == current then return ladder[i % #ladder + 1] end
+    end
+    return ladder[1]
+  end
+  function BR:cycleFog()
+    redefineOptions(nextRung(FOG_LADDER, self:fogSeconds()), self:safariSeconds())
+  end
+  function BR:cycleSafari()
+    redefineOptions(self:fogSeconds(), nextRung(SAFARI_LADDER, self:safariSeconds()))
+  end
+
   mod.exports.setFog = function(seconds)
     redefineOptions(seconds, BR:safariSeconds())
     return BR:fogSeconds()

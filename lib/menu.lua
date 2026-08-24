@@ -93,6 +93,12 @@ function Menu.items(mod, BR, game)
       -- steps the ladder 0,1,2,3,5,8,...,30 and wraps
       setting("BOTS: " .. tostring(BR.botCount),
               function() BR.botCount = BR:nextBotCount() end)
+      -- the match's two clocks, right here in the lobby (POK-44)
+      setting("FOG: " .. tostring(BR:fogSeconds()) .. "s",
+              function() BR:cycleFog() end)
+      setting(BR:safariSeconds() > 0
+              and ("SAFARI: " .. BR:safariSeconds() .. "s") or "SAFARI: OFF",
+              function() BR:cycleSafari() end)
       -- Only meaningful when humans might still arrive: it holds seats
       -- open for them and lets bots take whatever is left.  In a solo
       -- room nobody can arrive, so it would only ever be a second, more

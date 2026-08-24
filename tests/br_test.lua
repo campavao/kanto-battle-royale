@@ -1118,6 +1118,10 @@ do
         botsAtStart = function(self) return self.botCount end,
         playerName = function() return "RED" end,
         relayAddress = function() return "127.0.0.1:7790" end,
+        fogSeconds = function() return 120 end,
+        safariSeconds = function() return 120 end,
+        cycleFog = function(self) self.cycledFog = true end,
+        cycleSafari = function(self) self.cycledSafari = true end,
       }
       for k, v in pairs(over or {}) do BR[k] = v end
       return BR
@@ -1164,7 +1168,12 @@ do
     BR.solo = true
     items, view = BRMenu.items({}, BR, {})
     eq(view, "lobby", "an open room is the lobby")
-    eq(labels(items), "BOTS: 3|START MATCH|LEAVE", "solo: bots, start, leave")
+    eq(labels(items), "BOTS: 3|FOG: 120s|SAFARI: 120s|START MATCH|LEAVE",
+       "solo: bots, the two clocks, start, leave")
+    find(items, "FOG").onSelect()
+    ok(BR.cycledFog, "the FOG row cycles the fog clock (POK-44)")
+    ok(find(items, "SAFARI: 120s") ~= nil and find(items, "SAFARI: 120s").keepOpen,
+       "the SAFARI row is a setting that keeps the screen")
     ok(find(items, "BOTS").keepOpen, "changing BOTS keeps the screen")
     ok(not find(items, "START MATCH").keepOpen, "START MATCH is the way out")
     ok(not find(items, "LEAVE").keepOpen, "and so is LEAVE")
@@ -1174,8 +1183,8 @@ do
     BR.startsIn = function() return 12 end
     items = BRMenu.items({}, BR, {})
     eq(labels(items),
-       "CODE ABCDEF|- RED*|- BLUE|OPEN: NO|BOTS: 3|FILL TO: OFF|TRAINERS: 5|START MATCH (12)|LEAVE",
-       "hosting: code, roster, OPEN, BOTS, FILL TO, the total, the countdown")
+       "CODE ABCDEF|- RED*|- BLUE|OPEN: NO|BOTS: 3|FOG: 120s|SAFARI: 120s|FILL TO: OFF|TRAINERS: 5|START MATCH (12)|LEAVE",
+       "hosting: code, roster, OPEN, BOTS, the clocks, FILL TO, the total, the countdown")
 
     -- a guest waits
     BR.relay = room(false)
