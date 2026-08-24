@@ -1,5 +1,7 @@
--- Free move management (POK-19): any move a Pokemon could learn, any time
--- outside battle, from the party menu.  No tutor, no TM item, no ceremony.
+-- Free move management (POK-19), priced by POK-58: still any time outside
+-- battle, from the party menu -- but the pool is earned.  Level-up moves
+-- open with the mon's level (the D12 ladder unlocks them ring by ring),
+-- and a machine move is offered only while its TM/HM sits in the bag.
 --
 -- A match hands you a disposable team under time pressure; the four moves
 -- a wild catch happened to have are campaign friction in a mode with no
@@ -11,28 +13,46 @@ local Moves = {}
 -- data/moves/hm_moves.asm (IsMoveHM)
 Moves.HM = { CUT = true, FLY = true, SURF = true, STRENGTH = true, FLASH = true }
 
--- Everything this species can learn that it does not know yet: its level-1
--- moves, the level-up learnset at any level, and every TM/HM it is
--- compatible with -- in that order, each once.  { id=, name=, how= },
--- where `how` is "L<n>" for a level-up move, "HM" or "TM" for a machine.
-function Moves.learnable(data, mon)
+-- Everything this species can learn RIGHT NOW that it does not know yet:
+-- its level-1 moves, learnset rows at or below the mon's level, and -- when
+-- `opts.bag` is given -- machine moves whose TM/HM is in that bag (a TM
+-- ignores the level gate, exactly like the cartridge).  In that order,
+-- each move once.  { id=, name=, how=, item= }, where `how` is "L<n>",
+-- "TM" or "HM", and `item` names the machine that pays for a machine row.
+function Moves.learnable(data, mon, opts)
   local def = data and data.pokemon and mon and data.pokemon[mon.species]
   if not (def and data.moves) then return {} end
+  local level = tonumber(mon.level) or 1
+  local bag = opts and opts.bag
   local known = {}
   for _, mv in ipairs(mon.moves or {}) do known[mv.id] = true end
   local out, seen = {}, {}
-  local function add(id, how)
+  local function add(id, how, item)
     if not id or seen[id] or known[id] then return end
     local mdef = data.moves[id]
     if not mdef then return end
     seen[id] = true
-    out[#out + 1] = { id = id, name = mdef.name or id, how = how }
+    out[#out + 1] = { id = id, name = mdef.name or id, how = how, item = item }
   end
   for _, id in ipairs(def.level1Moves or {}) do add(id, "L1") end
   for _, entry in ipairs(def.learnset or {}) do
-    add(entry.move, "L" .. tostring(entry.level or "?"))
+    if (tonumber(entry.level) or 1) <= level then
+      add(entry.move, "L" .. tostring(entry.level or "?"))
+    end
   end
-  for _, id in ipairs(def.tmhm or {}) do add(id, Moves.HM[id] and "HM" or "TM") end
+  if bag then
+    local machineFor = {}
+    for itemId, it in pairs(data.items or {}) do
+      local m = it.machine
+      if m and m.move and (bag[itemId] or 0) > 0 then
+        machineFor[m.move] = { item = itemId, kind = m.kind }
+      end
+    end
+    for _, id in ipairs(def.tmhm or {}) do
+      local mi = machineFor[id]
+      if mi then add(id, mi.kind or (Moves.HM[id] and "HM" or "TM"), mi.item) end
+    end
+  end
   return out
 end
 

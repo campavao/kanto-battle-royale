@@ -782,13 +782,16 @@ do
       function stack:update(dt) local t = self:top() if t and t.update then t:update(dt) end end
       return { data = Data, input = Input, stack = stack, save = save }
     end
-    local function pair(seed)
+    local function pair(seed, extra)
       local gA, gB = makeFakeGame("RATTATA"), makeFakeGame("RATTATA")
       gB.save.player.name = "BLUE"
       local nA, nB = Net.loopbackPair()
       local pA, pB = Protocol.packParty(gA.save.party), Protocol.packParty(gB.save.party)
-      local bA = LinkBattle.newHost(gA, nA, { myParty = pA, theirParty = pB, theirName = "BLUE", seed = seed })
-      local bB = LinkBattle.newGuest(gB, nB, { myParty = pB, theirParty = pA, theirName = "RED", seed = seed })
+      local turnLimit = extra and extra.turnLimit
+      local bA = LinkBattle.newHost(gA, nA, { myParty = pA, theirParty = pB, theirName = "BLUE", seed = seed,
+                                              turnLimit = turnLimit })
+      local bB = LinkBattle.newGuest(gB, nB, { myParty = pB, theirParty = pA, theirName = "RED", seed = seed,
+                                               turnLimit = turnLimit })
       local rA, rB
       bA.onFinish = function(r) rA = r end
       bB.onFinish = function(r) rB = r end
@@ -849,6 +852,24 @@ do
     local r2A, r2B = results2()
     eq(r2A, "draw", "host: the doll's draw")
     eq(r2B, "draw", "guest: the doll's draw")
+
+    -- POK-59: the engine's shot clock, which the mod arms for match PvP.
+    -- The host picks at once; the guest never does -- the guest's own
+    -- clock forfeits it, and the host holds a definite WIN, not a draw.
+    local gA3, gB3, bA3, bB3, results3 = pair(31337, { turnLimit = 30 })
+    pump(gA3, gB3, bA3, bB3, 600)
+    eq(bA3.phase, "menu", "shot clock: the host reaches its menu")
+    eq(bB3.phase, "menu", "shot clock: the guest reaches its menu")
+    bA3:resolveTurn(bA3.player.curMoves[1])
+    for _ = 1, 31 * 60 do            -- the guest stalls past the clock
+      Input.pressed = {}
+      gA3.stack:update(1 / 60)
+      gB3.stack:update(1 / 60)
+    end
+    settle(gA3, gB3, bA3, bB3, 2000)
+    local r3A, r3B = results3()
+    eq(r3B, "lose", "the staller forfeits when the clock runs out")
+    eq(r3A, "win", "and the opponent wins outright")
   end)
   if not hadLove then _G.love = nil end
   if not okAll then
@@ -856,7 +877,7 @@ do
   end
 end
 
--- ------- free move management (POK-19)
+-- ------- free move management (POK-19), priced by the ladder (POK-58)
 
 do
   local MoveKit = require("mods.battle_royale.lib.moves")
@@ -864,20 +885,40 @@ do
     moves = { TACKLE = { name = "TACKLE", pp = 35 }, GROWL = { name = "GROWL", pp = 40 },
               VINE_WHIP = { name = "VINE WHIP", pp = 10 }, CUT = { name = "CUT", pp = 30 },
               TOXIC = { name = "TOXIC", pp = 10 }, SOLARBEAM = { name = "SOLARBEAM", pp = 10 } },
+    items = { TM_TOXIC = { machine = { kind = "TM", move = "TOXIC", number = 6 } },
+              TM_SOLARBEAM = { machine = { kind = "TM", move = "SOLARBEAM", number = 22 } },
+              HM_CUT = { machine = { kind = "HM", move = "CUT", number = 1 } } },
     pokemon = { BULBASAUR = {
       level1Moves = { "TACKLE", "GROWL" },
       learnset = { { level = 13, move = "VINE_WHIP" }, { level = 48, move = "SOLARBEAM" } },
       tmhm = { "TOXIC", "SOLARBEAM", "CUT", "NOT_A_MOVE" },
     } },
   }
-  local mon = { species = "BULBASAUR", moves = { { id = "TACKLE", pp = 35 } } }
+  local mon = { species = "BULBASAUR", level = 13, moves = { { id = "TACKLE", pp = 35 } } }
+
   local list = MoveKit.learnable(data, mon)
   local names, hows = {}, {}
   for i, m in ipairs(list) do names[i], hows[i] = m.name, m.how end
-  eq(table.concat(names, "|"), "GROWL|VINE WHIP|SOLARBEAM|TOXIC|CUT",
-     "everything it could learn that it does not know, level-ups first")
-  eq(table.concat(hows, "|"), "L1|L13|L48|TM|HM",
-     "tagged by how: a level, a TM, an HM (a move on both lists keeps its level)")
+  eq(table.concat(names, "|"), "GROWL|VINE WHIP",
+     "no bag: level-up moves at or below the mon's level, nothing else")
+  eq(table.concat(hows, "|"), "L1|L13", "tagged by their levels")
+
+  local bagged = MoveKit.learnable(data, mon, { bag = { TM_TOXIC = 1, HM_CUT = 1 } })
+  local bn, bh, bi = {}, {}, {}
+  for i, m in ipairs(bagged) do bn[i], bh[i], bi[i] = m.name, m.how, m.item or "-" end
+  eq(table.concat(bn, "|"), "GROWL|VINE WHIP|TOXIC|CUT",
+     "machines join the list only from the bag")
+  eq(table.concat(bh, "|"), "L1|L13|TM|HM", "tagged TM and HM")
+  eq(table.concat(bi, "|"), "-|-|TM_TOXIC|HM_CUT",
+     "a machine row names the item that pays for it")
+
+  local tmOnly = MoveKit.learnable(data, mon, { bag = { TM_SOLARBEAM = 1 } })
+  eq(tmOnly[#tmOnly] and tmOnly[#tmOnly].id, "SOLARBEAM",
+     "a TM ignores the level gate, exactly like the cartridge")
+  eq(tmOnly[#tmOnly] and tmOnly[#tmOnly].how, "TM", "and reads as a TM")
+
+  eq(#MoveKit.learnable(data, { species = "BULBASAUR", level = 5, moves = {} }), 2,
+     "a Lv5 knows only its level-1 pool")
   eq(#MoveKit.learnable(data, { species = "MEWTHREE" }), 0, "an unknown species learns nothing")
 
   eq(MoveKit.teach(data, mon, "GROWL"), false, "a free slot: nothing forgotten")
@@ -893,7 +934,8 @@ do
   eq(mon.moves[1].pp, 30, "at full PP")
   eq(#mon.moves, 4, "still four")
   eq(select(2, MoveKit.teach(data, mon, "NOT_A_MOVE")), "no such move", "an unknown move is refused")
-  eq(#MoveKit.learnable(data, mon), 2, "SOLARBEAM is left to learn -- and TACKLE, again: forgetting is not forever")
+  eq(#MoveKit.learnable(data, mon), 1,
+     "TACKLE alone remains: forgetting is not forever, and no bag means no machines")
 end
 
 -- ------- main.lua: a local helper is only in scope below its own line

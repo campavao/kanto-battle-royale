@@ -121,6 +121,7 @@ local SAFARI_BALLS = 30
 local SAFARI_STEPS = 502          -- what the gate script writes (data/scripts/safari.lua)
 local DEFAULT_SAFARI_SECONDS = 120
 local SAFARI_BEAT_SECONDS = 5     -- how often the host re-announces the clock
+local PVP_TURN_SECONDS = 30       -- the PvP shot clock: pick or forfeit (POK-59)
 -- the two south warps out of the centre, to the gate: there is no leaving
 -- early -- the buzzer is the only way out
 local SAFARI_EXIT_WARPS = { { x = 14, y = 25 }, { x = 15, y = 25 } }
@@ -693,6 +694,28 @@ return function(mod)
     save.lastOutdoor = { id = BR.arming.map, x = BR.arming.x, y = BR.arming.y }
     return save
   end)
+
+  -- ------- the PvP shot clock (POK-59)
+  --
+  -- The engine's tournament clock (opts.turnLimit) is exactly the rule a
+  -- battle royale needs: a visible countdown while the menu is yours, and
+  -- a forfeit on the wire -- with a definite winner -- when it runs out.
+  -- Nobody drags an opponent into the fog by sitting in a menu.  Wrapped
+  -- rather than passed because the opts are built inside the engine's own
+  -- LinkState; a pre-clock engine simply ignores the extra field.
+  do
+    local LinkBattle = require("src.link.LinkBattle")
+    local function withClock(base)
+      return function(game, net, opts)
+        if opts and not opts.turnLimit and BR:inRound() then
+          opts.turnLimit = PVP_TURN_SECONDS
+        end
+        return base(game, net, opts)
+      end
+    end
+    LinkBattle.newHost = withClock(LinkBattle.newHost)
+    LinkBattle.newGuest = withClock(LinkBattle.newGuest)
+  end
 
   -- ------- inbound room messages
 
@@ -2311,20 +2334,30 @@ return function(mod)
     local function tell(text)
       game.stack:push(mod.ui.TextBox.new(game, text))
     end
-    local learnable = MoveKit.learnable(data, mon)
+    -- a TM is spent by teaching; an HM is a tool, not a consumable (POK-58)
+    local function spendMachine(row)
+      if not row.spend then return end
+      local inv = game.save.inventory or {}
+      local n = (inv[row.spend] or 0) - 1
+      inv[row.spend] = n > 0 and n or nil
+      game.save.bagOrder = nil   -- rebuilt from what is left on next open
+    end
+    local learnable = MoveKit.learnable(data, mon, { bag = game.save.inventory })
     if #learnable == 0 then
-      tell(("%s can't learn\nanything else."):format(name))
+      tell(("%s has nothing\nto learn right now."):format(name))
       return
     end
     local items = {}
     for _, m in ipairs(learnable) do
-      items[#items + 1] = { label = m.name, right = m.how, value = m.id }
+      items[#items + 1] = { label = m.name, right = m.how, value = m.id,
+                            spend = (m.how == "TM") and m.item or nil }
     end
     game.stack:push(mod.ui.ListMenu.new(game, "LEARN WHICH?", items, {
       onChoose = function(item, list)
         local moveName = data.moves[item.value].name
         if #(mon.moves or {}) < 4 then
-          MoveKit.teach(data, mon, item.value)
+          local _, why = MoveKit.teach(data, mon, item.value)
+          if not why then spendMachine(item) end
           list:close()
           tell(("%s learned\n%s!"):format(name, moveName))
           return
@@ -2336,7 +2369,8 @@ return function(mod)
         end
         game.stack:push(mod.ui.ListMenu.new(game, "FORGET WHICH?", slots, {
           onChoose = function(slot, forget)
-            local old = MoveKit.teach(data, mon, item.value, slot.value)
+            local old, why = MoveKit.teach(data, mon, item.value, slot.value)
+            if not why then spendMachine(item) end
             forget:close()
             list:close()
             local oldName = (old and data.moves[old] and data.moves[old].name) or tostring(old)
