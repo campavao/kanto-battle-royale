@@ -25,10 +25,19 @@
 
 local Engage = {}
 
--- Six cells, per D10.  A Game Boy screen is ten cells wide, so six is far
--- enough to be hunted across open ground and short enough that a town's
--- buildings still break the sight lines.
-Engage.RANGE = 6
+-- Per D10, tuned by POK-60.  A Game Boy screen is ten cells wide but only
+-- nine tall, and the camera centers you: six cells along a row is a
+-- visible hunt, but six down a column reaches two cells past the screen
+-- edge -- an ambush by something the prey could never have seen.  So the
+-- eyeline is as long as the screen lets BOTH sides see: six across, four
+-- down the column.
+Engage.RANGE = 6            -- along a row (left/right)
+Engage.RANGE_Y = 4          -- along a column (up/down)
+
+-- the default reach for a facing: the axis decides
+function Engage.rangeFor(facing)
+  return (facing == "up" or facing == "down") and Engage.RANGE_Y or Engage.RANGE
+end
 
 local DELTA = { up = { 0, -1 }, down = { 0, 1 }, left = { -1, 0 }, right = { 1, 0 } }
 
@@ -46,7 +55,7 @@ function Engage.sightLine(p, range, blocked)
   local out = {}
   local d = DELTA[p.facing]
   if not d then return out end
-  for step = 1, (range or Engage.RANGE) do
+  for step = 1, (range or Engage.rangeFor(p.facing)) do
     local x, y = p.x + d[1] * step, p.y + d[2] * step
     out[#out + 1] = { x = x, y = y }
     if blocked and blocked(x, y) then break end

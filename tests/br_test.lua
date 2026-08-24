@@ -556,6 +556,19 @@ do
   a.x = 5 + Engage.RANGE + 1
   ok(Engage.target(me, { a }) == nil, "one cell past the range is not spotted")
 
+  -- POK-60: the column is shorter than the row -- nothing engages you
+  -- from off screen
+  eq(Engage.RANGE_Y, 4, "the vertical eyeline is four cells")
+  eq(Engage.rangeFor("down"), 4, "a column facing reaches four")
+  eq(Engage.rangeFor("left"), 6, "a row facing reaches six")
+  local meDown = { id = 1, map = "M", x = 5, y = 5, facing = "down",
+                   moving = false, status = "alive", busy = false }
+  local below = { id = 9, map = "M", x = 5, y = 5 + Engage.RANGE_Y,
+                  facing = "up", moving = false, status = "alive", busy = false }
+  eq(Engage.target(meDown, { below }), 9, "four cells down the column is seen")
+  below.y = 5 + Engage.RANGE_Y + 1
+  ok(Engage.target(meDown, { below }) == nil, "five is off screen, and unseen")
+
   -- sight does not bend: off the facing axis is invisible at any distance
   a.x, a.y = 8, 6
   ok(Engage.target(me, { a }) == nil, "a trainer off the axis is not spotted")
