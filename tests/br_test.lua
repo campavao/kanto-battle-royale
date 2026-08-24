@@ -951,6 +951,36 @@ do
      "TACKLE alone remains: forgetting is not forever, and no bag means no machines")
 end
 
+-- ------- gyms as contested one-shot bosses (POK-26)
+
+do
+  local Gyms = require("mods.battle_royale.lib.gyms")
+  local okD, Data = pcall(require, "src.core.Data")
+  local count = 0
+  for class, prize in pairs(Gyms.LEADERS) do
+    count = count + 1
+    ok(type(prize.name) == "string" and #prize.name > 0, class .. " has a name")
+    ok(type(prize.tm) == "string" and prize.tm:sub(1, 3) == "TM_",
+       class .. " holds a TM")
+    ok(type(prize.label) == "string" and #prize.label > 0, class .. " has a label")
+  end
+  eq(count, 8, "eight gyms, eight leaders, eight prizes")
+  ok(Gyms.leader(nil) == nil, "no class, no leader")
+  ok(Gyms.leader("OPP_YOUNGSTER") == nil, "a youngster runs no gym")
+  if okD and Data and Data.load then
+    pcall(function() Data:load() end)
+    if Data.items then
+      for class, prize in pairs(Gyms.LEADERS) do
+        ok(Data.items[prize.tm] ~= nil, class .. "'s prize exists: " .. prize.tm)
+      end
+      ok(Gyms.leaderOfObject(Data.maps, "PEWTER_GYM", "PEWTERGYM_BROCK") ~= nil,
+         "BROCK is found behind his npcout")
+      ok(Gyms.leaderOfObject(Data.maps, "PEWTER_GYM", "PEWTERGYM_COOLTRAINER_M") == nil,
+         "his cooltrainer is not a leader")
+    end
+  end
+end
+
 -- ------- escapable, not merely walkable (POK-23)
 
 do

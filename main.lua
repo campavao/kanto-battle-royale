@@ -38,6 +38,7 @@ local Spills = require("mods.battle_royale.lib.spills")
 local Flee = require("mods.battle_royale.lib.flee")
 local MoveKit = require("mods.battle_royale.lib.moves")
 local Fame = require("mods.battle_royale.lib.fame")
+local Gyms = require("mods.battle_royale.lib.gyms")
 local Peek = require("mods.battle_royale.lib.peek")
 local BRMenu = require("mods.battle_royale.lib.menu")
 
@@ -829,6 +830,13 @@ return function(mod)
     elseif msg.t == "npcout" then
       -- somebody beat one of Kanto's own; the sprite goes away here too
       pcall(function() mod.world:toggleObject(msg.map, msg.obj, false) end)
+      -- a fallen gym leader is news to the whole lobby (POK-26) -- whether
+      -- a rival took the prize or the fog burned it
+      local fallen = Gyms.leaderOfObject(
+        self.game and self.game.data and self.game.data.maps, msg.map, msg.obj)
+      if fallen and self:inRound() then
+        sayLater(("%s has fallen!"):format(fallen.name))
+      end
 
     elseif msg.t == "took" then
       self.spills:take(msg.key)
@@ -2371,12 +2379,14 @@ return function(mod)
     -- stale.
     if BR.phase ~= "match" or type(party) ~= "table" then return party end
     local rung = BR:level()
+    -- a gym leader is a boss, not a speed bump (POK-26)
+    local bonus = Gyms.leader(oppClass) and Gyms.BOSS_BONUS or 0
     local scaled = {}
     for i, slot in ipairs(party) do
       if type(slot) == "table" and slot.species then
         local copy = {}
         for k, v in pairs(slot) do copy[k] = v end
-        copy.level = rung
+        copy.level = math.min(100, rung + bonus)
         scaled[i] = copy
       else
         scaled[i] = slot
@@ -2648,6 +2658,23 @@ return function(mod)
         end
       end
       if #party > 0 then BR:npcDefeated(npc, party) end
+      -- a gym leader is a landmark (POK-26): first to fell them takes the
+      -- prize, and npcDefeated's npcout closes the gym for everyone
+      -- npcFight carries the object's NAME; the class lives in map data
+      local prize = Gyms.leaderOfObject(
+        BR.game and BR.game.data and BR.game.data.maps, npc.map, npc.obj)
+      if prize then
+        local psave = BR.game and BR.game.save
+        local pdata = BR.game and BR.game.data
+        if psave and pdata and pdata.items and pdata.items[prize.tm] then
+          psave.inventory[prize.tm] = (psave.inventory[prize.tm] or 0) + 1
+          psave.bagOrder = nil
+          psave.money = (psave.money or 0) + Gyms.PURSE
+          if BR.stats then BR.stats.beats = BR.stats.beats + 1 end
+          sayLater(("%s fell!\fThe %s is\nyours, and %d\ncame with it!"):format(
+            prize.name, prize.label, Gyms.PURSE))
+        end
+      end
     end
     local botId = BR.botFight
     if not botId then return end
