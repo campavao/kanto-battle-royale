@@ -51,7 +51,9 @@ local Wire = {}
 -- 5: a spill carries the fallen trainer's BAG as one more thing on the
 --    ground (items and money, D8's other half) and `loot` is gone -- a v4
 --    peer would wait for a loot message that never comes
-Wire.PROTOCOL = 5
+-- 6: peek / state -- a spectator asks the trainer they watch for a party
+--    and bag summary, and gets one; a v5 peer would never answer
+Wire.PROTOCOL = 6
 
 Wire.DIRS = { up = true, down = true, left = true, right = true }
 Wire.STATUS = { lobby = true, alive = true, battle = true, out = true }
@@ -146,6 +148,20 @@ function Wire.safari(left) return { t = "safari", left = left } end
 function Wire.winner(id) return { t = "winner", id = id } end
 -- PLAY AGAIN (POK-20): host only, back to the lobby with the roster kept
 function Wire.again() return { t = "again" } end
+
+-- a spectator asks the trainer they watch what they carry (POK-18)...
+function Wire.peek() return { t = "peek" } end
+-- ...and is answered: party rows are { sp, lv, hp, mhp, st, mv } on the
+-- wire, the bag as item stacks plus money
+function Wire.state(state)
+  local party = {}
+  for i, m in ipairs((state and state.party) or {}) do
+    party[i] = { sp = m.species, lv = m.level, hp = m.hp, mhp = m.maxHp,
+                 st = m.status, mv = m.moves }
+  end
+  return { t = "state", party = party, items = state and state.items or {},
+           money = state and state.money or 0 }
+end
 
 -- ------- decoding
 --
@@ -353,6 +369,39 @@ decoders.winner = function(m)
 end
 
 decoders.again = function() return { t = "again" } end
+
+decoders.peek = function() return { t = "peek" } end
+
+local function clampInt(v, lo, hi, default)
+  if type(v) ~= "number" or v ~= v then return default end
+  return math.max(lo, math.min(hi, math.floor(v)))
+end
+
+decoders.state = function(m)
+  if type(m.party) ~= "table" then return nil, "bad party" end
+  local party = {}
+  for i, r in ipairs(m.party) do
+    if i > 6 then break end
+    if type(r) ~= "table" or type(r.sp) ~= "string" or r.sp == "" or #r.sp > MAX_ID then
+      return nil, "bad party row"
+    end
+    local moves = {}
+    for j, mv in ipairs(type(r.mv) == "table" and r.mv or {}) do
+      if j > 4 then break end
+      if type(mv) == "string" and mv ~= "" and #mv <= MAX_ID then moves[#moves + 1] = mv end
+    end
+    party[#party + 1] = {
+      species = r.sp, level = clampInt(r.lv, 1, 100, 1),
+      hp = clampInt(r.hp, 0, 999, 0), maxHp = clampInt(r.mhp, 1, 999, 1),
+      status = type(r.st) == "string" and r.st:sub(1, MAX_ID) or nil,
+      moves = moves,
+    }
+  end
+  local items = decodeItems(m.items or {})
+  if not items then return nil, "bad items" end
+  return { t = "state", party = party, items = items,
+           money = clampInt(m.money, 0, 999999, 0) }
+end
 
 function Wire.decode(m)
   if type(m) ~= "table" then return nil, "not a table" end

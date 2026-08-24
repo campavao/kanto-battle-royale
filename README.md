@@ -36,6 +36,10 @@ The fog shrinks the world on a shared clock, everyone's level rides the
 same clock, and a fallen team spills onto the ground as Poké Balls anyone
 can claim. See "What's here / what's next" below.
 
+The fog shrinks the world on a shared clock, everyone's level rides the
+same clock, and a fallen team spills onto the ground as Poké Balls anyone
+can claim. See "What's here / what's next" below.
+
 A mod for [gen1recomp](https://github.com/bryanthaboi/gen1recomp).
 
 ## Install
@@ -163,8 +167,11 @@ you do too), and the view is glued to whoever you are watching, walking
 when they walk. `LEFT` / `RIGHT` hop between the trainers still in the
 match; the box on the left names who it is, and the first living trainer
 is picked for you the moment you're out. When they leave the map you are
-carried to theirs. You cannot walk, catch, or fight; you can open your
-(empty) menus, and nothing you do reaches the match.
+carried to theirs. You cannot walk, catch, or fight, and nothing you do
+reaches the match — but START → POKéMON and ITEM show what the trainer
+you're watching carries: their team with levels, HP and moves, their bag
+and their money, read-only, refreshed every few seconds (a bot's is
+derived from the seed, like its team).
 
 A match plays in a throwaway world: **SAVE is disabled from the drop until
 you return to the title** and start or continue a real game, so a match can

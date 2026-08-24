@@ -47,7 +47,23 @@ do
   ok(Wire.decode({ t = "start", seed = 1, spawns = {} }) == nil, "empty start is refused")
 
   -- the Safari opening (POK-21): start carries the round, beats carry the clock
-  eq(Wire.PROTOCOL, 5, "the bag on the ground is PROTOCOL 5")
+  eq(Wire.PROTOCOL, 6, "peeking at the watched trainer is PROTOCOL 6")
+  eq(Wire.decode(Wire.peek()).t, "peek", "peek round-trips")
+  local st6 = Wire.decode(Wire.state({
+    party = { { species = "PIDGEY", level = 12, hp = 23, maxHp = 40, status = "PSN",
+                moves = { "GUST", "SAND_ATTACK", "QUICK_ATTACK", "WHIRLWIND", "TOO_MANY" } } },
+    items = { { id = "POTION", n = 2 } }, money = 500 }))
+  ok(st6 ~= nil, "state round-trips")
+  eq(st6 and #st6.party, 1, "with the party")
+  eq(st6 and st6.party[1].hp .. "/" .. st6.party[1].maxHp, "23/40", "HP and max")
+  eq(st6 and st6.party[1].status, "PSN", "the status")
+  eq(st6 and #st6.party[1].moves, 4, "at most four moves")
+  eq(st6 and st6.items[1].n, 2, "the bag")
+  eq(st6 and st6.money, 500, "and the money")
+  ok(Wire.decode({ t = "state", party = "x" }) == nil, "a state without a party is refused")
+  ok(Wire.decode({ t = "state", party = { { sp = "" } } }) == nil, "and a nameless row")
+  eq(Wire.decode({ t = "state", party = { { sp = "MEW", lv = 900, hp = -5 } }, money = -1 }).party[1].level,
+     100, "levels clamp")
   eq(Wire.decode(Wire.again()).t, "again", "again round-trips")
   local safariStart = Wire.decode(Wire.start(7,
     { { id = 1, map = "SAFARI_ZONE_CENTER", x = 2, y = 3 } }, 120))
@@ -909,6 +925,39 @@ do
     ok(#early == 0, "no local helper is used above its definition"
        .. (#early > 0 and (": " .. table.concat(early, "; ")) or ""))
   end
+end
+
+-- ------- what a spectator sees (POK-18)
+
+do
+  local Peek = require("mods.battle_royale.lib.peek")
+  local data = {
+    pokemon = { PIDGEY = { name = "PIDGEY" } },
+    moves = { GUST = { name = "GUST" }, SAND_ATTACK = { name = "SAND-ATTACK" } },
+    items = { POTION = { name = "POTION" }, POKE_BALL = { name = "POKe BALL" } },
+  }
+  local save = { party = { { species = "PIDGEY", level = 12, hp = 23, stats = { hp = 40 },
+                             status = "PSN", moves = { { id = "GUST", pp = 30 }, { id = "SAND_ATTACK", pp = 15 } },
+                             dvs = { 1, 2, 3 }, exp = 999 } } }
+  local s = Peek.summary(save, { items = { { id = "POTION", n = 2 } }, money = 500 })
+  eq(#s.party, 1, "a summary per party member")
+  eq(s.party[1].hp .. "/" .. s.party[1].maxHp, "23/40", "HP and max")
+  eq(table.concat(s.party[1].moves, ","), "GUST,SAND_ATTACK", "move ids only")
+  ok(s.party[1].dvs == nil and s.party[1].exp == nil, "and nothing that rebuilds the record")
+  eq(s.money, 500, "the money rides along")
+  local rows = Peek.partyRows(data, s.party)
+  eq(rows[1].label .. " | " .. rows[1].right, "PIDGEY L12 | 23/40 PSN", "a party row reads name, level, HP, status")
+  eq(Peek.partyRows(data, {})[1].label, "(no POKeMON)", "an empty party says so")
+  eq(Peek.moveRows(data, s.party[1])[2].label, "SAND-ATTACK", "moves by name")
+  local bag = Peek.bagRows(data, s.items, s.money)
+  eq(bag[1].label .. " " .. bag[1].right, "POTION x2", "a bag row reads name and count")
+  eq(bag[2].label, "¥500", "and the money is a row of its own")
+  eq(Peek.bagRows(data, {}, 0)[1].label, "(nothing)", "an empty bag says so")
+  local Bots = require("mods.battle_royale.lib.bots")
+  local bot = Peek.botParty(Bots, 1, Bots.idFor(1), nil, 30)
+  ok(#bot >= 1 and bot[1].species ~= nil, "a bot's party is derived from the seed")
+  eq(bot[1].level, 30, "at the rung")
+  eq(bot[1].hp, bot[1].maxHp, "at full HP")
 end
 
 -- ------- one lobby screen, not a menu round-trip (POK-32)

@@ -37,6 +37,7 @@ local Levels = require("mods.battle_royale.lib.levels")
 local Spills = require("mods.battle_royale.lib.spills")
 local Flee = require("mods.battle_royale.lib.flee")
 local MoveKit = require("mods.battle_royale.lib.moves")
+local Peek = require("mods.battle_royale.lib.peek")
 local BRMenu = require("mods.battle_royale.lib.menu")
 
 local SCREEN = "BattleRoyaleMenu"
@@ -199,6 +200,8 @@ return function(mod)
     fleeGrace = {},       -- opponent id -> clock until neither of us engages
     fleeLockout = {},     -- opponent id -> clock until we may initiate on them
     fleeing = nil,        -- who we are running from, while the battle unwinds
+    peeked = nil,         -- what the trainer we watch carries, as last answered (POK-18)
+    lastPeekAt = nil,
     botCount = 0,         -- how many bots the host will add at start
     fillTo = 0,           -- ...or top the roster up to this many, 0 = off
     solo = false,         -- hosting a room of one, with no server
@@ -438,6 +441,7 @@ return function(mod)
     self.matchWorld = false
     self.lastOpponent = nil
     self.fledFrom, self.fleeGrace, self.fleeLockout, self.fleeing = {}, {}, {}, nil
+    self.peeked, self.lastPeekAt = nil, nil
     self.pendingDrop = nil   -- a release that never landed (POK-34)
     self.claimedCatch = nil  -- custody taken on a shimmed engine, unconsumed
     self.dropSeq = nil
@@ -766,6 +770,15 @@ return function(mod)
 
     elseif msg.t == "again" then
       if fromId == self.relay.hostId then self:onAgain() end
+
+    elseif msg.t == "peek" then
+      self:answerPeek(fromId)
+
+    elseif msg.t == "state" then
+      -- only the trainer we are watching has anything to tell us
+      if fromId == self.watching then
+        self.peeked = { id = fromId, party = msg.party, items = msg.items, money = msg.money }
+      end
     end
   end
 
@@ -1463,7 +1476,73 @@ return function(mod)
     self.watching = ids[idx]
     self.fellAt = nil              -- a deliberate move, nothing to undo
     self.lastHopAt = nil           -- catch up at once, wherever they are
+    self.peeked, self.lastPeekAt = nil, nil   -- and ask them, not the last one
     return true
+  end
+
+  -- ------- what they carry (POK-18)
+  --
+  -- A spectator's START menu opens the watched trainer's team and bag in
+  -- place of their own empty ones.  A human is asked (peek) and answers
+  -- (state) every few seconds while watched; a bot has no client to ask,
+  -- so its team is derived from the seed like everything else about it.
+
+  function BR:answerPeek(fromId)
+    local save = self.game and self.game.save
+    if not (save and self.relay) then return end
+    self.relay:send(fromId, Wire.state(Peek.summary(save, bagOf(save))))
+  end
+
+  function BR:tickPeek()
+    local id = self.watching
+    local p = id and self.players[id]
+    if not (p and self.relay) then return end
+    if p.bot then
+      if not (self.peeked and self.peeked.id == id) then
+        local data = self.game and self.game.data
+        self.peeked = { id = id, bot = true,
+                        party = Peek.botParty(Bots, self.matchSeed, id, data, self:level()),
+                        items = BOT_LOOT.items, money = BOT_LOOT.money }
+      end
+      return
+    end
+    local now = clock() or 0
+    if self.lastPeekAt and (now - self.lastPeekAt) < Peek.SECONDS then return end
+    self.lastPeekAt = now
+    self.relay:send(id, Wire.peek())
+  end
+
+  local function watchedName()
+    local p = BR.watching and BR.players[BR.watching]
+    return (p and p.name) or "them"
+  end
+
+  function BR:openWatchedParty(game)
+    local data = game.data
+    local state = self.peeked
+    local name = watchedName()
+    local rows = (state and state.id == self.watching) and Peek.partyRows(data, state.party)
+                 or { { label = ("(no word from\n%s yet)"):format(name) } }
+    game.stack:push(mod.ui.ListMenu.new(game, name .. "'s TEAM", rows, {
+      onChoose = function(item)
+        local mon = state and state.party and item.value and state.party[item.value]
+        if not mon then return end
+        game.stack:push(mod.ui.ListMenu.new(game,
+          (data.pokemon[mon.species] and data.pokemon[mon.species].name) or tostring(mon.species),
+          Peek.moveRows(data, mon), { onChoose = function() end }))
+      end,
+    }))
+  end
+
+  function BR:openWatchedBag(game)
+    local state = self.peeked
+    local name = watchedName()
+    local rows = (state and state.id == self.watching)
+                 and Peek.bagRows(game.data, state.items, state.money)
+                 or { { label = ("(no word from\n%s yet)"):format(name) } }
+    game.stack:push(mod.ui.ListMenu.new(game, name .. "'s BAG", rows, {
+      onChoose = function() end,
+    }))
   end
 
   -- keep the watched trainer in frame
@@ -1502,6 +1581,7 @@ return function(mod)
     ow.playerHidden = true          -- the engine clears it on every arrival
     ow.player.passable = true       -- Collision.occupied lets the living through
     if not self.watching then self:hop(1) end
+    self:tickPeek()
     local p = self.watching and self.players[self.watching]
     local here = mod.world:current()
     if not (p and here and p.map == here.mapId) or ow.transitioning then
@@ -2749,6 +2829,21 @@ return function(mod)
       -- as the guarantee for anything else that tries.
       mod.ui.removeLabel(out, "SAVE")
     end
+    -- out and watching (POK-18): POKeMON and ITEM open what the watched
+    -- trainer carries, read-only, in place of our own empty screens
+    if BR:inRound() and BR.status == "out" and BR.watching then
+      for _, it in ipairs(out) do
+        local label = type(it.label) == "string" and it.label or ""
+        if label:sub(1, 3) == "POK" and label:find("MON", 1, true)
+           and not label:find("DEX", 1, true) then
+          it.keepOpen = false
+          it.onSelect = function() BR:openWatchedParty(game) end
+        elseif label == "ITEM" then
+          it.keepOpen = false
+          it.onSelect = function() BR:openWatchedBag(game) end
+        end
+      end
+    end
     return mod.ui.insertBefore(out, "OPTION", {
       label = label,
       onSelect = function() mod.ui.push(game, SCREEN) end,
@@ -2902,6 +2997,7 @@ return function(mod)
     return out
   end
   mod.exports.bagSprite = function() return Spills.BAG_SPRITE end
+  mod.exports.peeked = function() return BR.peeked end
   -- a driver's way to put a bag on the ground here and now: a bag-only
   -- spill two cells from where we stand (no ball to get in the way)
   mod.exports.debugSpill = function(dx, dy)
