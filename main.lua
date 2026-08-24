@@ -632,7 +632,8 @@ return function(mod)
     end
     -- arm the loadout hook, then start a fresh game straight into the world
     local safari = tonumber(msg.safari) or 0
-    self.arming = { map = mine.map, x = mine.x, y = mine.y, safari = safari > 0 }
+    self.arming = { map = mine.map, x = mine.x, y = mine.y,
+                    safari = safari > 0, safariSeconds = safari }
     self.phase = safari > 0 and "safari" or "match"
     self.status = "alive"
     self.started = true
@@ -671,7 +672,13 @@ return function(mod)
       -- is the gate's own -- thirty balls and the step budget -- so the
       -- start menu's steps/500 and BALL counter read true.
       save.party = {}
-      save.safari = { balls = SAFARI_BALLS, steps = SAFARI_STEPS }
+      -- the step budget rides the round's clock (POK-46): 502 steps at
+      -- walking speed is ~125 s, hand-tuned to the default 120 s round --
+      -- so a longer round deserves a longer leash
+      local secs = BR.arming.safariSeconds or DEFAULT_SAFARI_SECONDS
+      save.safari = { balls = SAFARI_BALLS,
+                      steps = math.max(1, math.floor(
+                        SAFARI_STEPS * secs / DEFAULT_SAFARI_SECONDS)) }
     else
       save.party = { Pokemon.new(Data, START_SPECIES, START_LEVEL) }
     end
@@ -1770,6 +1777,21 @@ return function(mod)
             return false
           end
         end
+      elseif BR:inRound() and mapId == "SAFARI_ZONE_GATE" and ctx.toY <= 2
+             and not (BR.game and BR.game.save and BR.game.save.safari) then
+        -- no admission, no north half: the join trigger (y=2) and the
+        -- warps back into the zone (y=0) are both behind this line (POK-40)
+        ctx.reason = "closed"
+        local now = clock() or 0
+        if now - (BR.lastClosedSay or -10) > 3 then
+          BR.lastClosedSay = now
+          if BR.phase == "safari" then
+            say("The PA called\ntime on you!\fWait for the\nbuzzer.")
+          else
+            say("The SAFARI ZONE\nis closed for\nthe match.")
+          end
+        end
+        return false
       elseif (BR.phase == "drop" or BR.phase == "match") and mapId == SAFARI_DOOR.map
              and ctx.toX == SAFARI_DOOR.x and ctx.toY == SAFARI_DOOR.y then
         ctx.reason = "closed"
@@ -1928,8 +1950,11 @@ return function(mod)
     end
     local save = self.game and self.game.save
     -- the team hits the ground where you fell (DESIGN D8), so an elimination
-    -- is worth converging on rather than only paying whoever landed the hit
-    if save then self:spillParty() end
+    -- is worth converging on rather than only paying whoever landed the hit.
+    -- Except before the match proper (the Safari buzzer, POK-46): the zone
+    -- closes over anything dropped there, and unreachable loot reads as a
+    -- bug, not a bounty.
+    if save and self.phase == "match" then self:spillParty() end
     if save then
       save.inventory = {}
       save.bagOrder = nil
@@ -2913,6 +2938,13 @@ return function(mod)
   -- adjacent and facing, is a second way to start the fight).
 
   mod.hooks:wrap("world.talk", function(next, ow, npc)
+    -- the gate worker sells no admission during a round (POK-40): the
+    -- talk path could otherwise charge a second 500 and re-open the zone
+    if BR:inRound() and ow and ow.map and ow.map.id == "SAFARI_ZONE_GATE"
+       and not (BR.game and BR.game.save and BR.game.save.safari) then
+      say("The SAFARI ZONE\nis closed for\nthe match.")
+      return
+    end
     -- a spilled ball: press A to open it, like every item ball in Kanto
     local spillKey = BR.spills:keyOf(npc)
     if spillKey then
