@@ -37,6 +37,7 @@ local Levels = require("mods.battle_royale.lib.levels")
 local Spills = require("mods.battle_royale.lib.spills")
 local Flee = require("mods.battle_royale.lib.flee")
 local MoveKit = require("mods.battle_royale.lib.moves")
+local Fame = require("mods.battle_royale.lib.fame")
 local Peek = require("mods.battle_royale.lib.peek")
 local BRMenu = require("mods.battle_royale.lib.menu")
 
@@ -87,7 +88,9 @@ local BOT_LOOT = { items = { { id = "POKE_BALL", n = 2 }, { id = "POTION", n = 1
 -- The starting loadout, all in one place (docs/DESIGN.md D7).
 local START_SPECIES = "RATTATA"
 local START_LEVEL = 5
-local START_ITEMS = { POKE_BALL = 6, POTION = 1 }
+-- TOWN_MAP: the fog ring draws on the TownMap screen, so the map is match
+-- equipment, not a collectible (POK-39)
+local START_ITEMS = { POKE_BALL = 6, POTION = 1, TOWN_MAP = 1 }
 local START_MONEY = 3000
 
 -- Every badge and every HM, from the drop.
@@ -191,6 +194,8 @@ return function(mod)
     battle = nil,         -- active fight { channel, opponentId, isHost }
     nonceSeq = 0,
     pendingSays = {},     -- says waiting for a free runner (POK-49/POK-50)
+    stats = nil,          -- the run's record: catches, beats, steps (POK-47)
+    pendingParade = nil,  -- when the champion's ending should start (POK-47)
     arming = nil,         -- { map, x, y } while save.new_game reshapes the skeleton
     started = false,      -- have I dropped into the world yet this match
     myName = nil,         -- chosen on the NAME row; nil falls back to the save
@@ -462,6 +467,9 @@ return function(mod)
     self.claimedCatch = nil  -- custody taken on a shimmed engine, unconsumed
     self.pendingSays = {}
     self.runnerBusySince, self.lastAutoA = nil, nil
+    self.stats = nil
+    self.pendingParade = nil
+    self.ringDistOf = nil
     self.dropSeq = nil
     self.safariEndsAt = nil  -- the Safari opening's clock (POK-21)
     self.lastSafariBeat = nil
@@ -628,6 +636,9 @@ return function(mod)
     self.status = "alive"
     self.started = true
     self.matchWorld = true
+    self.stats = { catches = 0, beats = 0, steps = 0,
+                   startedAt = (love.timer and love.timer.getTime
+                                and love.timer.getTime()) or 0 }
     if safari > 0 then
       -- the host's beats correct this; until the first lands it is the
       -- announced length from now, which is close enough for a clock
@@ -965,7 +976,25 @@ return function(mod)
     local exits = Bots.exits(data and data.maps[p.map])
     if #exits == 0 then return end
     p.rng = p.rng or Bots.rng(BR.matchSeed, id)
-    local dest = exits[p.rng(1, #exits)]
+    -- homeward, not aimless (POK-42): prefer the seam that closes on the
+    -- ring's eye, so the mid-game drifts everyone toward the same
+    -- shrinking ground.  The distances are cached on BR by applyRing --
+    -- this helper sits above townLocations and must not call it (the
+    -- POK-24 lesson).
+    local dist = BR.ringDistOf
+    local dest
+    if dist then
+      -- holding still is only wisdom INSIDE the ring; outside it, the
+      -- least-bad seam beats waiting for the fog
+      local r = BR.ring and BR.ring.radius
+      local hereD = dist[p.map]
+      local safeHere = r and hereD and hereD <= r * r
+      dest = Bots.homeward(exits, function(m) return dist[m] end,
+                           safeHere and hereD or nil, p.rng)
+      if not dest then p.lastRoam = now return end -- nearest already: hold
+    else
+      dest = exits[p.rng(1, #exits)]
+    end
     local cells = walkableCells(dest)
     if #cells == 0 then return end
     local c = cells[p.rng(1, #cells)]
@@ -1152,24 +1181,32 @@ return function(mod)
     return towns
   end
 
-  -- host only: at the buzzer every bot picks a town like everyone else
+  -- host only: at the buzzer the bots are DEALT towns -- the deck, not the
+  -- dice (POK-43), so no two share one while towns remain and the drop
+  -- stops resolving itself in the first minute
   function BR:dropBots()
     if not (self.relay and self.relay:isHost()) then return end
     local towns = self:dropTowns()
     if #towns == 0 then return end
     local now = clock() or 0
+    local ids = {}
     for id, p in pairs(self.players) do
-      if p.bot and p.status == "alive" then
-        p.rng = p.rng or Bots.rng(self.matchSeed, id)
-        local town = towns[p.rng(1, #towns)]
-        local cells = walkableCells(town.id)
-        if #cells > 0 then
-          local c = cells[p.rng(1, #cells)]
-          p.map, p.x, p.y, p.facing = town.id, c.x, c.y, "down"
-          p.lastRoam = now
-          self.ghosts:despawn(id)
-          self.relay:broadcast(Wire.place(p.map, p.x, p.y, "down", p.status, p.sprite, id))
-        end
+      if p.bot and p.status == "alive" then ids[#ids + 1] = id end
+    end
+    table.sort(ids)
+    local deal = Bots.dealTowns(#towns, #ids,
+                                Spawn.rng((self.matchSeed or 1) + 4242))
+    for k, id in ipairs(ids) do
+      local p = self.players[id]
+      p.rng = p.rng or Bots.rng(self.matchSeed, id)
+      local town = towns[deal[k]]
+      local cells = walkableCells(town.id)
+      if #cells > 0 then
+        local c = cells[p.rng(1, #cells)]
+        p.map, p.x, p.y, p.facing = town.id, c.x, c.y, "down"
+        p.lastRoam = now
+        self.ghosts:despawn(id)
+        self.relay:broadcast(Wire.place(p.map, p.x, p.y, "down", p.status, p.sprite, id))
       end
     end
   end
@@ -1266,11 +1303,28 @@ return function(mod)
     local was = self.ring and self.ring.phase
     self.ring = { phase = phase, center = { x = cx, y = cy, name = place },
                   radius = radius }
-    if was ~= phase and phase > 1 then
+    -- every placed map's squared distance to the eye, for the bots'
+    -- homeward roams (POK-42); cached here because roamBot is defined
+    -- above townLocations
+    local dists = {}
+    for id, loc in pairs(townLocations() or {}) do
+      if loc.x and loc.y then
+        local dx, dy = loc.x - cx, loc.y - cy
+        dists[id] = dx * dx + dy * dy
+      end
+    end
+    self.ringDistOf = dists
+    if was == nil then
+      -- the eye is public from the landing (POK-39): the ring itself stays
+      -- quiet until it first shrinks, but where it will shrink TO is not a
+      -- secret -- and the TOWN MAP in the bag can show it
+      sayLater(("The fog will close\non %s.\fCheck your\nTOWN MAP."):format(
+        place or "KANTO"))
+    elseif was ~= phase and phase > 1 then
       if Fog.coversAll(radius) then
-        say("The fog covers\nall of KANTO!")
+        sayLater("The fog covers\nall of KANTO!")
       else
-        say(("The fog closes in\non %s!"):format(place or "KANTO"))
+        sayLater(("The fog closes in\non %s!"):format(place or "KANTO"))
       end
     end
   end
@@ -2482,6 +2536,13 @@ return function(mod)
     BR:offerDropForCatch(ev.battle, ev.mon)
   end)
 
+  -- the record keeps count (POK-47)
+  mod.events:on("pokemon.caught", function()
+    if BR:inRound() and BR.stats then
+      BR.stats.catches = BR.stats.catches + 1
+    end
+  end)
+
   -- A bot battle is an ordinary engine battle, so its outcome arrives on
   -- battle.ended rather than link.battle_ended.  A loss blacks the player
   -- out, which world.blacked_out below turns into elimination.
@@ -2512,6 +2573,7 @@ return function(mod)
         BR:spillBot(botId, bot)
       end
       if BR.relay then BR.relay:broadcast(Wire.botout(botId)) end
+      if BR.stats then BR.stats.beats = BR.stats.beats + 1 end
       say(("You beat %s!"):format((bot and bot.name) or "them"))
       BR:checkWinner()
     end
@@ -2576,6 +2638,9 @@ return function(mod)
       -- (POK-25) -- exactly as a whiteout or the fog does
       BR:eliminate("You whited out!\nYou are out of\nthe match.")
     else
+      if ev.result == "win" and BR.stats then
+        BR.stats.beats = BR.stats.beats + 1
+      end
       BR.status = "alive"
     end
     broadcastPlace()
@@ -2611,6 +2676,20 @@ return function(mod)
     end
   end
 
+  -- the numbers of the run, for the record card (POK-47)
+  function BR:matchStats()
+    local st = self.stats or {}
+    local now = clock() or 0
+    return {
+      catches = st.catches or 0,
+      beats = st.beats or 0,
+      steps = st.steps or 0,
+      rings = (self.ring and self.ring.phase) or 1,
+      seconds = math.max(0, math.floor(now - (st.startedAt or now))),
+      money = (self.game and self.game.save and self.game.save.money) or 0,
+    }
+  end
+
   function BR:onWinner(id)
     if self.phase == "over" then return end
     self.phase = "over"
@@ -2622,6 +2701,8 @@ return function(mod)
     -- banner said directly (POK-49)
     if id == self.myId then
       sayLater("You are the last\ntrainer standing!\nYou win!", 0.5)
+      -- and the Champion gets the Champion's ending (POK-47)
+      self.pendingParade = (clock() or 0) + 2.5
     elseif id then
       -- prefer the roster name: the relay has never heard of a bot (POK-41)
       local p = self.players and self.players[id]
@@ -2639,6 +2720,9 @@ return function(mod)
 
   mod.hooks:wrap("movement.speed", function(next, frames, ctx)
     local player = ctx and ctx.player
+    if player and player.targetX and BR.stats and BR:inRound() then
+      BR.stats.steps = BR.stats.steps + 1   -- the record keeps count (POK-47)
+    end
     if player and player.targetX and BR.relay and BR.relay:isOpen()
        and BR.status ~= "battle" then
       local h = here()
@@ -2701,6 +2785,16 @@ return function(mod)
 
     -- pending says deliver in every live phase -- the OVER banner included
     if BR.phase ~= "off" then BR:tickSays() end
+    -- the Champion's parade starts once the screen is quiet (POK-47)
+    if BR.pendingParade and BR.phase == "over" then
+      local nowP = clock()
+      local owP = mod.world:overworld()
+      if nowP and nowP >= BR.pendingParade and owP and game.stack:top() == owP
+         and not (owP.runner and owP.runner.isRunning and owP.runner:isRunning()) then
+        BR.pendingParade = nil
+        game.stack:push(Fame.new(game, game.save.party or {}, BR:matchStats()))
+      end
+    end
     -- and neither they nor the engine's own lines may hold the match:
     -- five silent seconds presses any dialog through (POK-54)
     BR:tickAutoResolve(game)
@@ -3110,6 +3204,7 @@ return function(mod)
              x = r.center and r.center.x, y = r.center and r.center.y }
   end
   mod.exports.level = function() return BR:level() end
+  mod.exports.matchStats = function() return BR:matchStats() end
   mod.exports.inFog = function() return BR.wasInFog == true end
   mod.exports.spillBalls = function()
     local out = {}

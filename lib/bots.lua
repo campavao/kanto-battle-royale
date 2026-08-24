@@ -204,4 +204,40 @@ function Bots.wander(bot, rng, canWalk, toward)
   return nil
 end
 
+-- The homeward seam (POK-42).  exits: connected map ids; distOf(id) -> a
+-- distance to the ring's eye, or nil for a map the Town Map cannot place;
+-- hereDist: the current map's own distance (nil if unplaced).  Returns the
+-- exit to walk, or nil to stay put.  Unplaced maps rank last; when nothing
+-- can be placed at all the walk falls back to the old aimless stroll.
+function Bots.homeward(exits, distOf, hereDist, rng)
+  if #exits == 0 then return nil end
+  local INF = math.huge
+  local bestDist, ties = INF, {}
+  for _, id in ipairs(exits) do
+    local d = (distOf and distOf(id)) or INF
+    if d < bestDist then
+      bestDist, ties = d, { id }
+    elseif d == bestDist and d < INF then
+      ties[#ties + 1] = id
+    end
+  end
+  if bestDist == INF then return exits[rng(1, #exits)] end
+  if hereDist and hereDist < bestDist then return nil end
+  return ties[rng(1, #ties)]
+end
+
+-- The deck, not the dice (POK-43).  Deal `n` bots across `count` towns so
+-- no two share one while towns remain; past the count the deal wraps.
+function Bots.dealTowns(count, n, rng)
+  local deck = {}
+  for i = 1, count do deck[i] = i end
+  for i = count, 2, -1 do
+    local j = rng(1, i)
+    deck[i], deck[j] = deck[j], deck[i]
+  end
+  local out = {}
+  for k = 1, n do out[k] = deck[(k - 1) % count + 1] end
+  return out
+end
+
 return Bots
