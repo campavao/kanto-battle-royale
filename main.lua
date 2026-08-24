@@ -1613,9 +1613,10 @@ return function(mod)
     if p.bot then
       if not (self.peeked and self.peeked.id == id) then
         local data = self.game and self.game.data
+        local bag = self:botBag(id)   -- the TM shows in the peek too (POK-62)
         self.peeked = { id = id, bot = true,
                         party = Peek.botParty(Bots, self.matchSeed, id, data, self:level()),
-                        items = BOT_LOOT.items, money = BOT_LOOT.money }
+                        items = bag.items, money = bag.money }
       end
       return
     end
@@ -2209,17 +2210,32 @@ return function(mod)
     self:checkWinner()
   end
 
-  -- A bot's loot: its team as balls and its authored bag (BOT_LOOT -- a
-  -- bot carries no real bag) where it stood, whoever put it down: the fog,
+  -- A bot's bag: the authored staples plus its one seeded TM (POK-62),
+  -- the same answer for the spill on the ground and the spectator's peek
+  function BR:botBag(id)
+    local items = {}
+    for _, it in ipairs(BOT_LOOT.items) do items[#items + 1] = it end
+    local tm = Bots.lootTM(self.matchSeed, id)
+    local data = self.game and self.game.data
+    if tm and data and data.items and data.items[tm] then
+      items[#items + 1] = { id = tm, n = 1 }
+    end
+    return { items = items, money = BOT_LOOT.money }
+  end
+
+  -- A bot's loot: its team as balls and its authored bag (botBag -- a
+  -- bot carries no real one) where it stood, whoever put it down: the fog,
   -- another bot, or a player, who now finds it on the ground beside them
   -- rather than in their pocket (POK-25).
   function BR:spillBot(id, p)
     local data = self.game and self.game.data
     if not (data and p and p.map and p.x and p.y) then return end
     local party = Bots.party(self.matchSeed, id, data, self:level())
+    local bag = self:botBag(id)
+    bag.name = p.name
     local spill = Spills.build(id, p.map, p.x, p.y, party, function(x, y)
       return Spawn.walkable(data.maps, data.tilesets, p.map, x, y)
-    end, { items = BOT_LOOT.items, money = BOT_LOOT.money, name = p.name })
+    end, bag)
     if spill and self.relay then
       self.relay:broadcast(Wire.spill(spill.map, spill.mons, spill.bag))
       self.spills:add(spill)

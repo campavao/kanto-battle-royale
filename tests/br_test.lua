@@ -979,6 +979,26 @@ do
   end
   ok(not dup, "no two bots share a town while towns remain")
   eq(#Bots.dealTowns(3, 7, Spawn.rng(7)), 7, "more bots than towns still all land")
+
+  -- POK-62: the TM in the bag
+  local inPool = {}
+  for _, id in ipairs(Bots.TM_COMMON) do inPool[id] = true end
+  for _, id in ipairs(Bots.TM_PRIZE) do inPool[id] = true end
+  eq(Bots.lootTM(4242, 1001), Bots.lootTM(4242, 1001),
+     "the bag's TM is stable for a seed")
+  ok(Bots.lootTM(4242, 1001) ~= Bots.lootTM(4242, 1002)
+     or Bots.lootTM(4242, 1003) ~= Bots.lootTM(4242, 1002),
+     "different bots carry different TMs")
+  local prizes, total = 0, 200
+  for i = 1, total do
+    local tm = Bots.lootTM(4242, 1000 + i)
+    ok(inPool[tm], "every dealt TM is from a pool (" .. tostring(tm) .. ")")
+    for _, pid in ipairs(Bots.TM_PRIZE) do
+      if tm == pid then prizes = prizes + 1 break end
+    end
+  end
+  ok(prizes >= 20 and prizes <= 100,
+     "roughly one bag in four holds a prize (" .. prizes .. "/" .. total .. ")")
 end
 
 -- ------- the Hall of Fame (POK-47)

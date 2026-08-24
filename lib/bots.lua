@@ -240,4 +240,25 @@ function Bots.dealTowns(count, n, rng)
   return out
 end
 
+-- The TM in a bot's bag (POK-62).  Machine moves are only teachable FROM
+-- the bag (POK-58), and nothing in a match sold TMs -- so a fallen bot is
+-- where they enter the economy at all.  Mostly utility, one time in four
+-- a prize; derived from the match seed so every client would agree, and
+-- spent by teaching, so a found TM is a real decision.
+Bots.TM_COMMON = {
+  "TM_BODY_SLAM", "TM_BUBBLEBEAM", "TM_WATER_GUN", "TM_DIG", "TM_MIMIC",
+  "TM_DOUBLE_TEAM", "TM_SWIFT", "TM_REST", "TM_THUNDER_WAVE",
+  "TM_ROCK_SLIDE", "TM_TRI_ATTACK",
+}
+Bots.TM_PRIZE = {
+  "TM_EARTHQUAKE", "TM_BLIZZARD", "TM_THUNDER", "TM_FIRE_BLAST",
+  "TM_HYPER_BEAM", "TM_ICE_BEAM", "TM_THUNDERBOLT",
+}
+
+function Bots.lootTM(seed, id)
+  local rng = Spawn.rng((tonumber(seed) or 1) + (tonumber(id) or 0) * 104729)
+  local pool = (rng(1, 4) == 1) and Bots.TM_PRIZE or Bots.TM_COMMON
+  return pool[rng(1, #pool)]
+end
+
 return Bots
