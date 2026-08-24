@@ -520,6 +520,14 @@ do
      "scaling never demotes a mon that is already past the rung")
   ok(not Levels.needsScaling(nil, 30), "no mon needs no scaling")
 
+  -- POK-38: the rung raises the ceiling, never the floor
+  eq(Levels.carryHp(22, 0, 47), 0, "a fainted mon stays fainted across a rung")
+  eq(Levels.carryHp(22, 22, 47), 47, "an untouched mon rides up to the new max")
+  eq(Levels.carryHp(22, 10, 47), 35, "damage carries as an absolute amount")
+  eq(Levels.carryHp(40, 1, 41), 2, "a 1 HP mon gains just the max-HP growth")
+  eq(Levels.carryHp(50, 2, 40), 1, "the 1 HP floor holds even if the max shrank")
+  eq(Levels.carryHp(0, 0, 30), 30, "a mon with no recorded stats arrives whole")
+
   -- a bot's team is built at the rung it is fought at
   local Bots = require("mods.battle_royale.lib.bots")
   local low = Bots.party(1, Bots.idFor(1), nil, 5)

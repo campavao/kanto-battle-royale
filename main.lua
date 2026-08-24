@@ -1674,7 +1674,8 @@ return function(mod)
   -- moves, and automatic LEVEL evolutions (stones and trades stay manual,
   -- D12).  Damage carries across as an absolute amount, which is what a
   -- Gen 1 level-up does -- a hurt mon stays hurt rather than being quietly
-  -- healed by the clock.
+  -- healed by the clock, and a fainted mon stays fainted rather than being
+  -- revived by it (POK-38).
   local function scaleMon(game, mon, target)
     local Pokemon = require("src.pokemon.Pokemon")
     local Stats = require("src.pokemon.Stats")
@@ -1684,11 +1685,11 @@ return function(mod)
     if not def then return false end
 
     local from = mon.level
-    local hpLost = math.max(0, (mon.stats and mon.stats.hp or 0) - (mon.hp or 0))
+    local oldMax, oldHp = (mon.stats and mon.stats.hp or 0), (mon.hp or 0)
     mon.level = target
     Pokemon.learnMovesFromDayCare(game.data, mon, def, from, target)
     mon.stats = Stats.calc(def, target, mon.dvs, mon.statExp)
-    mon.hp = math.max(1, mon.stats.hp - hpLost)
+    mon.hp = Levels.carryHp(oldMax, oldHp, mon.stats.hp)
     local okExp, exp = pcall(Growth.expForLevel, def.growthRate, target,
                              game.data.growthRates)
     if okExp and exp then mon.exp = exp end
@@ -1711,6 +1712,9 @@ return function(mod)
   -- mid-phase snaps up to the rung too (D12: a late catch stays relevant).
   function BR:tickLevels()
     if not (self.phase == "match" and self.game) then return end
+    -- an OUT player's party is a record of the fall, not a combatant --
+    -- leave it alone (POK-38)
+    if self.status == "out" then return end
     local now = clock()
     if not now then return end
     if (now - (self.lastLevelTick or 0)) < 1 then return end
@@ -2495,7 +2499,9 @@ return function(mod)
     if id == self.myId then
       say("You are the last\ntrainer standing!\nYou win!")
     elseif id then
-      say((self.relay:nameOf(id)) .. " wins\nthe match!")
+      -- prefer the roster name: the relay has never heard of a bot (POK-41)
+      local p = self.players and self.players[id]
+      say(((p and p.name) or self.relay:nameOf(id)) .. " wins\nthe match!")
     else
       say("The match is\nover.")
     end
@@ -2791,8 +2797,10 @@ return function(mod)
     -- top-left: the fog, or who you are watching
     if BR.status == "out" then
       local p = BR.watching and BR.players[BR.watching]
-      local who = p and p.name or "<  >"
-      hudBox(("<%s>"):format(who), 0, 0)
+      -- the bare name: the Gen 1 font has no angle brackets, and the box
+      -- position already says "watching" (POK-45)
+      local who = p and p.name or "---"
+      hudBox(who, 0, 0)
     elseif BR.phase == "safari" then
       -- the Safari clock, blinking through its last ten seconds
       local left = BR:safariLeft()

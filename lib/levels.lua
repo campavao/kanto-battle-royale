@@ -36,4 +36,16 @@ function Levels.needsScaling(mon, target)
   return mon ~= nil and (mon.level or 0) < (target or 0)
 end
 
+-- Carry damage across a stat recalc as an absolute amount -- a Gen 1
+-- level-up heals nothing.  Fainted is a state, not an amount: 0 HP rides
+-- through every rung as 0 HP, never revived by the clock (POK-38).
+function Levels.carryHp(oldMax, oldHp, newMax)
+  newMax = tonumber(newMax) or 0
+  oldMax = tonumber(oldMax) or 0
+  local hp = tonumber(oldHp) or 0
+  if oldMax <= 0 then return newMax end -- no old stats: arrive whole
+  if hp <= 0 then return 0 end          -- fainted stays fainted
+  return math.max(1, newMax - math.max(0, oldMax - hp))
+end
+
 return Levels
