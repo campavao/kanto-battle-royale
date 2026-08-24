@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-23T23:52:23.425Z",
+  "generated_at": "2026-08-24T01:40:20.424Z",
   "categories": [
     "MULTIPLAYER"
   ],
@@ -9,7 +9,7 @@
       "id": "battle_royale",
       "name": "Kanto Battle Royale",
       "author": "campavao",
-      "version": "0.4.0",
+      "version": "0.8.0",
       "summary": "Last trainer standing, in Kanto. Real-time presence, forced face-to-face battles, bots, and a fog that closes on the Town Map.",
       "categories": [
         "MULTIPLAYER"
@@ -36,17 +36,17 @@
       "conflicts": [],
       "description_url": "https://github.com/campavao/kanto-battle-royale#readme",
       "first_release": "2026-08-23",
-      "last_release": "2026-08-23",
+      "last_release": "2026-08-24",
       "latest": {
-        "version": "0.4.0",
-        "tag": "v0.4.0",
-        "name": "v0.4.0 — the Safari comes first",
+        "version": "0.8.0",
+        "tag": "v0.8.0",
+        "name": "v0.8.0 — the ground is the record",
         "prerelease": false,
-        "published_at": "2026-08-23T23:52:06Z",
+        "published_at": "2026-08-24T01:40:02Z",
         "zip": {
-          "name": "battle_royale-v0.4.0.zip",
-          "url": "https://github.com/campavao/kanto-battle-royale/releases/download/v0.4.0/battle_royale-v0.4.0.zip",
-          "size": 117480
+          "name": "battle_royale-v0.8.0.zip",
+          "url": "https://github.com/campavao/kanto-battle-royale/releases/download/v0.8.0/battle_royale-v0.8.0.zip",
+          "size": 132316
         }
       },
       "update_check": "ok"
