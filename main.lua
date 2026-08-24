@@ -1930,10 +1930,36 @@ return function(mod)
   -- the runner is quiet.  Plain-text says are the common case; the rare
   -- prompt resolves to its default rather than holding the match hostage.
   function BR:tickAutoResolve(game)
-    if not self.matchWorld then self.runnerBusySince = nil return end
+    if not self.matchWorld then
+      self.runnerBusySince = nil
+      self.linkWaitSince = nil
+      return
+    end
+    local now = clock()
+    -- A link battle's text waits auto-advance too (POK-65): the intro and
+    -- turn messages cannot be parked on forever, so a silent player always
+    -- drifts to the move menu, where the shot clock (POK-59) takes over.
+    -- The menu and the wait-for-remote phases are exempt -- this never
+    -- picks a move -- and the party/bag screens sit above the battle on
+    -- the stack, so top == battle rules them out on its own.
+    local lb = self.localBattle
+    local top = game and game.stack and game.stack:top()
+    if now and lb and lb.kind == "link" and top == lb
+       and lb.phase ~= "menu" and lb.phase ~= "waitBoth"
+       and lb.phase ~= "waitRemote" then
+      self.linkWaitSince = self.linkWaitSince or now
+      if (now - self.linkWaitSince) >= 5
+         and not (self.lastAutoA and (now - self.lastAutoA) < 1) then
+        self.lastAutoA = now
+        if game.input and game.input.pressQueue then
+          table.insert(game.input.pressQueue, "a")
+        end
+      end
+    else
+      self.linkWaitSince = nil
+    end
     local ow = mod.world:overworld()
     local busy = ow and ow.runner and ow.runner.isRunning and ow.runner:isRunning()
-    local now = clock()
     if not (busy and now) then self.runnerBusySince = nil return end
     self.runnerBusySince = self.runnerBusySince or now
     if (now - self.runnerBusySince) < 5 then return end

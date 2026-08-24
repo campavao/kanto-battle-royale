@@ -597,6 +597,31 @@ in-memory hub; the spawn test uses the imported Kanto data when present and
 skips cleanly when it isn't). `relay.test.js` drives `server.js` over real
 loopback sockets.
 
+### The two-client PvP harness
+
+The PvP surface — the forced engage, the lockstep battle, the 30-second
+shot clock, the loser's spill, PLAY AGAIN — is regression-tested with two
+real clients fighting over a local relay:
+
+```sh
+python mods/battle_royale/tests/drivers/pvp/run_pvp.py         # duel
+python mods/battle_royale/tests/drivers/pvp/run_pvp.py stall   # shot clock
+```
+
+The harness boots `relay/server.js` on `127.0.0.1`, launches two LOVE
+instances under scripted drivers (`host_*.lua` / `guest_*.lua`, coordinated
+through handshake files), and watches both logs: any `PVP FAIL` line fails
+the run, both `PVP OK` lines pass it. **duel** walks the guest into the
+host's eyeline in Pewter and plays the fight to a KO — asserting the
+lockstep battle opens on both clients, the loser's bag hits the ground on
+the winner's screen, and PLAY AGAIN returns both to the lobby. **stall**
+has the host go silent mid-battle; lockstep means the fight cannot resolve
+until they move, so the win must come from the shot clock forfeiting them.
+
+It needs a `gen1recomp` checkout, an imported ROM (`POKEPORT_IMPORT_ROM`),
+`node`, and LOVE (`LOVEC` overrides the default path). A run takes a few
+minutes — real matches on real wall-clocks, twice.
+
 ## Credits and licence
 
 MIT, and it ships no game data — you supply your own ROM to gen1recomp.
