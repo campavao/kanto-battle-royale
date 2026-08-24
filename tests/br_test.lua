@@ -47,7 +47,7 @@ do
   ok(Wire.decode({ t = "start", seed = 1, spawns = {} }) == nil, "empty start is refused")
 
   -- the Safari opening (POK-21): start carries the round, beats carry the clock
-  eq(Wire.PROTOCOL, 4, "PLAY AGAIN is PROTOCOL 4")
+  eq(Wire.PROTOCOL, 5, "the bag on the ground is PROTOCOL 5")
   eq(Wire.decode(Wire.again()).t, "again", "again round-trips")
   local safariStart = Wire.decode(Wire.start(7,
     { { id = 1, map = "SAFARI_ZONE_CENTER", x = 2, y = 3 } }, 120))
@@ -68,19 +68,31 @@ do
   eq(Wire.decode(Wire.accept(7)).nonce, 7, "accept nonce")
   eq(Wire.decode(Wire.winner(3)).id, 3, "winner id")
 
-  local lt = Wire.decode(Wire.loot({ { id = "POKE_BALL", n = 6 },
-                                     { id = "POTION", n = 1 } }, 3000))
-  ok(lt ~= nil, "loot round-trips")
-  eq(lt and #lt.items, 2, "loot carries both stacks")
-  eq(lt and lt.items[1].n, 6, "loot carries the count")
-  eq(lt and lt.money, 3000, "loot carries money")
-  ok(Wire.decode({ t = "loot", items = "x" }) == nil, "malformed loot refused")
-  ok(Wire.decode({ t = "loot", items = { { id = "", n = 1 } } }) == nil,
-     "empty item id refused")
-  eq(Wire.decode({ t = "loot", items = {}, money = -5 }).money, 0,
-     "negative money clamps to zero")
-  eq(Wire.decode({ t = "loot", items = { { id = "X", n = 500 } } }).items[1].n, 99,
-     "oversized stack clamps")
+  -- the bag on the ground (POK-25): a spill carries it as one more thing
+  local bagged = Wire.decode(Wire.spill("ROUTE_1",
+    { { key = "7:1", x = 5, y = 6, species = "PIDGEY", level = 8 } },
+    { key = "7:bag", x = 5, y = 5, name = "RED",
+      items = { { id = "POKE_BALL", n = 6 }, { id = "POTION", n = 1 } }, money = 3000 }))
+  ok(bagged ~= nil and bagged.bag ~= nil, "a spill with a bag round-trips")
+  eq(bagged and bagged.bag.key, "7:bag", "the bag has its own key")
+  eq(bagged and #bagged.bag.items, 2, "both stacks")
+  eq(bagged and bagged.bag.items[1].n, 6, "with their counts")
+  eq(bagged and bagged.bag.money, 3000, "and the money")
+  eq(bagged and bagged.bag.name, "RED", "and whose it was")
+  local bagOnly = Wire.decode(Wire.spill("ROUTE_1", {},
+    { key = "7:bag", x = 5, y = 5, items = {}, money = 500 }))
+  ok(bagOnly ~= nil and #bagOnly.mons == 0 and bagOnly.bag.money == 500,
+     "a trainer with nothing but a bag still spills the bag")
+  ok(Wire.decode({ t = "spill", map = "R", mons = {}, bag = { key = "", x = 1, y = 1 } }) == nil,
+     "a keyless bag is refused")
+  ok(Wire.decode({ t = "spill", map = "R", mons = {}, bag = { key = "k", x = 1, y = 1,
+     items = { { id = "", n = 1 } } } }) == nil, "an empty item id is refused")
+  local clamped = Wire.decode({ t = "spill", map = "R", mons = {}, bag = { key = "k", x = 1, y = 1,
+     items = { { id = "X", n = 500 } }, money = -5, name = "ABCDEFGHIJ" } })
+  eq(clamped and clamped.bag.items[1].n, 99, "an oversized stack clamps")
+  eq(clamped and clamped.bag.money, 0, "negative money clamps to zero")
+  eq(clamped and clamped.bag.name, "ABCDEFG", "the name is capped at seven")
+  ok(Wire.loot == nil, "loot is gone from the vocabulary")
   eq(Wire.cleanName("  ab\1cdef ghi "), "abcdef", "name cleaned + capped to 7")
   eq(Wire.cleanName(nil), "PLAYER", "name falls back")
 
@@ -407,6 +419,20 @@ do
   ok(spill.mons[1].key:find("7", 1, true) ~= nil, "and namespaced by owner")
   ok(Spills.build(7, "ROUTE_1", 5, 5, {}, open) == nil, "an empty party spills nothing")
 
+  -- the bag (POK-25): on the cell they fell on, the balls around it
+  local carried = Spills.build(7, "ROUTE_1", 5, 5, party, open,
+    { items = { { id = "POTION", n = 2 } }, money = 500, name = "RED" })
+  ok(carried ~= nil and carried.bag ~= nil, "a carried bag spills with the team")
+  eq(carried and carried.bag.key, "7:bag", "under its own key")
+  eq(carried and (carried.bag.x .. "," .. carried.bag.y), "5,5", "on the cell they fell on")
+  ok(carried and (carried.mons[1].x .. "," .. carried.mons[1].y) ~= "5,5",
+     "with the balls around it")
+  local bagAlone = Spills.build(7, "ROUTE_1", 5, 5, {}, open, { items = {}, money = 500 })
+  ok(bagAlone ~= nil and #bagAlone.mons == 0 and bagAlone.bag.money == 500,
+     "a trainer with no team still drops the bag")
+  ok(Spills.build(7, "ROUTE_1", 5, 5, {}, open, { items = {}, money = 0 }) == nil,
+     "an empty bag is nothing to drop")
+
   -- round-trips, and survives a hostile row
   local decoded = Wire.decode(Wire.spill(spill.map, spill.mons))
   ok(decoded ~= nil, "spill round-trips")
@@ -438,6 +464,15 @@ do
   ok(s:get(spill.mons[1].key) == nil, "for good")
   s:clear()
   eq(s:count(), 0, "and a match end clears the rest")
+
+  -- the bag is one more thing on the ground, with its contents
+  local t = Spills.new(fake)
+  t:add(carried)
+  eq(t:count(), 3, "the bag counts alongside the balls")
+  ok(t:get("7:bag") ~= nil and t:get("7:bag").bag ~= nil and t:get("7:bag").bag.money == 500,
+     "and is findable, with its contents")
+  t:take("7:bag")
+  eq(t:count(), 2, "taking it leaves the balls")
 end
 
 -- ------- level scaling
@@ -835,6 +870,45 @@ do
   eq(#mon.moves, 4, "still four")
   eq(select(2, MoveKit.teach(data, mon, "NOT_A_MOVE")), "no such move", "an unknown move is refused")
   eq(#MoveKit.learnable(data, mon), 2, "SOLARBEAM is left to learn -- and TACKLE, again: forgetting is not forever")
+end
+
+-- ------- main.lua: a local helper is only in scope below its own line
+--
+-- `local function clock()` at line 873 is a nil global at line 810, and the
+-- symptom was every tick of a live match dying with "attempt to call global
+-- 'clock'" -- unseen by any unit test because none of them run the tick
+-- for an alive player after the drop.  luacheck would say so; it is not on
+-- this machine, so this says so.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the early-use scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    local lines = {}
+    for line in (src .. "\n"):gmatch("(.-)\n") do lines[#lines + 1] = line end
+    local defs = {}
+    for i, line in ipairs(lines) do
+      local name = line:match("^%s*local function ([%w_]+)%s*%(")
+      if name and not defs[name] then defs[name] = i end
+    end
+    local early = {}
+    for name, at in pairs(defs) do
+      for i = 1, at - 1 do
+        local line = lines[i]:gsub("%-%-.*$", "")     -- comments do not count
+        -- a call or a reference (`foo(` / `= foo` / `, foo`) but not `.foo`
+        -- or `:foo` (a method or field of the same name is somebody else's)
+        if line:find("[^%w_%.:]" .. name .. "%s*%(") or line:find("^" .. name .. "%s*%(") then
+          early[#early + 1] = ("%s at %d (defined at %d)"):format(name, i, at)
+        end
+      end
+    end
+    table.sort(early)
+    ok(#early == 0, "no local helper is used above its definition"
+       .. (#early > 0 and (": " .. table.concat(early, "; ")) or ""))
+  end
 end
 
 -- ------- one lobby screen, not a menu round-trip (POK-32)

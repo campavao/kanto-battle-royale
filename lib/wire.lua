@@ -48,7 +48,10 @@ local Wire = {}
 --    the zone with a RATTATA and fight whoever it met there
 -- 4: again -- the host sends the room back to the lobby for another match;
 --    a v3 peer would sit in a finished world while the others re-dropped
-Wire.PROTOCOL = 4
+-- 5: a spill carries the fallen trainer's BAG as one more thing on the
+--    ground (items and money, D8's other half) and `loot` is gone -- a v4
+--    peer would wait for a loot message that never comes
+Wire.PROTOCOL = 5
 
 Wire.DIRS = { up = true, down = true, left = true, right = true }
 Wire.STATUS = { lobby = true, alive = true, battle = true, out = true }
@@ -107,24 +110,25 @@ function Wire.decline(nonce, why) return { t = "decline", n = nonce, why = why }
 function Wire.battle(inner) return { t = "bt", m = inner } end
 function Wire.out() return { t = "out" } end
 
--- items: array of { id=, n= }; the loser's whole bag plus their money,
--- unicast to whoever beat them (the first slice of the loot spill)
-function Wire.loot(items, money)
-  return { t = "loot", items = items, money = money }
-end
-
 function Wire.botout(id) return { t = "botout", id = id } end
 
 -- a fallen team on the ground (DESIGN D8); `mons` rows are
--- { key, x, y, species, lv }
-function Wire.spill(map, mons)
+-- { key, x, y, species, lv }, and `bag` -- the trainer's items and money,
+-- one more thing on the ground (POK-25) -- is { key, x, y, items, money,
+-- name }
+function Wire.spill(map, mons, bag)
   local rows = {}
   for i, m in ipairs(mons or {}) do
     -- `lv` on the wire, `level` everywhere else: the field name is short
     -- because a full party ships six of these in one message
     rows[i] = { key = m.key, x = m.x, y = m.y, species = m.species, lv = m.level }
   end
-  return { t = "spill", map = map, mons = rows }
+  local out = { t = "spill", map = map, mons = rows }
+  if bag then
+    out.bag = { key = bag.key, x = bag.x, y = bag.y, items = bag.items,
+                money = bag.money, name = bag.name }
+  end
+  return out
 end
 function Wire.took(key) return { t = "took", key = key } end
 
@@ -243,21 +247,20 @@ decoders.out = function() return { t = "out" } end
 
 local MAX_STACKS = 32
 
-decoders.loot = function(m)
-  if type(m.items) ~= "table" then return nil, "bad items" end
+-- a bag's contents: { id=, n= } stacks, capped the way the bag itself is
+local function decodeItems(list)
+  if type(list) ~= "table" then return nil end
   local items = {}
-  for i, it in ipairs(m.items) do
+  for i, it in ipairs(list) do
     if i > MAX_STACKS then break end
     if type(it) ~= "table" or type(it.id) ~= "string" or it.id == ""
        or #it.id > MAX_ID or type(it.n) ~= "number" then
-      return nil, "bad item"
+      return nil
     end
     local n = math.floor(it.n)
     if n >= 1 then items[#items + 1] = { id = it.id, n = math.min(99, n) } end
   end
-  local money = type(m.money) == "number"
-    and math.max(0, math.min(999999, math.floor(m.money))) or 0
-  return { t = "loot", items = items, money = money }
+  return items
 end
 
 decoders.botout = function(m)
@@ -284,8 +287,23 @@ decoders.spill = function(m)
       level = math.max(1, math.min(100, math.floor(tonumber(row.lv) or 5))),
     }
   end
-  if #mons == 0 then return nil, "empty spill" end
-  return { t = "spill", map = m.map, mons = mons }
+  local bag
+  if m.bag ~= nil then
+    local b = m.bag
+    if type(b) ~= "table" or type(b.key) ~= "string" or b.key == ""
+       or #b.key > MAX_ID or not (isCell(b.x) and isCell(b.y)) then
+      return nil, "bad bag"
+    end
+    local items = decodeItems(b.items or {})
+    if not items then return nil, "bad bag items" end
+    local money = type(b.money) == "number"
+      and math.max(0, math.min(999999, math.floor(b.money))) or 0
+    bag = { key = b.key, x = b.x, y = b.y, items = items, money = money,
+            name = type(b.name) == "string" and b.name:sub(1, MAX_NAME) or nil }
+  end
+  -- a trainer with nothing left to spill but a bag still spills the bag
+  if #mons == 0 and not bag then return nil, "empty spill" end
+  return { t = "spill", map = m.map, mons = mons, bag = bag }
 end
 
 decoders.npcout = function(m)

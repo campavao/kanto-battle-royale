@@ -25,6 +25,11 @@ Spills.__index = Spills
 -- up and press A, which is the interaction every Gen 1 player already knows.
 local BALL_SPRITE = "SPRITE_POKE_BALL"
 
+-- The BAG (POK-25) is the mod's own 16x16 sheet, drawn in the item ball's
+-- four shades and registered by main.lua; until that has happened -- or if
+-- the registry will not take it -- the POKeDEX prop stands in.
+Spills.BAG_SPRITE = "SPRITE_POKEDEX"
+
 -- how far from where they fell we will look for somewhere to put a ball
 local SEARCH_RADIUS = 4
 
@@ -63,25 +68,33 @@ function Spills.placeAround(x, y, count, walkable)
 end
 
 -- The wire payload for a fallen party: one entry per Pokemon that had any
--- HP left to spill.  `key` is unique across the match so a client can say
--- "this one is gone" without ambiguity.
-function Spills.build(ownerId, mapId, x, y, party, walkable)
+-- HP left to spill, and -- when the trainer carried anything -- their BAG
+-- (POK-25): items and money as one more thing on the ground, on the very
+-- cell they fell on, the balls around it.  `key` is unique across the
+-- match so a client can say "this one is gone" without ambiguity.
+function Spills.build(ownerId, mapId, x, y, party, walkable, bag)
   local alive = {}
   for _, mon in ipairs(party or {}) do
     if (mon.hp or 0) >= 0 and mon.species then alive[#alive + 1] = mon end
   end
-  if #alive == 0 then return nil end
-  local cells = Spills.placeAround(x, y, #alive, walkable)
   local out = {}
-  for i, mon in ipairs(alive) do
-    local cell = cells[i]
-    if cell then
-      out[#out + 1] = { key = ownerId .. ":" .. i, x = cell.x, y = cell.y,
-                        species = mon.species, level = mon.level or 5 }
+  if #alive > 0 then
+    local cells = Spills.placeAround(x, y, #alive, walkable)
+    for i, mon in ipairs(alive) do
+      local cell = cells[i]
+      if cell then
+        out[#out + 1] = { key = ownerId .. ":" .. i, x = cell.x, y = cell.y,
+                          species = mon.species, level = mon.level or 5 }
+      end
     end
   end
-  if #out == 0 then return nil end
-  return { map = mapId, mons = out }
+  local carried
+  if bag and ((bag.items and #bag.items > 0) or (bag.money or 0) > 0) then
+    carried = { key = ownerId .. ":bag", x = x, y = y, items = bag.items or {},
+                money = bag.money or 0, name = bag.name }
+  end
+  if #out == 0 and not carried then return nil end
+  return { map = mapId, mons = out, bag = carried }
 end
 
 -- ------- the live objects
@@ -97,6 +110,12 @@ function Spills:add(spill)
     self.balls[entry.key] = { key = entry.key, map = spill.map, x = entry.x,
                               y = entry.y, species = entry.species,
                               level = entry.level }
+  end
+  local bag = spill.bag
+  if bag and bag.key then
+    self.balls[bag.key] = { key = bag.key, map = spill.map, x = bag.x, y = bag.y,
+                            bag = { items = bag.items or {}, money = bag.money or 0,
+                                    name = bag.name } }
   end
 end
 
@@ -152,15 +171,18 @@ function Spills:sync(mapId)
     end
   end
   if not mapId then return end
+  self.lastSync = { mapId = mapId, balls = 0, matched = 0 }
   for key, ball in pairs(self.balls) do
+    self.lastSync.balls = self.lastSync.balls + 1
     if ball.map == mapId and not self.spawned[key] then
+      self.lastSync.matched = self.lastSync.matched + 1
       -- pcall'd and logged: this runs from the per-tick hook, where a raw
       -- error is swallowed by the hook wrapper and the only symptom is a
       -- ball that never appears -- which is a miserable thing to debug.
       local ok, npcId, why = pcall(function()
         return self.mod.world:spawnNpc(mapId, {
           name = "BR_SPILL_" .. key,
-          sprite = BALL_SPRITE,
+          sprite = ball.bag and Spills.BAG_SPRITE or BALL_SPRITE,
           x = ball.x, y = ball.y,
           movement = "STAY",
           range = "DOWN",

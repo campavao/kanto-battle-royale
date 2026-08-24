@@ -143,6 +143,23 @@ return function(mod)
   Shim.apply()
   mod.log:info("battle royale: %s", Shim.summary())
 
+  -- The BAG on the ground (POK-25) is our own 16x16 sheet, drawn in the
+  -- item ball's four shades -- Gen 1 has no bag sprite -- and registered
+  -- like any mod actor.  If the registry will not take it, the POKeDEX
+  -- prop stands in and the loot still lands.
+  do
+    local ok, err = pcall(function()
+      mod.content.sprites:register("SPRITE_BR_BAG", {
+        image = "mods/battle_royale/assets/bag.png", frames = 1, walker = false,
+      })
+    end)
+    if ok then
+      Spills.BAG_SPRITE = "SPRITE_BR_BAG"
+    else
+      mod.log:warn("bag sprite not registered (%s); the POKeDEX stands in", tostring(err))
+    end
+  end
+
   mod.options:define({
     { key = "relay", label = "RELAY", type = "text", default = DEFAULT_RELAY },
     -- seconds per ring, not minutes: a short game wants 30, a long one 300
@@ -173,8 +190,6 @@ return function(mod)
     started = false,      -- have I dropped into the world yet this match
     myName = nil,         -- chosen on the NAME row; nil falls back to the save
     matchWorld = false,   -- in a BR world: SAVE stays vetoed until a real save
-    pendingLoot = {},     -- loot that arrived before our own battle result did
-    lootFrom = nil,       -- who we just beat (their loot is expected)
     -- Who the last battle was against, kept OUTSIDE self.battle on purpose:
     -- the channel (and with it self.battle) is torn down by LinkState before
     -- link.battle_ended reaches us, so reading the opponent off self.battle
@@ -253,18 +268,23 @@ return function(mod)
 
   -- ------- room lifecycle
 
-  -- the fallen trainer's bag lands in ours (the first slice of the loot
-  -- spill, DESIGN D8 -- the team-as-catchables half comes later)
-  local function applyLoot(fromId, msg)
-    local save = BR.game and BR.game.save
-    if not save then return end
-    for _, it in ipairs(msg.items) do
-      save.inventory[it.id] = math.min(99, (save.inventory[it.id] or 0) + it.n)
+  -- What a fallen trainer's BAG holds (POK-25, the other half of D8): the
+  -- items and the money, on the ground where they fell, for whoever walks
+  -- over -- no longer a number that changes in the victor's pocket.
+  -- Badges and HMs are the drop's grant, not loot (everyone has them), so
+  -- they stay out of it.
+  local GRANTED = {}
+  for _, id in ipairs(START_BADGES) do GRANTED[id] = true end
+  for _, id in ipairs(START_HMS) do GRANTED[id] = true end
+  local function bagOf(save, name)
+    local items = {}
+    for id, n in pairs((save and save.inventory) or {}) do
+      if not GRANTED[id] and (tonumber(n) or 0) > 0 then
+        items[#items + 1] = { id = id, n = math.floor(n) }
+      end
     end
-    save.bagOrder = nil -- rebuilt from the inventory on the next PACK open
-    save.money = math.min(999999, (save.money or 0) + (msg.money or 0))
-    local name = BR.relay and BR.relay:nameOf(fromId) or "their"
-    say(("You took %s's\nitems!"):format(name))
+    table.sort(items, function(a, b) return a.id < b.id end)
+    return { items = items, money = (save and save.money) or 0, name = name }
   end
 
   local function wireRelay(relay)
@@ -416,8 +436,6 @@ return function(mod)
     self.status = "lobby"
     self.started = false
     self.matchWorld = false
-    self.pendingLoot = {}
-    self.lootFrom = nil
     self.lastOpponent = nil
     self.fledFrom, self.fleeGrace, self.fleeLockout, self.fleeing = {}, {}, {}, nil
     self.pendingDrop = nil   -- a release that never landed (POK-34)
@@ -723,16 +741,6 @@ return function(mod)
       if bot then bot.status = "out" end
       if self:inRound() then self:checkWinner() end
 
-    elseif msg.t == "loot" then
-      -- ours only if we actually beat them; their message can outrun our
-      -- own battle result, so an early arrival waits in pendingLoot
-      if fromId == self.lootFrom then
-        self.lootFrom = nil
-        applyLoot(fromId, msg)
-      else
-        self.pendingLoot[fromId] = msg
-      end
-
     elseif msg.t == "spill" then
       self.spills:add(msg)
 
@@ -793,25 +801,6 @@ return function(mod)
     self:beginBattle(fromId, Engage.isHost(self.myId, fromId), nonce)
   end
 
-  -- Fleeing is not free (POK-24, lib/flee.lua).  After a flee neither of
-  -- the pair engages the other for a few seconds -- the head start a flee
-  -- promises -- and the runner may not initiate on who they fled from for
-  -- longer.  `initiating` asks for both sets; an inbound challenge only
-  -- honours the grace, so a pursuer who catches up again gets their fight.
-  function BR:fleeAvoid(initiating)
-    local now = clock() or 0
-    local avoid = {}
-    for id, until_ in pairs(self.fleeGrace) do
-      if until_ > now then avoid[id] = true else self.fleeGrace[id] = nil end
-    end
-    if initiating then
-      for id, until_ in pairs(self.fleeLockout) do
-        if until_ > now then avoid[id] = true else self.fleeLockout[id] = nil end
-      end
-    end
-    return avoid
-  end
-
   function BR:tryEngage()
     if self.status ~= "alive" or self.battle or self.pending then return end
     local ow = mod.world:overworld()
@@ -866,6 +855,27 @@ return function(mod)
     if love and love.timer and love.timer.getTime then return love.timer.getTime() end
     return nil
   end
+
+  -- (below clock(): a local helper is only in scope after its line)
+  -- Fleeing is not free (POK-24, lib/flee.lua).  After a flee neither of
+  -- the pair engages the other for a few seconds -- the head start a flee
+  -- promises -- and the runner may not initiate on who they fled from for
+  -- longer.  `initiating` asks for both sets; an inbound challenge only
+  -- honours the grace, so a pursuer who catches up again gets their fight.
+  function BR:fleeAvoid(initiating)
+    local now = clock() or 0
+    local avoid = {}
+    for id, until_ in pairs(self.fleeGrace) do
+      if until_ > now then avoid[id] = true else self.fleeGrace[id] = nil end
+    end
+    if initiating then
+      for id, until_ in pairs(self.fleeLockout) do
+        if until_ > now then avoid[id] = true else self.fleeLockout[id] = nil end
+      end
+    end
+    return avoid
+  end
+
 
   local cellCache = {}
   local function walkableCells(mapId)
@@ -1696,11 +1706,16 @@ return function(mod)
                                function(x, y)
                                  return Spawn.walkable(data.maps, data.tilesets,
                                                        here.mapId, x, y)
-                               end)
+                               end,
+                               bagOf(game.save, self:playerName()))
     if not spill then return end
-    relay:broadcast(Wire.spill(spill.map, spill.mons))
+    relay:broadcast(Wire.spill(spill.map, spill.mons, spill.bag))
     self.spills:add(spill)
-    say("Your POKeMON\nscattered!")
+    if #spill.mons > 0 then
+      say("Your POKeMON\nscattered!")
+    elseif spill.bag then
+      say("Your BAG hit\nthe ground!")
+    end
   end
 
   -- Open one: the prompt Oak's lab uses for the starters, take or leave.
@@ -1721,6 +1736,7 @@ return function(mod)
     local ow = mod.world:overworld()
     if not ow then return nil, "no overworld" end
     if ow.transitioning then return nil, "mid-warp" end
+    if ball.bag then return self:openBag(key, ball) end
     local data = game.data
     local def = data.pokemon and data.pokemon[ball.species]
     local name = (def and def.name) or tostring(ball.species)
@@ -1743,6 +1759,50 @@ return function(mod)
           return
         end
         self:claimSpill(key, ball, name)
+      end,
+    }))
+    return true
+  end
+
+  -- A fallen trainer's BAG (POK-25): what it holds, then take or leave.
+  -- The take is claimed for everyone like a ball's, and the contents land
+  -- in our bag the way the loot message used to put them there.
+  function BR:openBag(key, ball)
+    local game = self.game
+    local data = game.data
+    local bag = ball.bag
+    local who = bag.name or "Someone"
+    local lines = {}
+    for _, it in ipairs(bag.items or {}) do
+      local def = data.items and data.items[it.id]
+      lines[#lines + 1] = ("%s x%d"):format((def and def.name) or it.id, it.n)
+    end
+    if (bag.money or 0) > 0 then lines[#lines + 1] = ("¥%d"):format(bag.money) end
+    if #lines == 0 then lines[1] = "nothing" end
+    -- two lines a page, the owner's name on the first
+    local pages = { ("%s's BAG:\n%s"):format(who, lines[1]) }
+    local i = 2
+    while i <= #lines do
+      pages[#pages + 1] = lines[i] .. (lines[i + 1] and ("\n" .. lines[i + 1]) or "")
+      i = i + 2
+    end
+    local TextBox = require("src.render.TextBox")
+    game.stack:push(TextBox.new(game, table.concat(pages, "\f") .. "\fTake it?", nil, {
+      choice = function(yes)
+        if not yes then return end
+        if not self.spills:get(key) then
+          say("It's gone --\nsomeone was\nquicker.")
+          return
+        end
+        self.spills:take(key)
+        if self.relay then self.relay:broadcast(Wire.took(key)) end
+        local save = game.save
+        for _, it in ipairs(bag.items or {}) do
+          save.inventory[it.id] = math.min(99, (save.inventory[it.id] or 0) + it.n)
+        end
+        save.bagOrder = nil -- rebuilt from the inventory on the next PACK open
+        save.money = math.min(999999, (save.money or 0) + (bag.money or 0))
+        say(("You took %s's\nBAG!"):format(who))
       end,
     }))
     return true
@@ -1898,37 +1958,31 @@ return function(mod)
 
   -- A bot is out: its team spills where it fell, exactly as a player's does.
   function BR:eliminateBot(id, p, killerName)
-    local data = BR.game and BR.game.data
     p.status = "out"
     if self.relay then self.relay:broadcast(Wire.botout(id)) end
     self.ghosts:despawn(id)
-    if data and p.map then
-      local party = Bots.party(self.matchSeed, id, data, self:level())
-      local spill = Spills.build(id, p.map, p.x, p.y, party, function(x, y)
-        return Spawn.walkable(data.maps, data.tilesets, p.map, x, y)
-      end)
-      if spill and self.relay then
-        self.relay:broadcast(Wire.spill(spill.map, spill.mons))
-        self.spills:add(spill)
-      end
-    end
+    self:spillBot(id, p)
     if killerName then
       mod.log:info("%s beat %s", tostring(killerName), tostring(p.name))
     end
     self:checkWinner()
   end
 
-  -- Beating a bot is worth a small authored drop rather than a transfer:
-  -- a bot carries no real bag to hand over.
-  local function giveBotLoot(botId)
-    local save = BR.game and BR.game.save
-    if not save then return end
-    for _, it in ipairs(BOT_LOOT.items) do
-      save.inventory[it.id] = math.min(99, (save.inventory[it.id] or 0) + it.n)
+  -- A bot's loot: its team as balls and its authored bag (BOT_LOOT -- a
+  -- bot carries no real bag) where it stood, whoever put it down: the fog,
+  -- another bot, or a player, who now finds it on the ground beside them
+  -- rather than in their pocket (POK-25).
+  function BR:spillBot(id, p)
+    local data = self.game and self.game.data
+    if not (data and p and p.map and p.x and p.y) then return end
+    local party = Bots.party(self.matchSeed, id, data, self:level())
+    local spill = Spills.build(id, p.map, p.x, p.y, party, function(x, y)
+      return Spawn.walkable(data.maps, data.tilesets, p.map, x, y)
+    end, { items = BOT_LOOT.items, money = BOT_LOOT.money, name = p.name })
+    if spill and self.relay then
+      self.relay:broadcast(Wire.spill(spill.map, spill.mons, spill.bag))
+      self.spills:add(spill)
     end
-    save.bagOrder = nil
-    save.money = math.min(999999, (save.money or 0) + BOT_LOOT.money)
-    say(("You beat %s!"):format((BR.players[botId] or {}).name or "them"))
   end
 
   function BR:startBotBattle(botId)
@@ -2247,9 +2301,13 @@ return function(mod)
     if BR.status == "battle" then BR.status = "alive" end
     if ev.result == "win" then
       local bot = BR.players[botId]
-      if bot then bot.status = "out" end
+      if bot then
+        bot.status = "out"
+        BR.ghosts:despawn(botId)
+        BR:spillBot(botId, bot)
+      end
       if BR.relay then BR.relay:broadcast(Wire.botout(botId)) end
-      giveBotLoot(botId)
+      say(("You beat %s!"):format((bot and bot.name) or "them"))
       BR:checkWinner()
     end
     broadcastPlace()
@@ -2308,30 +2366,12 @@ return function(mod)
     end
     BR.fleeing = nil
     if ev.result == "lose" then
-      -- the victor takes the bag, so it has to go out while it still has
-      -- anything in it: eliminate() empties it (and spills the team) below
-      if opponent and BR.relay then
-        local items = {}
-        for id, n in pairs(save.inventory) do
-          items[#items + 1] = { id = id, n = n }
-        end
-        BR.relay:send(opponent, Wire.loot(items, save.money))
-      end
       -- one elimination path for every way of losing, so a PvP defeat
-      -- spills the team exactly as a whiteout or the fog does
+      -- spills the team -- and the bag, on the ground beside the victor
+      -- (POK-25) -- exactly as a whiteout or the fog does
       BR:eliminate("You whited out!\nYou are out of\nthe match.")
     else
       BR.status = "alive"
-      if ev.result == "win" and opponent then
-        -- their loot may already be waiting, or still on the wire
-        local waiting = BR.pendingLoot[opponent]
-        BR.pendingLoot[opponent] = nil
-        if waiting then
-          applyLoot(opponent, waiting)
-        else
-          BR.lootFrom = opponent
-        end
-      end
     end
     broadcastPlace()
   end)
@@ -2856,9 +2896,33 @@ return function(mod)
     local out = {}
     for key, b in pairs(BR.spills.balls) do
       out[#out + 1] = { key = key, map = b.map, x = b.x, y = b.y,
-                        species = b.species, level = b.level }
+                        species = b.species, level = b.level,
+                        bag = b.bag ~= nil or nil }
     end
     return out
+  end
+  mod.exports.bagSprite = function() return Spills.BAG_SPRITE end
+  -- a driver's way to put a bag on the ground here and now: a bag-only
+  -- spill two cells from where we stand (no ball to get in the way)
+  mod.exports.debugSpill = function(dx, dy)
+    local here = mod.world:current()
+    local data = BR.game and BR.game.data
+    if not (here and data) then return nil, "no world" end
+    local x, y = here.x + (dx or 0), here.y + (dy or 2)
+    local spill = Spills.build(999, here.mapId, x, y, {},
+      function(cx, cy) return Spawn.walkable(data.maps, data.tilesets, here.mapId, cx, cy) end,
+      { items = { { id = "POTION", n = 1 } }, money = 500, name = "DEBUG" })
+    if not spill then return nil, "nothing to spill" end
+    BR.spills:add(spill)
+    return spill
+  end
+  -- what the spill table has placed, and what it could not (for drivers)
+  mod.exports.spillState = function()
+    local spawned, failed = {}, {}
+    for key, npcId in pairs(BR.spills.spawned or {}) do spawned[key] = npcId end
+    for key, why in pairs(BR.spills.failed or {}) do failed[key] = why end
+    return { spawned = spawned, failed = failed, here = mod.world:current(),
+             lastSync = BR.spills.lastSync }
   end
   mod.exports.openSpill = function(key) return BR:openSpill(key) end
   mod.exports.inFog = function()

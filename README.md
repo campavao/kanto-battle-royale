@@ -32,6 +32,10 @@ The fog shrinks the world on a shared clock, everyone's level rides the
 same clock, and a fallen team spills onto the ground as Poké Balls anyone
 can claim. See "What's here / what's next" below.
 
+The fog shrinks the world on a shared clock, everyone's level rides the
+same clock, and a fallen team spills onto the ground as Poké Balls anyone
+can claim. See "What's here / what's next" below.
+
 A mod for [gen1recomp](https://github.com/bryanthaboi/gen1recomp).
 
 ## Install
@@ -126,9 +130,9 @@ Meanwhile the **fog** closes in. See below.
 
 Walk into another trainer — be on the tile facing them — and the battle
 begins. Win, lose or run; a lost battle only ends your match if it was your
-last Pokémon. **Knock someone out and you take their bag and their money**
-(the first slice of the loot spill), and their team hits the ground as
-Poké Balls where they fell. **Opening a ball is a gift, not a fight**: it
+last Pokémon. **Knock someone out and their BAG hits the ground where they
+fell** — items and money, one bag with its own sprite, walk over and take
+it — and their team lands around it as Poké Balls. **Opening a ball is a gift, not a fight**: it
 shows the prompt Oak's lab uses —
 
 > This contains a NIDORINO.
@@ -554,14 +558,13 @@ minutes, no starter, caught nothing = out) and a choose-your-town drop, the
 shared loadout plus all
 badges and HMs, real-time presence, forced face-to-face battles, the
 shrinking fog on a shared clock that closes all the way, party-as-health
-elimination from any whiteout, victor-takes-the-bag loot, a save-slot guard
+elimination from any whiteout, bag-and-balls loot on the ground, a save-slot guard
 (matches can't overwrite a real save), last-trainer-standing. Route
 trainers are PvE that pays out: beat one and its team spills, its sprite
 goes, for everyone.
 
 **Next** (from the design in the sibling `pokemon-battle-royale` project's
-`docs/DESIGN.md`): loose item/money pickups on the ground to finish D8 (the
-bag still transfers straight to the victor); the rest of D9 — Teleport /
+`docs/DESIGN.md`): the rest of D9 — Teleport /
 Roar as escape moves, and Repel shrinking your own eyeline; type-based
 overworld abilities (D18/D20); and bots that pick
 a fight with a *player* on sight rather than only closing distance.
