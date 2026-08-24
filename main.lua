@@ -187,6 +187,7 @@ return function(mod)
     pending = nil,        -- an outstanding challenge { to, nonce, host }
     battle = nil,         -- active fight { channel, opponentId, isHost }
     nonceSeq = 0,
+    pendingSays = {},     -- says waiting for a free runner (POK-49/POK-50)
     arming = nil,         -- { map, x, y } while save.new_game reshapes the skeleton
     started = false,      -- have I dropped into the world yet this match
     myName = nil,         -- chosen on the NAME row; nil falls back to the save
@@ -219,6 +220,18 @@ return function(mod)
   }
 
   local function say(text) BRMenu.say(mod, text) end
+
+  -- A say that must not be lost.  The runner refuses a script while one is
+  -- running (POK-49), and a say issued the frame of a warp can be eaten by
+  -- a held button (POK-50) -- so park it here and let tickSays deliver it
+  -- once the runner is free and the delay has passed.  (love.timer inline:
+  -- the clock() helper is defined further down, and locals capture
+  -- lexically -- the POK-24 lesson.)
+  local function sayLater(text, delay)
+    local now = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
+    local q = BR.pendingSays
+    q[#q + 1] = { text = text, at = now + (delay or 0) }
+  end
 
   -- ------- relay address (a mod option, editable from the menu)
 
@@ -444,6 +457,8 @@ return function(mod)
     self.peeked, self.lastPeekAt = nil, nil
     self.pendingDrop = nil   -- a release that never landed (POK-34)
     self.claimedCatch = nil  -- custody taken on a shimmed engine, unconsumed
+    self.pendingSays = {}
+    self.runnerBusySince, self.lastAutoA = nil, nil
     self.dropSeq = nil
     self.safariEndsAt = nil  -- the Safari opening's clock (POK-21)
     self.lastSafariBeat = nil
@@ -622,8 +637,10 @@ return function(mod)
     self.sentMap, self.sentFacing, self.resync = nil, nil, 0
     broadcastPlace()
     if safari > 0 then
-      say(("Catch what you can!\nThe PA calls time\nin %d:%02d."):format(
-        math.floor(safari / 60), safari % 60))
+      -- a beat and a half after landing: past the held A that started the
+      -- match, so the rules are actually readable (POK-50)
+      sayLater(("Catch what you can!\nThe PA calls time\nin %d:%02d."):format(
+        math.floor(safari / 60), safari % 60), 1.5)
     end
   end
 
@@ -652,6 +669,15 @@ return function(mod)
     end
     for _, id in ipairs(START_HMS) do
       if Data.items[id] then save.inventory[id] = 1 end
+    end
+    -- The dex owns everything from frame one, so no in-match catch is ever
+    -- "new" -- the dex-page fanfare and entry screen, a beat that stops an
+    -- online match, never fire (POK-57).  This skeleton is the match's
+    -- throwaway world; real saves never see it.
+    save.pokedex = { seen = {}, owned = {} }
+    for id in pairs(Data.pokemon) do
+      save.pokedex.seen[id] = true
+      save.pokedex.owned[id] = true
     end
     save.bagOrder = nil            -- rebuilt from inventory on next open
     save.pcItems = {}
@@ -1710,6 +1736,35 @@ return function(mod)
 
   -- Runs on a slow tick rather than only on the shrink, so a Pokemon caught
   -- mid-phase snaps up to the rung too (D12: a late catch stays relevant).
+  -- Deliver the says nothing may swallow -- oldest first, one per tick,
+  -- and only when the runner actually takes it (POK-49/POK-50).
+  function BR:tickSays()
+    local q = self.pendingSays
+    if not (q and q[1]) then return end
+    local now = clock()
+    if not now or now < q[1].at then return end
+    if BRMenu.say(mod, q[1].text) then table.remove(q, 1) end
+  end
+
+  -- An online match never waits on a read (POK-54).  Any dialog left open
+  -- five continuous seconds gets pressed through -- one A a second until
+  -- the runner is quiet.  Plain-text says are the common case; the rare
+  -- prompt resolves to its default rather than holding the match hostage.
+  function BR:tickAutoResolve(game)
+    if not self.matchWorld then self.runnerBusySince = nil return end
+    local ow = mod.world:overworld()
+    local busy = ow and ow.runner and ow.runner.isRunning and ow.runner:isRunning()
+    local now = clock()
+    if not (busy and now) then self.runnerBusySince = nil return end
+    self.runnerBusySince = self.runnerBusySince or now
+    if (now - self.runnerBusySince) < 5 then return end
+    if self.lastAutoA and (now - self.lastAutoA) < 1 then return end
+    self.lastAutoA = now
+    if game and game.input and game.input.pressQueue then
+      table.insert(game.input.pressQueue, "a")
+    end
+  end
+
   function BR:tickLevels()
     if not (self.phase == "match" and self.game) then return end
     -- an OUT player's party is a record of the fall, not a combatant --
@@ -1734,9 +1789,9 @@ return function(mod)
     if raised > 0 and self.announcedLevel ~= target then
       self.announcedLevel = target
       if evolved then
-        say(("Your POKeMON grew\nto Lv%d, and one\nevolved!"):format(target))
+        sayLater(("Your POKeMON grew\nto Lv%d, and one\nevolved!"):format(target))
       else
-        say(("Your POKeMON grew\nto Lv%d!"):format(target))
+        sayLater(("Your POKeMON grew\nto Lv%d!"):format(target))
       end
     end
   end
@@ -2102,6 +2157,13 @@ return function(mod)
       self.status = "alive"
       self.botFight = nil
       return
+    end
+    -- the intro line reads trainer.name -- overlay the bot's own name on
+    -- the class chassis, the engine's own rival-name pattern (POK-61)
+    local bp = self.players[botId]
+    if bp and bp.name then
+      battle.trainer = setmetatable({ name = bp.name },
+                                    { __index = battle.trainer })
     end
     battle.onFinish = function(result) ow:afterBattle(result, battle) end
     ow:pushBattle(battle)
@@ -2496,14 +2558,17 @@ return function(mod)
     self.ghosts:despawnAll()
     self.pendingDrop = nil   -- the match ended before the release could land
     self.buzzed, self.pickingTown = nil, nil
+    -- via sayLater: the fog line that ended the match is usually still on
+    -- screen, and the runner would refuse -- and silently drop -- the
+    -- banner said directly (POK-49)
     if id == self.myId then
-      say("You are the last\ntrainer standing!\nYou win!")
+      sayLater("You are the last\ntrainer standing!\nYou win!", 0.5)
     elseif id then
       -- prefer the roster name: the relay has never heard of a bot (POK-41)
       local p = self.players and self.players[id]
-      say(((p and p.name) or self.relay:nameOf(id)) .. " wins\nthe match!")
+      sayLater(((p and p.name) or self.relay:nameOf(id)) .. " wins\nthe match!", 0.5)
     else
-      say("The match is\nover.")
+      sayLater("The match is\nover.", 0.5)
     end
   end
 
@@ -2574,6 +2639,12 @@ return function(mod)
         end
       end
     end
+
+    -- pending says deliver in every live phase -- the OVER banner included
+    if BR.phase ~= "off" then BR:tickSays() end
+    -- and neither they nor the engine's own lines may hold the match:
+    -- five silent seconds presses any dialog through (POK-54)
+    BR:tickAutoResolve(game)
 
     if relay and relay:isOpen() and BR:inRound() then
       local h = here()

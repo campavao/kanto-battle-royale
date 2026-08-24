@@ -16,7 +16,9 @@ local function say(mod, text)
   -- the script runner owns the dialogue box, so status lands in a real
   -- Gen 1 text box rather than a bespoke overlay; refused mid-cutscene,
   -- which is correct
-  mod.world:queueScript({ { "show_text", text } })
+  -- true when the runner took it; nil, err when it was busy -- the
+  -- caller (BR's tickSays) retries a say nothing may swallow (POK-49)
+  return (mod.world:queueScript({ { "show_text", text } }))
 end
 
 Menu.say = say
