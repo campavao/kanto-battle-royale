@@ -3364,6 +3364,42 @@ return function(mod)
     return out
   end)
 
+  -- ------- the fog you can see (POK-78)
+  --
+  -- The Town Map ring and the FOG! box say WHERE the fog is; this shows it
+  -- on the overworld while you run.  A purple haze creeps in from the screen
+  -- edges as the ring nears the map you stand on, and pulses over you on the
+  -- bite beat once it has you.  Driven by BR.ring alone (every client has
+  -- it), so a spectator sees the fog closing on whoever they watch --
+  -- mod.world:current() is that map.  Registered before the HUD boxes so
+  -- they stay legible on top; skipped whenever a menu or textbox owns the
+  -- screen (top ~= overworld), which is where "below textboxes" comes from.
+  mod.hooks:wrap("render.hud", function(next, game, viewport)
+    local out = next(game, viewport)
+    if not (BR.phase == "match" and BR.ring and viewport and game.stack) then return out end
+    local ow = mod.world:overworld()
+    if not ow or game.stack:top() ~= ow then return out end
+    local here = mod.world:current()
+    if not (here and here.mapId) then return out end
+    local field = game.data and game.data.field
+    local locations = field and field.townMap and field.townMap.locations
+    local d = Fog.distanceOutside(locations, here.mapId, BR.ring.center, BR.ring.radius)
+    local FogView = require("mods.battle_royale.lib.fogview")
+    local intensity, pulse = FogView.state(d, Fog.coversAll(BR.ring.radius))
+    if intensity <= 0 then return out end
+    local a = FogView.MAX_ALPHA * intensity
+    if pulse then a = a * FogView.pulse(clock()) end
+    local sx = (viewport.gameWidth or 160) / 160
+    local sy = (viewport.gameHeight or 144) / 144
+    local g = love.graphics
+    g.push("all")
+    g.translate(viewport.gameX or 0, viewport.gameY or 0)
+    g.scale(sx, sy)
+    FogView.drawVignette(g, a)
+    g.pop()
+    return out
+  end)
+
   -- ------- the overworld HUD
   --
   -- Three things a match needs on screen without a menu: how many trainers
@@ -3554,6 +3590,18 @@ return function(mod)
   mod.exports.setRelay = function(addr) return BR:setRelayAddress(addr) end
   mod.exports.setName = function(name) return BR:setName(name) end
   mod.exports.setSkin = function(id) return BR:setSkin(id) end
+  -- the fog overlay's state for the map on screen now, for drivers (POK-78)
+  mod.exports.fogView = function()
+    if not (BR.phase == "match" and BR.ring and BR.game) then return nil end
+    local here = mod.world:current()
+    if not (here and here.mapId) then return nil end
+    local FogView = require("mods.battle_royale.lib.fogview")
+    local field = BR.game.data and BR.game.data.field
+    local locations = field and field.townMap and field.townMap.locations
+    local d = Fog.distanceOutside(locations, here.mapId, BR.ring.center, BR.ring.radius)
+    local intensity, pulse = FogView.state(d, Fog.coversAll(BR.ring.radius))
+    return { map = here.mapId, d = d, intensity = intensity, pulse = pulse }
+  end
   mod.exports.skinState = function()
     local Skins = require("mods.battle_royale.lib.skins")
     local out = { wins = BR:winCount(), skin = BR:skinId(), walk = mySprite() }
