@@ -121,6 +121,15 @@ end
 
 function Spills:get(key) return self.balls[key] end
 
+-- The ball on this very cell, if any (POK-75): the talk path asks by the
+-- FACED CELL when the engine's pick answered an NPC standing on a ball.
+function Spills:keyAt(mapId, x, y)
+  for key, ball in pairs(self.balls) do
+    if ball.map == mapId and ball.x == x and ball.y == y then return key end
+  end
+  return nil
+end
+
 function Spills:count()
   local n = 0
   for _ in pairs(self.balls) do n = n + 1 end

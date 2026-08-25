@@ -2105,6 +2105,23 @@ return function(mod)
   -- lands where they happened to be and nobody else can derive that.  Every
   -- client lays out the same balls; the first to open one says so.
 
+  -- Ground truth for a ball's landing cell (POK-75): a walkable tile AND
+  -- nobody standing there -- a ball under an NPC answers the NPC's talk,
+  -- not its own.  Occupancy is only checkable on the loaded map (elsewhere
+  -- there are no runtime objects); placement is computed by whoever fell
+  -- and broadcast (D8), so this one client's view is authoritative.
+  local function spillCellFree(data, mapId, x, y)
+    if not Spawn.walkable(data.maps, data.tilesets, mapId, x, y) then
+      return false
+    end
+    local ow = mod.world:overworld()
+    if ow and ow.map and ow.map.id == mapId and ow.npcs then
+      local Collision = require("src.world.Collision")
+      if Collision.occupied(ow.npcs, x, y) then return false end
+    end
+    return true
+  end
+
   function BR:spillParty()
     local game, relay = self.game, self.relay
     local here = game and mod.world:current()
@@ -2113,8 +2130,7 @@ return function(mod)
     local spill = Spills.build(self.myId or 0, here.mapId, here.x, here.y,
                                game.save.party,
                                function(x, y)
-                                 return Spawn.walkable(data.maps, data.tilesets,
-                                                       here.mapId, x, y)
+                                 return spillCellFree(data, here.mapId, x, y)
                                end,
                                bagOf(game.save, self:playerName()))
     if not spill then return end
@@ -2410,7 +2426,7 @@ return function(mod)
     local bag = self:botBag(id)
     bag.name = p.name
     local spill = Spills.build(id, p.map, p.x, p.y, party, function(x, y)
-      return Spawn.walkable(data.maps, data.tilesets, p.map, x, y)
+      return spillCellFree(data, p.map, x, y)
     end, bag)
     if spill and self.relay then
       self.relay:broadcast(Wire.spill(spill.map, spill.mons, spill.bag))
@@ -2556,6 +2572,19 @@ return function(mod)
     return next(battle)
   end)
 
+  -- No EXP from a trainer battle during a round (POK-74).  The rung is the
+  -- only power curve: D12 scaling never demotes, so paid EXP compounds into
+  -- a party above the fog's beat while every opponent stays at the rung.
+  -- Skipping the award skips the whole payout -- levels, stat exp and the
+  -- "gained EXP" boxes.  Wild battles still pay: a catch snaps to the rung
+  -- anyway, and grinding wilds is time the fog does not give back.
+  mod.hooks:wrap("battle.exp_award", function(next, ctx)
+    if inMatch() and ctx and ctx.battle and ctx.battle.kind == "trainer" then
+      return
+    end
+    return next(ctx)
+  end)
+
   -- No nickname prompt on a catch.  A match team is disposable and you may
   -- catch a dozen under fog pressure; the naming grid is friction with
   -- nothing behind it.  false keeps the species name with no prompt.
@@ -2690,7 +2719,7 @@ return function(mod)
     if not data then return end
     local spill = Spills.build("npc:" .. npc.map .. ":" .. npc.obj,
                                npc.map, npc.x, npc.y, party, function(x, y)
-      return Spawn.walkable(data.maps, data.tilesets, npc.map, x, y)
+      return spillCellFree(data, npc.map, x, y)
     end)
     -- the toggle store is the engine's own "this object is gone" switch; a
     -- reload mid-fade can refuse, and then the sprite lingers until the map
@@ -3122,8 +3151,18 @@ return function(mod)
       say("The SAFARI ZONE\nis closed for\nthe match.")
       return
     end
-    -- a spilled ball: press A to open it, like every item ball in Kanto
+    -- a spilled ball: press A to open it, like every item ball in Kanto.
+    -- The engine's talk pick can answer an NPC standing ON a ball -- it
+    -- landed under them before this guard existed, or a wanderer drifted
+    -- onto it after it landed (POK-75) -- so the faced CELL is asked too:
+    -- during a round, loot beats chatter.
     local spillKey = BR.spills:keyOf(npc)
+    if not spillKey and BR:inRound() and npc and npc.cellX and ow and ow.map then
+      -- mid-step, the engine's pick can carry the cell being ENTERED in
+      -- targetX/Y while cellX still says the one being left -- ask both
+      spillKey = BR.spills:keyAt(ow.map.id, npc.cellX, npc.cellY)
+        or (npc.targetX and BR.spills:keyAt(ow.map.id, npc.targetX, npc.targetY))
+    end
     if spillKey then
       if BR.status == "alive" and not BR.battle and not BR.botFight then
         BR:openSpill(spillKey)
@@ -3497,13 +3536,16 @@ return function(mod)
   mod.exports.peeked = function() return BR.peeked end
   -- a driver's way to put a bag on the ground here and now: a bag-only
   -- spill two cells from where we stand (no ball to get in the way)
-  mod.exports.debugSpill = function(dx, dy)
+  mod.exports.debugSpill = function(dx, dy, withMon)
     local here = mod.world:current()
     local data = BR.game and BR.game.data
     if not (here and data) then return nil, "no world" end
     local x, y = here.x + (dx or 0), here.y + (dy or 2)
-    local spill = Spills.build(999, here.mapId, x, y, {},
-      function(cx, cy) return Spawn.walkable(data.maps, data.tilesets, here.mapId, cx, cy) end,
+    -- withMon: one ball too, so a driver can watch placeAround dodge an
+    -- occupied cell (POK-75); default stays the bag-only spill
+    local party = withMon and { { species = "RATTATA", level = 5, hp = 10 } } or {}
+    local spill = Spills.build(999, here.mapId, x, y, party,
+      function(cx, cy) return spillCellFree(data, here.mapId, cx, cy) end,
       { items = { { id = "POTION", n = 1 } }, money = 500, name = "DEBUG" })
     if not spill then return nil, "nothing to spill" end
     BR.spills:add(spill)

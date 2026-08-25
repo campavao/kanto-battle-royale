@@ -1545,5 +1545,22 @@ do
 end
 
 
+-- POK-75: the talk path finds a ball by its cell
+do
+  local Spills = require("mods.battle_royale.lib.spills")
+  local S = Spills.new({})
+  local open = function() return true end
+  local spill = Spills.build(7, "ROUTE_1", 5, 5,
+    { { species = "PIDGEY", level = 9, hp = 12 } }, open,
+    { items = {}, money = 100, name = "A" })
+  S:add(spill)
+  local mon = spill.mons[1]
+  eq(S:keyAt("ROUTE_1", mon.x, mon.y), mon.key, "keyAt finds the ball's cell")
+  eq(S:keyAt("ROUTE_1", spill.bag.x, spill.bag.y), spill.bag.key,
+     "keyAt finds the bag's cell")
+  ok(S:keyAt("ROUTE_2", mon.x, mon.y) == nil, "keyAt is per-map")
+  ok(S:keyAt("ROUTE_1", 40, 40) == nil, "an empty cell has no key")
+end
+
 io.write(("\nbattle royale: %d passed, %d failed\n"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)
