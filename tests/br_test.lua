@@ -1582,6 +1582,18 @@ do
   eq(Skins.justUnlocked(0, 1)[1].id, "YOUNGSTER", "and it is the YOUNGSTER")
   eq(#Skins.justUnlocked(3, 5), 1, "3->5 unlocks exactly the SAILOR")
   eq(#Skins.justUnlocked(5, 5), 0, "standing still unlocks nothing")
+  -- POK-80: a walk sheet maps back to its trainer class for the PvP pic
+  eq(Skins.classForWalk("SPRITE_GIRL"), "OPP_LASS", "LASS's sheet -> OPP_LASS")
+  eq(Skins.classForWalk("SPRITE_GIOVANNI"), "OPP_GIOVANNI", "GIOVANNI's sheet -> its class")
+  ok(Skins.classForWalk("SPRITE_RED") == nil, "RED has no trainer class")
+  ok(Skins.classForWalk("SPRITE_NOPE") == nil, "an unknown sheet has no class")
+  ok(Skins.classForWalk(nil) == nil, "nil sheet is safe")
+  -- every skin with a class advertises a walk sheet that maps back to it
+  for _, e in ipairs(Skins.LADDER) do
+    if e.class then
+      eq(Skins.classForWalk(e.walk), e.class, "round-trip: " .. e.id)
+    end
+  end
   -- every wardrobe entry points at shipped data
   local okS, sprites = pcall(require, "data.generated.sprites")
   local okT, trainers = pcall(require, "data.generated.trainers")

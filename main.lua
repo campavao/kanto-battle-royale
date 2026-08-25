@@ -824,7 +824,29 @@ return function(mod)
         if opts and not opts.turnLimit and BR:inRound() then
           opts.turnLimit = PVP_TURN_SECONDS
         end
-        return base(game, net, opts)
+        local battle, why = base(game, net, opts)
+        -- POK-80: the link foe wears the skin they picked.  Their advertised
+        -- walk sheet (BR.players[id].sprite, off the wire) maps back to a
+        -- trainer class, and enter() keeps a trainerPic set before it over
+        -- the vanilla RED link default -- so setting it here is the whole
+        -- fix.  Wrapped in pcall: a missing class or pic must never stop a
+        -- battle starting, only leave the RED default.
+        if battle and not battle.trainerPic and BR:inRound() then
+          pcall(function()
+            local opp = BR.battle and BR.battle.opponentId
+            local peer = opp and BR.players[opp]
+            if not (peer and peer.sprite) then return end
+            local Skins = require("mods.battle_royale.lib.skins")
+            local class = Skins.classForWalk(peer.sprite)
+            local data = game and game.data
+            if class and data and data.trainers and data.trainers[class] then
+              local BattleState = require("src.battle.BattleState")
+              battle.trainerPic = BattleState.trainerSprite(
+                data, data.trainers[class], class, 1)
+            end
+          end)
+        end
+        return battle, why
       end
     end
     LinkBattle.newHost = withClock(LinkBattle.newHost)

@@ -36,6 +36,19 @@ function Skins.isUnlocked(entry, wins)
   return (tonumber(wins) or 0) >= (entry and entry.wins or 0)
 end
 
+-- The trainer class a walk sprite belongs to, for the PvP battle pic
+-- (POK-80): a peer advertises its walk sheet on the wire, and this maps it
+-- back to the OPP_ class whose front pic the skin picker previews.  nil for
+-- RED (no class -- you ARE the player) or an unrecognised sheet, so the
+-- link battle keeps its vanilla RED default in those cases.
+function Skins.classForWalk(walkId)
+  if not walkId then return nil end
+  for _, e in ipairs(Skins.LADDER) do
+    if e.walk == walkId then return e.class end
+  end
+  return nil
+end
+
 -- what crossing from `before` to `after` wins just opened, for the banner
 function Skins.justUnlocked(before, after)
   local out = {}
