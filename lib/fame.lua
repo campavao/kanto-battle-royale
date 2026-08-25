@@ -1,7 +1,8 @@
 -- The Hall of Fame (POK-47): the winner's team, one Pokemon at a time --
 -- sprite, cry, name and level, the way the game crowns a Champion -- and
 -- then the record of the run.  Winner-only, local data, nothing on the
--- wire.
+-- wire.  Closing the last page calls `onDone`, because the parade is the
+-- end of the match and not merely the end of a screen (POK-82).
 --
 -- Pure where it can be: Fame.pages and Fame.cardLines are plain functions
 -- over plain tables, so the tests can check the parade order and the card
@@ -47,9 +48,9 @@ end
 
 -- ------- the screen
 
-function Fame.new(game, party, stats)
+function Fame.new(game, party, stats, onDone)
   local self = setmetatable({ game = game, pages = Fame.pages(party, stats),
-                              i = 0, t = 0 }, Fame)
+                              i = 0, t = 0, onDone = onDone }, Fame)
   self:advance()
   return self
 end
@@ -76,6 +77,11 @@ function Fame:advance()
   local page = self.pages[self.i]
   if not page then
     self.game.stack:pop()
+    -- the parade is the end of the run, not just a screen: whoever
+    -- pushed it decides where the champion goes next (POK-82).  Shielded
+    -- because it runs after the pop -- a throw here would strand them on
+    -- a screen that is already gone.
+    if self.onDone then pcall(self.onDone) end
     return
   end
   self:showPage(page)

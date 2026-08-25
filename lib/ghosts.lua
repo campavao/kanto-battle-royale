@@ -52,9 +52,11 @@ function Ghosts:resolveSprite(game, wanted)
   local sprites = game and game.data and game.data.sprites
   if not sprites then return DEFAULT_SPRITE end
   if wanted and sprites[wanted] then return wanted end
-  local field = game.data.field
-  local walk = field and field.playerSprites and field.playerSprites.walk
-  if walk and sprites[walk] then return walk end
+  -- NOT field.playerSprites.walk, which used to be the fallback: POK-79
+  -- points that at the LOCAL player's chosen skin for the length of a
+  -- match, so every peer without an advertised sheet -- every bot -- wore
+  -- whatever the viewer was wearing.  Wearing YOUNGSTER made all of Kanto
+  -- YOUNGSTER (POK-89).  A peer we know nothing about is RED.
   if sprites[DEFAULT_SPRITE] then return DEFAULT_SPRITE end
   return next(sprites)
 end

@@ -452,12 +452,9 @@ clock means a fast-forwarding player floods the relay off its own connection.
 
 ## Engine additions
 
-This mod needs a few small, generic engine seams that stock gen1recomp does
-not have. They are proposed upstream -- the first batch as
-[PR #1746](https://github.com/bryanthaboi/gen1recomp/pull/1746) (RFC 0014),
-the battle-rule hooks and the full-party catch hook as RFCs 0015 and 0016 to
-follow; until they land, `lib/shim.lua` installs them from outside, so you do
-not need a patched build:
+Like the co-op mod, this needs a few small, generic engine seams rather than
+a fork. They live outside `mods/` and are documented in the repo's engine
+diff:
 
 | Where | What | Why |
 | --- | --- | --- |
@@ -472,7 +469,7 @@ All of them are generic — any mod with a self-driven actor, an adopted link
 transport, its own new-game flow, or a rule it wants to hold for a while
 wants them. The first four are proposed upstream as **RFC 0014**, the two
 battle-rule hooks as **RFC 0015**, and the full-party catch hook as
-**RFC 0016**.
+**RFC 0018**.
 
 ### ...and running without them
 
@@ -545,7 +542,7 @@ goes, for everyone.
 **Next** (from the design in the sibling `pokemon-battle-royale` project's
 `docs/DESIGN.md`): the rest of D9 — Teleport /
 Roar as escape moves, and Repel shrinking your own eyeline; type-based
-overworld abilities (D18/D20); and bots that pick
+overworld abilities (D18/D20); a public relay deployment; and bots that pick
 a fight with a *player* on sight rather than only closing distance.
 
 ## Tests
@@ -593,6 +590,45 @@ until they move, so the win must come from the shot clock forfeiting them.
 It needs a `gen1recomp` checkout, an imported ROM (`POKEPORT_IMPORT_ROM`),
 `node`, and LOVE (`LOVEC` overrides the default path). A run takes a few
 minutes — real matches on real wall-clocks, twice.
+
+### The champion's exit
+
+One client and no relay server — a solo room is a `LocalRoom`:
+
+```sh
+POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_IDENTITY=br-fame \
+  POKEPORT_DRIVER=mods/battle_royale/tests/drivers/fame_smoke.lua lovec .
+```
+
+`fame_smoke.lua` hosts a solo match, declares the win (`debugWin` — a
+driver cannot play one down to a single survivor in the time it has), sits
+through the Hall of Fame, and asserts the champion ends up **off** the
+finished world with the room still standing, so PLAY AGAIN can run it
+back. `FAME OK` passes it; any `PVP FAIL` line fails it.
+
+`bot_smoke.lua` is the other half of that: it posts on Pewter's street,
+drops a bot down the block with `debugPlaceBot`, and checks that the bot
+wears a face of its own rather than the viewer's skin, **walks over**
+before the fight, and carries its own name from the battle intro on.
+`BOT OK` passes it.
+
+### Reading the logs
+
+A match writes its own story to the client log, one line per beat: the
+room, the start (seed, roster, clocks, where you dropped), each ring, every
+elimination and what caused it, the winner, the teardown. Every line
+carries the room code and the match seed —
+`[A7QK/91823] ring 3: eye CELADON CITY at 8,6, radius 7` — and the relay
+server prints the same room code on its own lines, so a client log and a
+server log for one game can be lined up afterwards.
+
+Set `BR_DEBUG=1` (or call `setDebug(true)` on the mod's exports) for the
+tier below that: per-map detail, and anything else that would otherwise
+bury the story. It is off by default on purpose.
+
+The relay logs connections with their identity, room create/join/leave, a
+census of the message types each connection actually sent when it goes,
+and errors with the message and room that caused them — never payloads.
 
 ## Credits and licence
 

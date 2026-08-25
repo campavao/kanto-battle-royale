@@ -3,7 +3,7 @@
 -- The mod needs eight things the stock engine has no public way to do (five
 -- are proposed upstream as RFC 0014, two more -- the battle.style and
 -- catch.nickname hooks -- as RFC 0015, and the catch.party_full hook as
--- RFC 0016).  On a build that has them, this file does nothing at all.  On
+-- RFC 0018).  On a build that has them, this file does nothing at all.  On
 -- a build that does not, it installs the same behaviour from outside, so
 -- one mod folder works on both.
 --
@@ -481,7 +481,7 @@ end
 
 -- ----------------------------------------------------------- Boxes.deposit
 --
--- catch.party_full (RFC 0016): the seam is a call site in the middle of
+-- catch.party_full (RFC 0018): the seam is a call site in the middle of
 -- storeCaughtMon, invisible to a mod on a build that predates it -- the same
 -- shape of problem as world.talk, and with the same answer: raise the hook
 -- from the one call the old branch makes that a patch can reach.  A claim

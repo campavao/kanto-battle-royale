@@ -140,6 +140,27 @@ class Conn {
     this.windowLines = 0;
     this.badLines = 0;
     this.closed = false;
+    // What this connection actually moved, by message TYPE and bytes
+    // (POK-86).  Per-message logging on a relay carrying a match's
+    // movement would be its own denial of service, and the payloads are
+    // the players' business -- but a count per type, printed once when
+    // the connection goes, is what tells you afterwards whether a client
+    // that "froze" had stopped sending or stopped being heard.
+    this.seen = new Map();
+    this.bytesIn = 0;
+  }
+
+  note(type, bytes) {
+    this.seen.set(type, (this.seen.get(type) || 0) + 1);
+    this.bytesIn += bytes;
+  }
+
+  census() {
+    if (this.seen.size === 0) return "nothing";
+    return [...this.seen.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([type, n]) => `${type}x${n}`)
+      .join(" ");
   }
 
   send(msg) {
@@ -160,7 +181,10 @@ class Conn {
     // Why a connection went away is the first thing you need when a match
     // breaks, and "the client just vanished" is indistinguishable from
     // "we dropped them for flooding" without it.
-    this.relay.log(`drop ${this.name}#${this.id ?? "-"} (${reason})`);
+    this.relay.log(`drop ${this.name}#${this.id ?? "-"}`
+      + `${this.room ? ` room ${this.room.code}` : ""} (${reason})`
+      + ` after ${Math.round((Date.now() - this.openedAt) / 1000)}s`
+      + ` | in ${this.census()}`);
     this.relay.onClose(this, reason);
     this.socket.destroy();
   }
@@ -309,10 +333,15 @@ export function createRelay(options = {}) {
       if (++conn.badLines > limits.badLines) conn.destroy("bad_input");
       return;
     }
+    conn.note(msg.type, line.length);
     try {
       handle(conn, msg);
     } catch (err) {
-      log(`handler error: ${err && err.stack || err}`);
+      // WHICH message, from whom, in which room: a bare stack tells you
+      // the line of code and nothing about the game that hit it (POK-86)
+      log(`handler error on ${msg.type} from ${conn.name}#${conn.id ?? "-"}`
+          + `${conn.room ? ` in room ${conn.room.code}` : ""}:`
+          + ` ${err && err.stack || err}`);
     }
   }
 
@@ -353,9 +382,17 @@ export function createRelay(options = {}) {
     const conn = new Conn(socket, relay);
     const ipCount = (perIp.get(conn.ip) || 0) + 1;
     if (conns.size >= limits.conns || ipCount > limits.connsPerIp) {
+      // silently dropping these made a full relay look like a network
+      // fault from the client side, with nothing on the server to match
+      log(`refused ${conn.ip}: `
+          + (conns.size >= limits.conns
+             ? `at the ${limits.conns}-connection ceiling`
+             : `${ipCount} connections from one address`));
+      traffic.rejected += 1;
       socket.destroy();
       return;
     }
+    log(`open ${conn.ip} (${conns.size + 1}/${limits.conns})`);
     perIp.set(conn.ip, ipCount);
     conns.add(conn);
     if (conns.size > traffic.peakConns) traffic.peakConns = conns.size;

@@ -65,6 +65,48 @@ local SPECIES = {
   "MEOWTH", "CATERPIE", "WEEDLE", "NIDORAN_M", "NIDORAN_F",
 }
 
+-- What a bot LOOKS like (POK-89): an overworld sheet and the trainer class whose
+-- front pic goes with it, derived from the seed exactly as the name and
+-- the party are, so every client draws the same bot without a byte of it
+-- crossing the wire.
+--
+-- Deliberately NOT the player wardrobe (lib/skins.lua).  Those are earned
+-- with career wins, and a bot in GIOVANNI would advertise a rank nobody
+-- standing there had -- the same confusion that made every bot look like
+-- YOUNGSTER, which is the one-win skin.  These are Kanto's own trainer
+-- types instead, and every pair has BOTH a sheet and a class in the
+-- extracted data (br_test pins that, since a missing sheet asserts inside
+-- NPC.new and a missing class inside BattleState).
+Bots.LOOKS = {
+  { walk = "SPRITE_FISHER",        class = "OPP_FISHER" },
+  { walk = "SPRITE_SUPER_NERD",    class = "OPP_SUPER_NERD" },
+  { walk = "SPRITE_BIKER",         class = "OPP_BIKER" },
+  { walk = "SPRITE_BEAUTY",        class = "OPP_BEAUTY" },
+  { walk = "SPRITE_SWIMMER",       class = "OPP_SWIMMER" },
+  { walk = "SPRITE_COOLTRAINER_M", class = "OPP_COOLTRAINER_M" },
+  { walk = "SPRITE_COOLTRAINER_F", class = "OPP_COOLTRAINER_F" },
+  { walk = "SPRITE_GAMBLER",       class = "OPP_GAMBLER" },
+  { walk = "SPRITE_SCIENTIST",     class = "OPP_SCIENTIST" },
+  { walk = "SPRITE_ROCKER",        class = "OPP_ROCKER" },
+}
+
+-- `data` filters to what this build actually has, the way Bots.party does
+-- with species.  nil means this build has none of them, and the caller
+-- keeps whatever default it had.
+function Bots.look(seed, id, data)
+  local pool = {}
+  for _, e in ipairs(Bots.LOOKS) do
+    local haveWalk = not (data and data.sprites) or data.sprites[e.walk]
+    local haveClass = not (data and data.trainers) or data.trainers[e.class]
+    if haveWalk and haveClass then pool[#pool + 1] = e end
+  end
+  if #pool == 0 then return nil end
+  -- a stream of its own: sharing the name's or the party's would tie a
+  -- bot's face to its team, and every FISHER would lead the same mon
+  local rng = Bots.rng((tonumber(seed) or 1) + 104729, id)
+  return pool[rng(1, #pool)]
+end
+
 local DIRS = { "up", "down", "left", "right" }
 local DELTA = { up = { 0, -1 }, down = { 0, 1 }, left = { -1, 0 }, right = { 1, 0 } }
 
@@ -203,6 +245,40 @@ function Bots.wander(bot, rng, canWalk, toward)
   end
   return nil
 end
+
+-- The stride (POK-85): ONE step toward `toward`, no pause and no
+-- wandering.  Bots.wander is a roam -- it pauses a fifth of the time, it
+-- keeps its heading, it strolls off when boxed in -- which is right for a
+-- bot with nowhere to be and wrong for one that has just spotted you and
+-- is walking over.  nil means it cannot get closer: already adjacent, or
+-- walled off.
+function Bots.approach(bot, canWalk, toward)
+  if not (bot and toward and bot.x and bot.y and toward.x and toward.y) then
+    return nil
+  end
+  local dx, dy = toward.x - bot.x, toward.y - bot.y
+  -- adjacent is as close as a trainer gets; standing ON you is not a beat
+  if math.abs(dx) + math.abs(dy) <= 1 then return nil end
+  local wants = {}
+  if math.abs(dx) >= math.abs(dy) then
+    wants[1] = dx > 0 and "right" or (dx < 0 and "left" or nil)
+    wants[2] = dy > 0 and "down" or (dy < 0 and "up" or nil)
+  else
+    wants[1] = dy > 0 and "down" or (dy < 0 and "up" or nil)
+    wants[2] = dx > 0 and "right" or (dx < 0 and "left" or nil)
+  end
+  for _, dir in ipairs(wants) do
+    local d = DELTA[dir]
+    if d and canWalk(bot.map, bot.x + d[1], bot.y + d[2]) then return dir end
+  end
+  return nil
+end
+
+-- How far, and how fast, that stride goes.  A walk across the road, not a
+-- trek across the route: past the cap the fight starts anyway, because a
+-- bot picking its way around a ledge reads as a fight that hung.
+Bots.WALKUP_STEPS = 8
+Bots.WALKUP_SECONDS = 0.14   -- brisker than a roam beat; they are coming for you
 
 -- The homeward seam (POK-42).  exits: connected map ids; distOf(id) -> a
 -- distance to the ring's eye, or nil for a map the Town Map cannot place;

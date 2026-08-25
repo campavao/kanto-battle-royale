@@ -41,6 +41,7 @@ local Fame = require("mods.battle_royale.lib.fame")
 local Gyms = require("mods.battle_royale.lib.gyms")
 local Peek = require("mods.battle_royale.lib.peek")
 local BRMenu = require("mods.battle_royale.lib.menu")
+local Log = require("mods.battle_royale.lib.log")
 
 local SCREEN = "BattleRoyaleMenu"
 -- The relay the mod ships pointed at, so downloading it and pressing QUICK
@@ -78,9 +79,12 @@ local QUICK_START_SECONDS = 30
 -- somebody arriving late deserves a moment to see the lobby before the drop
 local QUICK_START_GRACE = 10
 
--- The trainer class a bot fights as.  The class only supplies the sprite,
--- the name banner and the AI temperament -- the party comes from
--- Bots.party through the trainer.party hook below.
+-- The trainer class a bot fights as when it has no look of its own -- a
+-- build missing every sheet in Bots.LOOKS.  The class supplies the pic
+-- and the AI temperament; the party comes from Bots.party through the
+-- trainer.party hook, and the NAME is overlaid with the bot's own.
+-- Bots.look is what normally decides this now (POK-89): one hardcoded
+-- class meant every bot in Kanto was the same YOUNGSTER.
 local BOT_TRAINER_CLASS = "OPP_YOUNGSTER"
 
 -- What beating a bot is worth.  Bots do not carry a real bag, so this is
@@ -170,7 +174,12 @@ return function(mod)
   -- folder runs on a stock build.  First, because everything below assumes
   -- they exist.
   Shim.apply()
-  mod.log:info("battle royale: %s", Shim.summary())
+  -- The match log (POK-86).  say() is the story, deep() is off unless
+  -- BR_DEBUG is set, and both carry the room code and seed so this log
+  -- and the relay's own can be lined up afterwards.
+  local log = Log.new(mod.log)
+  log:say("battle royale: %s", Shim.summary())
+  if log:isDeep() then log:say("BR_DEBUG is on: the deep tier is printing") end
 
   -- The BAG on the ground (POK-25) is our own 16x16 sheet, drawn in the
   -- item ball's four shades -- Gen 1 has no bag sprite -- and registered
@@ -364,6 +373,22 @@ return function(mod)
     if ps and self.stockWalk then ps.walk = self.stockWalk end
   end
 
+  -- Fast-forward is the engine's, not ours (POK-83).  Game:logicSpeed
+  -- reads speedOverride BEFORE the core.logic_speed hook -- deliberately,
+  -- so no mod can defeat it -- which is also why the mod's speed veto
+  -- (POK-10) cannot see the touch skin's hold-to-fast-forward.  What we
+  -- CAN do is put it back: baseSpeed remembers what the session started
+  -- with, which is --speed / POKEPORT_SPEED on a driver run and nil for a
+  -- player, so restoring it never steals a run argument.
+  function BR:restoreSpeed()
+    local game = self.game
+    if game and self.baseSpeed ~= nil then
+      game.speedOverride = self.baseSpeed or nil
+      game.skinSpeedSaved = nil
+    end
+    self.baseSpeed = nil
+  end
+
   function BR:recordWin()
     local Skins = require("mods.battle_royale.lib.skins")
     local before = self:winCount()
@@ -398,7 +423,12 @@ return function(mod)
   local function wireRelay(relay)
     relay:on("joined", function()
       BR.myId = relay.id
-      BR.phase = "lobby"
+      -- the correlation key: the relay prints this code on every room
+      -- line of its own (POK-86)
+      log:match(relay.code, nil)
+      BR:setPhase("lobby", relay:isHost() and "hosting" or "joined")
+      log:say("room %s as %s#%s%s", tostring(relay.code), myName(),
+              tostring(relay.id), relay:isHost() and " (host)" or "")
       -- a quick-play host is the only one who counts down: whoever opened
       -- the room owns the clock, exactly as they own the start
       if BR.quick and relay:isHost() then
@@ -531,6 +561,7 @@ return function(mod)
   -- Everything one match owns, cleared for the next: a leave (reset) or
   -- PLAY AGAIN (onAgain), which keeps the room.
   function BR:resetMatch()
+    self:restoreSpeed()
     self.ghosts:despawnAll()
     self.spills:clear()
     if self.battle then
@@ -540,7 +571,7 @@ return function(mod)
     self.fellAt = nil
     self.players = {}
     self.pending = nil
-    self.phase = "lobby"
+    self.phase = "lobby"   -- setPhase would log a teardown as a new match
     self.status = "lobby"
     self.started = false
     self.matchWorld = false
@@ -552,6 +583,7 @@ return function(mod)
     self.pendingSays = {}
     self.runnerBusySince, self.lastAutoA = nil, nil
     self.stats = nil
+    self.walkUp = nil
     self.pendingParade = nil
     self.ringDistOf = nil
     self.dropSeq = nil
@@ -592,7 +624,9 @@ return function(mod)
   -- was no longer a match and no longer a save -- the menu said "you left"
   -- and nothing else changed.  If we are in that world, go back to the title.
   function BR:teardown(message)
+    log:say("teardown (%s)", tostring(message or "left"))
     local wasMatchWorld = self.matchWorld
+    log:forget()
     self:restoreSkinWalk()
     if self.relay then self.relay:leave() end
     self:reset()
@@ -608,6 +642,41 @@ return function(mod)
       return
     end
     if message then say(message) end
+  end
+
+  -- Leaving the finished world WITHOUT leaving the room: the throwaway
+  -- Kanto is dropped and the lobby screen comes back with the roster
+  -- intact.  Shared by PLAY AGAIN (onAgain) and the Champion's exit
+  -- (POK-82) -- the two ways a match stops being somewhere you stand.
+  function BR:toLobbyScreen()
+    local game = self.game
+    if not game then return false end
+    self.matchWorld = false   -- the throwaway world is gone; SAVE is theirs again
+    local ok, err = pcall(function()
+      while game.stack:top() do game.stack:pop() end
+      game.stack:push(game:makeTitleState())
+      mod.ui.push(game, SCREEN)
+    end)
+    if not ok then
+      mod.log:warn("could not return to the lobby: %s", tostring(err))
+    end
+    return ok
+  end
+
+  -- The Hall of Fame is the end of the run (POK-82).  Standing in the
+  -- match world after it was a dead end -- nothing tore the match down,
+  -- and phase "over" quietly lifts every in-match menu restriction while
+  -- the winner stands there (LINK and SAVE come back).  So the parade
+  -- hands off to here.  The room is KEPT whenever there still is one, so
+  -- PLAY AGAIN can run it back with the same people -- a host who left
+  -- would close the room on everybody (relay `room_closed`).  Only a
+  -- champion with no room left says goodbye to the relay.
+  function BR:endRun()
+    if self.relay and self.relay:isOpen() then
+      self:toLobbyScreen()
+    else
+      self:teardown()
+    end
   end
 
   -- PLAY AGAIN (POK-20): the host sends the room back to the lobby -- the
@@ -634,16 +703,7 @@ return function(mod)
       local now = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
       self.autoStartAt = now + QUICK_START_SECONDS
     end
-    if wasMatchWorld and game then
-      local ok, err = pcall(function()
-        while game.stack:top() do game.stack:pop() end
-        game.stack:push(game:makeTitleState())
-        mod.ui.push(game, SCREEN)
-      end)
-      if not ok then
-        mod.log:warn("could not return to the lobby: %s", tostring(err))
-      end
-    end
+    if wasMatchWorld and game then self:toLobbyScreen() end
   end
 
   -- ------- starting a match
@@ -689,6 +749,8 @@ return function(mod)
   end
 
   function BR:onStart(msg)
+    -- what this session runs at normally, before anyone holds a bumper
+    self.baseSpeed = (self.game and self.game.speedOverride) or false
     -- find my drop
     local mine
     for _, s in ipairs(msg.spawns) do
@@ -702,23 +764,39 @@ return function(mod)
     -- A bot's name and party are derived from the shared seed rather than
     -- sent, so every client agrees on the team it is about to fight.
     self.matchSeed = msg.seed
+    log:match(self.relay and self.relay.code, msg.seed)
     self.players = {}
     for _, s in ipairs(msg.spawns) do
       if s.id ~= self.myId then
         local bot = Bots.isBot(s.id)
+        -- a bot's face is seeded like its name and its team (POK-89), so
+        -- it needs no wire field -- though place() carries it anyway, the
+        -- same way a human advertises the skin they picked
+        local look = bot and Bots.look(msg.seed, s.id,
+                                       self.game and self.game.data) or nil
         self.players[s.id] = {
           name = bot and Bots.name(msg.seed, s.id) or self.relay:nameOf(s.id),
           map = bot and s.map or nil,   -- a bot is where the host says at once
           x = s.x, y = s.y, facing = "down",
           status = "alive", bot = bot or nil,
+          sprite = look and look.walk or nil,
+          class = look and look.class or nil,
         }
       end
+    end
+    do  -- the drop, in one line you can grep for (POK-86)
+      local bots = 0
+      for id in pairs(self.players) do if Bots.isBot(id) then bots = bots + 1 end end
+      log:say("match starts: %d trainers (%d bots), safari %ss, fog %ss, mine %s at %d,%d",
+              #msg.spawns, bots, tostring(msg.safari or 0), tostring(self:fogSeconds()),
+              tostring(mine.map), mine.x or -1, mine.y or -1)
     end
     -- arm the loadout hook, then start a fresh game straight into the world
     local safari = tonumber(msg.safari) or 0
     self.arming = { map = mine.map, x = mine.x, y = mine.y,
                     safari = safari > 0, safariSeconds = safari }
-    self.phase = safari > 0 and "safari" or "match"
+    self:setPhase(safari > 0 and "safari" or "match",
+                  safari > 0 and "the SAFARI opens" or "straight to the drop")
     self.status = "alive"
     self.started = true
     self.matchWorld = true
@@ -1066,10 +1144,14 @@ return function(mod)
       -- you are the aggressor: the ! over your own head, then the fight
       self.pending = { to = target, nonce = -1, host = true }
       engageFlash(ow and ow.player, function()
-        if BR.pending and BR.pending.to == target then BR.pending = nil end
-        if BR.status == "alive" and not BR.battle and not BR.botFight then
-          BR:startBotBattle(target)
-        end
+        -- ...and then it walks over (POK-85).  pending is held until it
+        -- arrives, so nothing else can start in the meantime.
+        BR:walkUpThen(target, function()
+          if BR.pending and BR.pending.to == target then BR.pending = nil end
+          if BR.status == "alive" and not BR.battle and not BR.botFight then
+            BR:startBotBattle(target)
+          end
+        end)
       end)
       return
     end
@@ -1170,11 +1252,62 @@ return function(mod)
                                   p.status, p.sprite, id))
   end
 
+  -- ------- the walk over (POK-85)
+  --
+  -- The "!" said a bot had seen you and then the battle simply happened,
+  -- from wherever it was standing.  A Gen 1 trainer walks over first, so
+  -- this does: after the flash, the bot closes the distance and the fight
+  -- starts when it arrives.
+  --
+  -- Cosmetic on purpose.  A bot fight is entirely local -- every client
+  -- derives the same party from the seed and there is no handoff to keep
+  -- in step -- so the stride needs nobody's agreement.  A host broadcasts
+  -- the steps so other screens see it too; a guest walks only its own copy
+  -- and the host's next step message puts the bot back where it really is.
+  -- BR.pending is held for the whole walk, so tryEngage cannot start a
+  -- second fight while this one is on its way over.
+  function BR:walkUpThen(botId, onDone)
+    local p = self.players[botId]
+    local me = here()
+    if not (p and me and p.map == me.mapId) then return onDone() end
+    self.walkUp = { id = botId, steps = 0, at = 0, onDone = onDone }
+  end
+
+  function BR:tickWalkUp()
+    local w = self.walkUp
+    if not w then return end
+    local function finish()
+      self.walkUp = nil
+      if w.onDone then w.onDone() end
+    end
+    local p = self.players[w.id]
+    local me = here()
+    -- it died on the way, we left the map, or the match moved on
+    if not (p and me and p.map == me.mapId and p.status == "alive"
+            and self.phase == "match") then return finish() end
+    local now = clock() or 0
+    if (now - (w.at or 0)) < Bots.WALKUP_SECONDS then return end
+    w.at = now
+    -- re-aimed every step: you are free to move, and it follows
+    local dir = Bots.approach(p, canWalk, { x = me.x, y = me.y })
+    if not dir or w.steps >= Bots.WALKUP_STEPS then return finish() end
+    w.steps = w.steps + 1
+    local d = Bots.DELTA[dir]
+    p.facing = dir
+    p.x, p.y = p.x + d[1], p.y + d[2]
+    self.ghosts:pushStep(w.id, dir)
+    if self.relay and self.relay:isHost() then
+      self.relay:broadcast(Wire.step(dir, p.x, p.y, p.map, w.id))
+    end
+  end
+
   function BR:tickBots()
     if not (self.relay and self.relay:isHost() and self:inRound()) then return end
     local now = clock()
+    local striding = self.walkUp and self.walkUp.id
     for id, p in pairs(self.players) do
-      if p.bot and p.status == "alive" and p.map then
+      -- a bot on its way over is not also strolling somewhere (POK-85)
+      if p.bot and p.status == "alive" and p.map and id ~= striding then
         -- every so often, walk a seam into a connected map
         if now and (now - (p.lastRoam or 0)) >= Bots.ROAM_SECONDS then
           roamBot(id, p, now)
@@ -1283,8 +1416,27 @@ return function(mod)
   -- starts with the host's own landing (tickRing stamps it on its first
   -- call), so the Safari never eats into the first ring.
 
+  -- Every phase change goes through here (POK-86).  Seven scattered
+  -- assignments meant the log could not say what the match was DOING,
+  -- only what happened to be printed near the moment it changed.
+  function BR:setPhase(phase, why)
+    if self.phase == phase then return end
+    log:say("phase %s -> %s%s", tostring(self.phase), tostring(phase),
+            why and (" (" .. why .. ")") or "")
+    self.phase = phase
+  end
+
   function BR:inRound()
     return self.phase == "safari" or self.phase == "drop" or self.phase == "match"
+  end
+
+  -- inRound() is the RULES window -- levels, bag, encounters.  This is the
+  -- wider one: the throwaway world is still under our feet, "over"
+  -- included.  A match that has just ended is still not somewhere the
+  -- engine's own link play or a fast-forward belongs (POK-83/84), and
+  -- until POK-82's exit runs there is a real window to stand in.
+  function BR:inSession()
+    return self:inRound() or self.phase == "over"
   end
 
   function BR:safariLeft()
@@ -1320,7 +1472,7 @@ return function(mod)
 
   function BR:onBuzzer()
     if self.phase ~= "safari" then return end
-    self.phase = "drop"
+    self:setPhase("drop", "the buzzer")
     self.buzzed = true
     self:dropBots()
   end
@@ -1414,8 +1566,9 @@ return function(mod)
       if #(save.party or {}) == 0 then
         pcall(function() require("src.core.Sound").play(game.data, "Safari_Zone_PA") end)
         save.safari = nil
-        self:eliminate("PA: Ding-dong!\nTime's up!\fYou caught nothing.\nYou are out of\nthe match.")
-        self.phase = "match"      -- a spectator from here on
+        self:eliminate("PA: Ding-dong!\nTime's up!\fYou caught nothing.\nYou are out of\nthe match.",
+                       "caught nothing")
+        self:setPhase("match", "caught nothing")   -- a spectator from here on
         return
       end
       self.pickingTown = true
@@ -1456,7 +1609,7 @@ return function(mod)
   -- everyone on one square
   function BR:landIn(mapId)
     self.pickingTown = nil
-    self.phase = "match"
+    self:setPhase("match", "landed")
     local game = self.game
     local data = game and game.data
     if not (mapId and data) then return end
@@ -1500,6 +1653,8 @@ return function(mod)
       end
     end
     self.ringDistOf = dists
+    log:say("ring %s: eye %s at %s,%s, radius %s", tostring(phase),
+            tostring(place), tostring(cx), tostring(cy), tostring(radius))
     if was == nil then
       -- the eye is public from the landing (POK-39): the ring itself stays
       -- quiet until it first shrinks, but where it will shrink TO is not a
@@ -1598,6 +1753,7 @@ return function(mod)
     self.npcFog = self.npcFog or {}
     local died = Fog.tickMaps(self.npcFog, self.trainerMaps, townLocations(),
                               self.ring.center, self.ring.radius, now)
+    local swept = 0
     for _, mapId in ipairs(died) do
       local took = 0
       for _, obj in ipairs((data.maps[mapId] and data.maps[mapId].objects) or {}) do
@@ -1607,10 +1763,21 @@ return function(mod)
           if self.relay then self.relay:broadcast(Wire.npcout(mapId, obj.name)) end
         end
       end
+      swept = swept + took
       if took > 0 then
-        -- the measurement POK-35 asks for: how much PvE each phase removes
-        mod.log:info("the fog took %d trainer(s) on %s", took, tostring(mapId))
+        -- POK-87: this used to be an info line PER MAP, every phase, saying
+        -- only a number -- so a fog sweep read like something going wrong
+        -- and told you nothing about what went.  The per-map detail is the
+        -- deep tier's now; the story gets one line for the whole sweep.
+        log:deep("cleared %d static trainers on %s", took, tostring(mapId))
       end
+    end
+    if swept > 0 then
+      -- "static trainers", never just "trainers": the old wording read as
+      -- eliminations, so a sweep that cleared a gym's worth of authored
+      -- NPCs looked like half the lobby dying at once (POK-87)
+      log:say("the ring cleared %d static trainers across %d map(s)",
+              swept, #died)
     end
   end
 
@@ -1725,7 +1892,7 @@ return function(mod)
     if ow then ow.poisonFlash = 12 end
     pcall(function() require("src.core.Sound").play(game.data, "Poisoned") end)
     if not anyLeft then
-      self:eliminate("The fog took your\nlast POKeMON!")
+      self:eliminate("The fog took your\nlast POKeMON!", "fog")
     end
   end
 
@@ -2162,9 +2329,13 @@ return function(mod)
 
   -- One way out of a match, however it happened: a battle whiteout, or the
   -- fog finishing the job outside one.
-  function BR:eliminate(message)
+  -- `cause` is for the log, not the player: the message on screen says
+  -- it in Gen 1 English, this says it in one greppable word (POK-86).
+  function BR:eliminate(message, cause)
     if self.status == "out" or not self:inRound() then return end
     self.status = "out"
+    log:say("OUT: you (%s), %d left", tostring(cause or "unknown"),
+            self:aliveCount())
     -- Where the match ended for us, captured here rather than in any one
     -- caller: a whiteout, a PvP loss and the fog all arrive by different
     -- routes, and only the engine's whiteout then moves us.  The step hook
@@ -2494,7 +2665,8 @@ return function(mod)
     self.ghosts:despawn(id)
     self:spillBot(id, p)
     if killerName then
-      mod.log:info("%s beat %s", tostring(killerName), tostring(p.name))
+      log:say("OUT: %s (beaten by %s), %d left", tostring(p.name),
+              tostring(killerName), self:aliveCount())
     end
     self:checkWinner()
   end
@@ -2555,9 +2727,11 @@ return function(mod)
     -- the party is handed to BattleState through the trainer.party hook
     -- below, which is the engine's own seam for exactly this
     self.botParty = Bots.party(self.matchSeed, botId, game.data, self:level())
+    local look = self.players[botId]
+    local class = (look and look.class) or BOT_TRAINER_CLASS
     local ok, battle = pcall(function()
       return require("src.battle.BattleState")
-        .newTrainer(game, BOT_TRAINER_CLASS, 1)
+        .newTrainer(game, class, 1)
     end)
     self.botParty = nil
     if not ok or not battle then
@@ -2566,12 +2740,24 @@ return function(mod)
       self.botFight = nil
       return
     end
-    -- the intro line reads trainer.name -- overlay the bot's own name on
-    -- the class chassis, the engine's own rival-name pattern (POK-61)
+    -- Overlay the bot's own name on the class chassis, the engine's own
+    -- rival-name pattern (POK-61).  Every line in BattleState reads
+    -- trainer.name live, so this is enough for all of them -- except
+    -- introText, which newTrainer BAKES before we get the battle back
+    -- (BattleState.lua, "%s wants to fight!").  That is why the fight
+    -- opened as the CLASS and only the defeat line said SAM (POK-89): so
+    -- swap the baked-in class for the name rather than reformatting the
+    -- string, which would drop whatever localisation Strings applied.
     local bp = self.players[botId]
     if bp and bp.name then
+      local was = battle.trainer and battle.trainer.name
       battle.trainer = setmetatable({ name = bp.name },
                                     { __index = battle.trainer })
+      if was and was ~= bp.name and type(battle.introText) == "string" then
+        local pattern = was:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%1")
+        battle.introText = battle.introText:gsub(pattern,
+                                                 (bp.name:gsub("%%", "%%%%")), 1)
+      end
     end
     battle.onFinish = function(result) ow:afterBattle(result, battle) end
     ow:pushBattle(battle)
@@ -2974,7 +3160,7 @@ return function(mod)
       -- one elimination path for every way of losing, so a PvP defeat
       -- spills the team -- and the bag, on the ground beside the victor
       -- (POK-25) -- exactly as a whiteout or the fog does
-      BR:eliminate("You whited out!\nYou are out of\nthe match.")
+      BR:eliminate("You whited out!\nYou are out of\nthe match.", "whiteout")
     else
       if ev.result == "win" and BR.stats then
         BR.stats.beats = BR.stats.beats + 1
@@ -3030,13 +3216,15 @@ return function(mod)
 
   function BR:onWinner(id)
     if self.phase == "over" then return end
-    self.phase = "over"
+    self:setPhase("over", "a winner")
     self.ghosts:despawnAll()
     self.pendingDrop = nil   -- the match ended before the release could land
     self.buzzed, self.pickingTown = nil, nil
     -- via sayLater: the fog line that ended the match is usually still on
     -- screen, and the runner would refuse -- and silently drop -- the
     -- banner said directly (POK-49)
+    log:say("WINNER: %s", id == self.myId and "you"
+            or (id and tostring((self.players[id] or {}).name or id) or "nobody"))
     if id == self.myId then
       sayLater("You are the last\ntrainer standing!\nYou win!", 0.5)
       self:recordWin()
@@ -3082,6 +3270,21 @@ return function(mod)
       relay:update()
       relay = BR.relay -- update() may have closed and reset it
     end
+
+    -- A held or toggled fast-forward would outrun the shared clock and
+    -- everyone racing it, so it is taken back the frame it lands -- and,
+    -- because this covers "over" too, a press that arrives late cannot
+    -- surface on the win screen either (POK-83).
+    if BR.baseSpeed ~= nil and BR:inSession() then
+      local want = BR.baseSpeed or nil
+      if game.speedOverride ~= want then
+        game.speedOverride = want
+        game.skinSpeedSaved = nil
+      end
+    end
+
+    -- a bot walking over to fight you, one step per beat (POK-85)
+    BR:tickWalkUp()
 
     -- the quick-play countdown: a lobby that starts itself
     if relay and relay:isOpen() and BR.phase == "lobby"
@@ -3131,7 +3334,8 @@ return function(mod)
       if nowP and nowP >= BR.pendingParade and owP and game.stack:top() == owP
          and not (owP.runner and owP.runner.isRunning and owP.runner:isRunning()) then
         BR.pendingParade = nil
-        game.stack:push(Fame.new(game, game.save.party or {}, BR:matchStats()))
+        game.stack:push(Fame.new(game, game.save.party or {}, BR:matchStats(),
+                                 function() BR:endRun() end))
       end
     end
     -- and neither they nor the engine's own lines may hold the match:
@@ -3222,7 +3426,7 @@ return function(mod)
   -- never blacks anyone out: cable rules leave the real party untouched,
   -- which is why link.battle_ended handles that case separately.)
   mod.events:on("world.blacked_out", function()
-    BR:eliminate("You whited out!\nYou are out of\nthe match.")
+    BR:eliminate("You whited out!\nYou are out of\nthe match.", "whiteout")
   end)
 
   -- Leaving a map takes our copy of every ghost with it: they are runtime
@@ -3242,6 +3446,21 @@ return function(mod)
   -- adjacent and facing, is a second way to start the fight).
 
   mod.hooks:wrap("world.talk", function(next, ow, npc)
+    -- The Cable Club receptionist is the other door to the engine's link
+    -- play (POK-84).  Same reason as the START row, so the same window:
+    -- refused for as long as the match world exists.  The cableClub flag
+    -- is the map's own TX_SCRIPT marker, which is how OverworldState
+    -- picks the receptionist out of a Centre's NPCs in the first place.
+    local def = npc and npc.def
+    local data = BR.game and BR.game.data
+    if BR:inSession() and def and def.text and data and data.textEntry
+       and ow and ow.map and ow.map.def then
+      local entry = data:textEntry(ow.map.def.label, def.text)
+      if entry and entry.cableClub then
+        say("The CABLE CLUB is\nclosed for\nthe match.")
+        return
+      end
+    end
     -- the gate worker sells no admission during a round (POK-40): the
     -- talk path could otherwise charge a second 500 and re-open the zone
     if BR:inRound() and ow and ow.map and ow.map.id == "SAFARI_ZONE_GATE"
@@ -3280,10 +3499,14 @@ return function(mod)
       if Bots.isBot(id) then
         BR.pending = { to = id, nonce = -1, host = true }
         engageFlash(owE and owE.player, function()
-          if BR.pending and BR.pending.to == id then BR.pending = nil end
-          if BR.status == "alive" and not BR.battle and not BR.botFight then
-            BR:startBotBattle(id)
-          end
+          -- you walked into THIS one, so its stride is already over and
+          -- Bots.approach returns nil on the first beat (POK-85)
+          BR:walkUpThen(id, function()
+            if BR.pending and BR.pending.to == id then BR.pending = nil end
+            if BR.status == "alive" and not BR.battle and not BR.botFight then
+              BR:startBotBattle(id)
+            end
+          end)
         end)
         return
       end
@@ -3364,42 +3587,6 @@ return function(mod)
     return out
   end)
 
-  -- ------- the fog you can see (POK-78)
-  --
-  -- The Town Map ring and the FOG! box say WHERE the fog is; this shows it
-  -- on the overworld while you run.  A purple haze creeps in from the screen
-  -- edges as the ring nears the map you stand on, and pulses over you on the
-  -- bite beat once it has you.  Driven by BR.ring alone (every client has
-  -- it), so a spectator sees the fog closing on whoever they watch --
-  -- mod.world:current() is that map.  Registered before the HUD boxes so
-  -- they stay legible on top; skipped whenever a menu or textbox owns the
-  -- screen (top ~= overworld), which is where "below textboxes" comes from.
-  mod.hooks:wrap("render.hud", function(next, game, viewport)
-    local out = next(game, viewport)
-    if not (BR.phase == "match" and BR.ring and viewport and game.stack) then return out end
-    local ow = mod.world:overworld()
-    if not ow or game.stack:top() ~= ow then return out end
-    local here = mod.world:current()
-    if not (here and here.mapId) then return out end
-    local field = game.data and game.data.field
-    local locations = field and field.townMap and field.townMap.locations
-    local d = Fog.distanceOutside(locations, here.mapId, BR.ring.center, BR.ring.radius)
-    local FogView = require("mods.battle_royale.lib.fogview")
-    local intensity, pulse = FogView.state(d, Fog.coversAll(BR.ring.radius))
-    if intensity <= 0 then return out end
-    local a = FogView.MAX_ALPHA * intensity
-    if pulse then a = a * FogView.pulse(clock()) end
-    local sx = (viewport.gameWidth or 160) / 160
-    local sy = (viewport.gameHeight or 144) / 144
-    local g = love.graphics
-    g.push("all")
-    g.translate(viewport.gameX or 0, viewport.gameY or 0)
-    g.scale(sx, sy)
-    FogView.drawVignette(g, a)
-    g.pop()
-    return out
-  end)
-
   -- ------- the overworld HUD
   --
   -- Three things a match needs on screen without a menu: how many trainers
@@ -3467,12 +3654,13 @@ return function(mod)
   mod.hooks:wrap("ui.start_menu.items", function(next, game, items)
     local out = next(game, items)
     if type(out) ~= "table" then return out end
-    local label = (BR:inRound() or BR.phase == "over") and "ROYALE*"
+    local label = BR:inSession() and "ROYALE*"
       or (BR.relay and "ROYALE." or "ROYALE")
     -- the engine's own link play has no business in a match: the mod owns
     -- the transport for PvP, and a second session from inside one is
-    -- undefined at best.  Back the moment the match is over.
-    if BR:inRound() then
+    -- undefined at best.  Gone until the match world is (POK-84) -- the
+    -- guard used to stop at inRound(), so a win handed LINK straight back.
+    if BR:inSession() then
       mod.ui.removeLabel(out, "LINK")
       -- SAVE would run the whole vanilla ceremony -- confirmation, jingle,
       -- "...saved the game!" -- and write nothing (save.write is vetoed
@@ -3590,18 +3778,6 @@ return function(mod)
   mod.exports.setRelay = function(addr) return BR:setRelayAddress(addr) end
   mod.exports.setName = function(name) return BR:setName(name) end
   mod.exports.setSkin = function(id) return BR:setSkin(id) end
-  -- the fog overlay's state for the map on screen now, for drivers (POK-78)
-  mod.exports.fogView = function()
-    if not (BR.phase == "match" and BR.ring and BR.game) then return nil end
-    local here = mod.world:current()
-    if not (here and here.mapId) then return nil end
-    local FogView = require("mods.battle_royale.lib.fogview")
-    local field = BR.game.data and BR.game.data.field
-    local locations = field and field.townMap and field.townMap.locations
-    local d = Fog.distanceOutside(locations, here.mapId, BR.ring.center, BR.ring.radius)
-    local intensity, pulse = FogView.state(d, Fog.coversAll(BR.ring.radius))
-    return { map = here.mapId, d = d, intensity = intensity, pulse = pulse }
-  end
   mod.exports.skinState = function()
     local Skins = require("mods.battle_royale.lib.skins")
     local out = { wins = BR:winCount(), skin = BR:skinId(), walk = mySprite() }
@@ -3682,6 +3858,22 @@ return function(mod)
   end
   mod.exports.level = function() return BR:level() end
   mod.exports.matchStats = function() return BR:matchStats() end
+  -- A driver cannot play a match down to one survivor in the time it has,
+  -- so it can declare the end instead: the same call the host makes when
+  -- checkWinner finds one left, parade and all (POK-47/82).
+  -- POK-86: the deep tier without restarting the game (BR_DEBUG does the
+  -- same from the environment).  Returns what it is now.
+  mod.exports.setDebug = function(on)
+    log:setDeep(on ~= false)
+    log:say("deep logging %s", log:isDeep() and "on" or "off")
+    return log:isDeep()
+  end
+  mod.exports.isDebug = function() return log:isDeep() end
+  mod.exports.debugWin = function()
+    if not BR:inRound() then return nil, "not in a round" end
+    BR:onWinner(BR.myId)
+    return BR.phase
+  end
   mod.exports.inFog = function() return BR.wasInFog == true end
   mod.exports.spillBalls = function()
     local out = {}
@@ -3744,6 +3936,13 @@ return function(mod)
     BR.relay:broadcast(Wire.place(p.map, p.x, p.y, "down", p.status, p.sprite, id))
     return true
   end
+  -- ...and one on the walk over (POK-85): a smoke needs to know the
+  -- stride began, not just that a battle eventually happened
+  mod.exports.walkUp = function()
+    local w = BR.walkUp
+    if not w then return nil end
+    return { id = w.id, steps = w.steps }
+  end
   -- a diagnostic window into the fog gate, for the smokes
   mod.exports.fogProbe = function()
     local here = mod.world:current()
@@ -3770,6 +3969,9 @@ return function(mod)
       if p.bot then
         out[#out + 1] = { id = id, name = p.name, map = p.map, x = p.x, y = p.y,
                           status = p.status,
+                          -- the face it was dealt (POK-89): every bot
+                          -- looking the same was invisible from outside
+                          sprite = p.sprite, class = p.class,
                           -- how far through the fog's count this one is, so
                           -- a stalled sweep is diagnosable from outside
                           fogTicks = p.fogTicks or 0 }

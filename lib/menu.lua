@@ -51,16 +51,26 @@ function Menu.items(mod, BR, game)
   end
 
   if view == "match" then
-    row(BR.status == "out" and "SPECTATING" or ("ALIVE: " .. BR:aliveCount()))
+    -- A finished match is a place you have LEFT (POK-82): the champion is
+    -- sent here once the Hall of Fame closes, so the rows have to read as
+    -- a result, not as a glance at a match still running.  Alive at "over"
+    -- means the last one standing -- one survivor is what ends it.
+    if BR.phase == "over" then
+      row(BR.status == "out" and "MATCH OVER" or "YOU WIN!")
+    else
+      row(BR.status == "out" and "SPECTATING" or ("ALIVE: " .. BR:aliveCount()))
+    end
     if BR.phase == "safari" and BR.safariLeft then
       local left = BR:safariLeft()
       row(("SAFARI %d:%02d"):format(math.floor(left / 60), left % 60))
     end
-    row("LEVEL: " .. tostring(BR:level()))
-    -- where the fog is, and whether you are standing in it
-    local ring = BR.ring
-    if ring and ring.phase and ring.phase > 1 then
-      row("FOG: " .. tostring((ring.center and ring.center.name) or "CLOSING"))
+    if BR.phase ~= "over" then
+      row("LEVEL: " .. tostring(BR:level()))
+      -- where the fog is, and whether you are standing in it
+      local ring = BR.ring
+      if ring and ring.phase and ring.phase > 1 then
+        row("FOG: " .. tostring((ring.center and ring.center.name) or "CLOSING"))
+      end
     end
     -- the host can run it back (POK-20); everyone else waits to be sent
     if BR.phase == "over" and BR.relay and BR.relay:isHost() then

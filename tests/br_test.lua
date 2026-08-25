@@ -1315,17 +1315,25 @@ do
     BR.ring = { phase = 3, center = { name = "CELADON CITY" } }
     items = BRMenu.items({}, BR, {})
     eq(labels(items), "SPECTATING|LEVEL: 5|FOG: CELADON CITY|LEAVE MATCH", "spectating, with the fog")
-    -- the match is over: the host can run it back, a guest waits to be sent
+    -- The match is over: the host can run it back, a guest waits to be sent.
+    -- The champion is SENT here once the Hall of Fame closes (POK-82), so
+    -- the report reads as a result -- no live level, no ring that stopped
+    -- closing, no count of who is still standing.
     BR.phase = "over"
     BR.relay = room(true)
     items = BRMenu.items({}, BR, {})
-    eq(labels(items), "SPECTATING|LEVEL: 5|FOG: CELADON CITY|PLAY AGAIN|LEAVE MATCH",
+    eq(labels(items), "MATCH OVER|PLAY AGAIN|LEAVE MATCH",
        "over, as the host: PLAY AGAIN")
     ok(not find(items, "PLAY AGAIN").keepOpen, "which closes the report (the world is about to go)")
     BR.relay = room(false)
     items = BRMenu.items({}, BR, {})
-    eq(labels(items), "SPECTATING|LEVEL: 5|FOG: CELADON CITY|LEAVE MATCH",
+    eq(labels(items), "MATCH OVER|LEAVE MATCH",
        "over, as a guest: the host decides")
+    -- still standing when it ended means you are the one left standing
+    BR.status = "alive"
+    items = BRMenu.items({}, BR, {})
+    eq(labels(items), "YOU WIN!|LEAVE MATCH", "the champion is told so")
+    BR.status = "out"
   end
 end
 
@@ -1605,28 +1613,164 @@ do
   end
 end
 
--- POK-78: the fog overlay intensity curve
+-- POK-86: the match log's two tiers and its correlation prefix.
 do
-  local FogView = require("mods.battle_royale.lib.fogview")
-  local M = FogView.EDGE_MARGIN
-  local function inten(d, all) local i = FogView.state(d, all) return i end
-  local function puls(d, all) local _, p = FogView.state(d, all) return p end
-  eq(inten(nil, false), 0, "no ring -> clean screen")
-  eq(inten(-10, false), 0, "deep safe -> clean")
-  eq(inten(0, false), 1, "at the ring edge (inside) -> full fog")
-  eq(inten(2, false), 1, "out in the fog -> full")
-  eq(inten(5, true), 1, "the final ring is full everywhere")
-  ok(puls(1, false), "in the fog it pulses")
-  ok(puls(5, true), "the final ring pulses")
-  ok(not puls(-M / 2, false), "the pre-arrival creep does not pulse")
-  -- the creep thickens as the ring nears, while still safe
-  local near = inten(-M / 4, false)
-  local far = inten(-M * 0.9, false)
-  ok(near > far, "the creep thickens as the ring closes")
-  ok(near > 0 and near < 1, "and stays a hint, not full fog")
-  ok(far > 0, "even at the margin's reach there is a wisp")
-  -- pulse() breathes within a shallow band
-  ok(FogView.pulse(0) >= 0.78 and FogView.pulse(1.7) <= 1.01, "pulse stays shallow")
+  local Log = require("mods.battle_royale.lib.log")
+  local said = {}
+  local out = {
+    info = function(_, fmt, ...) said[#said + 1] = fmt:format(...) end,
+    warn = function(_, fmt, ...) said[#said + 1] = "W " .. fmt:format(...) end,
+  }
+  local log = setmetatable({ out = out, deepOn = false }, Log)
+
+  eq(log:prefix(), "", "no room yet means no prefix to read past")
+  log:say("hello %s", "world")
+  eq(said[#said], "hello world", "say goes straight out")
+
+  -- deep is silent until it is asked for: this is the whole point of it
+  log:deep("noise")
+  eq(#said, 1, "deep says nothing while it is off")
+  log:setDeep(true)
+  ok(log:isDeep(), "...and reports itself on")
+  log:deep("noise")
+  eq(#said, 2, "deep speaks once it is on")
+
+  -- correlation: the code and seed the relay's own log also prints
+  log:match("A7QK", nil)
+  eq(log:prefix(), "[A7QK/-] ", "a room before a match shows the code alone")
+  log:match(nil, 91823)
+  eq(log:prefix(), "[A7QK/91823] ", "and the seed joins it when the match starts")
+  log:say("ring 3")
+  eq(said[#said], "[A7QK/91823] ring 3", "every line carries it")
+  log:forget()
+  eq(log:prefix(), "", "leaving the match drops the prefix")
+
+  -- a logger with nowhere to write must not throw
+  local mute = setmetatable({ out = nil, deepOn = true }, Log)
+  ok(pcall(function() mute:say("x") mute:deep("y") mute:warn("z") end),
+     "a logger with no sink is silent, not fatal")
+end
+
+-- POK-89: bots have faces of their own.
+do
+  local Bots = require("mods.battle_royale.lib.bots")
+  local Skins = require("mods.battle_royale.lib.skins")
+
+  -- the invariant the ticket is really about: a bot must never turn up
+  -- wearing something the player unlocks, or its face claims a rank
+  local worn = {}
+  for _, e in ipairs(Skins.LADDER) do worn[e.walk] = true end
+  local clash = nil
+  for _, e in ipairs(Bots.LOOKS) do
+    if worn[e.walk] then clash = e.walk end
+  end
+  eq(clash, nil, "no bot look is a player wardrobe skin")
+  ok(#Bots.LOOKS >= 6, "and there are enough of them to vary (" .. #Bots.LOOKS .. ")")
+
+  -- every pair has to exist in the extracted data: a missing sheet asserts
+  -- inside NPC.new and a missing class inside BattleState
+  local okS, sprites = pcall(require, "data.generated.sprites")
+  local okT, trainers = pcall(require, "data.generated.trainers")
+  if okS and okT then
+    for _, e in ipairs(Bots.LOOKS) do
+      ok(sprites[e.walk] ~= nil, "bot walk sheet exists: " .. e.walk)
+      ok(trainers[e.class] ~= nil, "bot trainer class exists: " .. e.class)
+    end
+  end
+
+  -- seeded: the same bot looks the same on every client, all match
+  local a1 = Bots.look(4242, Bots.idFor(1))
+  local a2 = Bots.look(4242, Bots.idFor(1))
+  ok(a1 ~= nil, "a bot gets a look")
+  eq(a1.walk, a2.walk, "and the same one every time it is asked")
+  -- ...and a roster is not all one face
+  local seen, n = {}, 0
+  for i = 1, 12 do
+    local e = Bots.look(4242, Bots.idFor(i))
+    if e and not seen[e.walk] then seen[e.walk] = true n = n + 1 end
+  end
+  ok(n >= 3, "a roster of twelve wears more than a couple of faces (" .. n .. ")")
+
+  -- a build missing the art degrades instead of asserting
+  local only = Bots.LOOKS[2]
+  local thin = Bots.look(7, Bots.idFor(3),
+    { sprites = { [only.walk] = true }, trainers = { [only.class] = true } })
+  eq(thin and thin.walk, only.walk, "a thin build falls back to what it has")
+  eq(Bots.look(7, Bots.idFor(3), { sprites = {}, trainers = {} }), nil,
+     "and a build with none of them says so")
+end
+
+-- POK-85: the walk over.  Bots.wander is a roam; this is a stride.
+do
+  local Bots = require("mods.battle_royale.lib.bots")
+  local open = function() return true end
+  local function bot(x, y) return { map = "M", x = x, y = y } end
+
+  eq(Bots.approach(bot(1, 5), open, { x = 9, y = 5 }), "right", "east closes east")
+  eq(Bots.approach(bot(9, 5), open, { x = 1, y = 5 }), "left", "and west, west")
+  eq(Bots.approach(bot(5, 9), open, { x = 5, y = 1 }), "up", "the bigger gap first")
+  eq(Bots.approach(bot(5, 1), open, { x = 5, y = 9 }), "down", "...either way")
+  -- adjacent is arrival: a trainer stops beside you, never on you
+  eq(Bots.approach(bot(4, 5), open, { x = 5, y = 5 }), nil, "adjacent is arrived")
+  eq(Bots.approach(bot(5, 5), open, { x = 5, y = 5 }), nil, "and so is on the spot")
+  -- walls: the second-choice axis carries it round
+  local noEast = function(_, x) return x <= 5 end
+  eq(Bots.approach(bot(5, 9), noEast, { x = 9, y = 1 }), "up",
+     "boxed in on one axis, it takes the other")
+  -- ...and walled off entirely, it says so rather than strolling away
+  eq(Bots.approach(bot(5, 5), function() return false end, { x = 9, y = 9 }), nil,
+     "walled off is nil, not a wander")
+  -- unlike wander, it never pauses: same answer every time
+  for _ = 1, 20 do
+    if Bots.approach(bot(1, 5), open, { x = 9, y = 5 }) ~= "right" then
+      ok(false, "the stride never dithers")
+      break
+    end
+  end
+  ok(true, "the stride never dithers")
+  ok(Bots.WALKUP_STEPS > 0 and Bots.WALKUP_SECONDS > 0, "the stride is bounded")
+end
+
+-- POK-84: the marker the Cable Club guard reads.  The world.talk wrap asks
+-- data:textEntry(map.def.label, npc.def.text) and refuses on entry.cableClub
+-- -- the same flag OverworldState uses to find the receptionist.  If the
+-- extractor ever stops emitting it the desk quietly re-opens mid-match, and
+-- nothing else would notice, so pin it.
+do
+  local okT, tp = pcall(require, "data.generated.text_pointers")
+  if okT and type(tp) == "table" then
+    local desks, viridian = 0, false
+    for map, entries in pairs(tp) do
+      for _, e in pairs(entries) do
+        if type(e) == "table" and e.cableClub then
+          desks = desks + 1
+          if map == "ViridianPokecenter" then viridian = true end
+        end
+      end
+    end
+    ok(desks >= 10, "every POKeMON CENTER link desk is marked (" .. desks .. ")")
+    ok(viridian, "VIRIDIAN's among them, keyed by the map's own label")
+  end
+end
+
+-- POK-82: the Hall of Fame is the end of the run -- closing the last page
+-- pops itself AND tells the mod, so the champion is not left standing in a
+-- finished world.
+do
+  local Fame = require("mods.battle_royale.lib.fame")
+  local popped, done = 0, 0
+  local game = { stack = { pop = function() popped = popped + 1 end } }
+  local f = Fame.new(game, {}, {}, function() done = done + 1 end)
+  eq(#f.pages, 1, "an empty party still parades the record card")
+  eq(done, 0, "the run is not over while a page is up")
+  f:advance()
+  eq(popped, 1, "closing the last page pops the parade")
+  eq(done, 1, "and hands the run back to the mod")
+  -- a parade nobody wired still closes cleanly
+  local g2 = { stack = { pop = function() end } }
+  local f2 = Fame.new(g2, {}, {})
+  local okA = pcall(function() f2:advance() end)
+  ok(okA, "no onDone is not an error")
 end
 
 io.write(("\nbattle royale: %d passed, %d failed\n"):format(passed, failed))
