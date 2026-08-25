@@ -93,7 +93,10 @@ local START_SPECIES = "RATTATA"
 local START_LEVEL = 5
 -- TOWN_MAP: the fog ring draws on the TownMap screen, so the map is match
 -- equipment, not a collectible (POK-39)
-local START_ITEMS = { POKE_BALL = 6, POTION = 1, TOWN_MAP = 1 }
+-- SECRET_KEY rides along (POK-69): BLAINE's door is `blocked = not
+-- inventory.SECRET_KEY`, and the mansion crawl for it has no place in a
+-- twenty-minute match when the gym is a POK-26 objective.
+local START_ITEMS = { POKE_BALL = 6, POTION = 1, TOWN_MAP = 1, SECRET_KEY = 1 }
 local START_MONEY = 3000
 
 -- Every badge and every HM, from the drop.
@@ -151,6 +154,14 @@ local STORY_FLAGS = {
   "EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE", "EVENT_BEAT_ROUTE22_RIVAL_2ND_BATTLE",
   "EVENT_BEAT_CERULEAN_RIVAL", "EVENT_BEAT_SS_ANNE_RIVAL",
   "EVENT_BEAT_POKEMON_TOWER_RIVAL", "EVENT_BEAT_SILPH_CO_RIVAL",
+  -- the arena is walkable (POK-69): the roadblocks a story campaign
+  -- meters out are already down when a match begins -- both Snorlax
+  -- (hideBeatenSnorlax reconciles the sprites away on entry), the
+  -- thirsty Saffron gate guards, and the tower's ghost MAROWAK.  The
+  -- rest of Kanto's chases (a bike, the SS ticket, the CARD KEY, the
+  -- SILPH SCOPE) stay vanilla: going and getting one is fair play.
+  "EVENT_BEAT_ROUTE12_SNORLAX", "EVENT_BEAT_ROUTE16_SNORLAX",
+  "EVENT_GAVE_GUARDS_DRINK", "EVENT_BEAT_GHOST_MAROWAK",
 }
 
 return function(mod)
