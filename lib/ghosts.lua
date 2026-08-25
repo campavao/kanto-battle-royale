@@ -28,6 +28,12 @@ Ghosts.__index = Ghosts
 -- past this a backlog would put the ghost visibly behind the truth, so we
 -- teleport instead of politely queueing.
 local MAX_BACKLOG = 3
+-- how long a LONE queued step is held before it plays (POK-70): a steady
+-- walk arrives one step per step-time, so draining the instant each lands
+-- plays as walk-stop-walk-stop -- the stutter a spectator sees.  Holding
+-- the first step a beat lets the next one arrive, and a continuous walk
+-- then plays continuously, one step behind the wire.
+Ghosts.HOLD_TICKS = 12
 
 local FACING_TO_RANGE = { down = "DOWN", up = "UP", left = "LEFT", right = "RIGHT" }
 local DEFAULT_SPRITE = "SPRITE_RED"
@@ -170,11 +176,17 @@ function Ghosts:_syncOne(game, id, myMapId, p)
     return
   end
 
-  local dir = table.remove(g.queue, 1)
+  local dir = g.queue[1]
   if dir then
-    handle:stepNow(dir)
+    g.held = (g.held or 0) + 1
+    if #g.queue >= 2 or g.held > Ghosts.HOLD_TICKS then
+      g.held = 0
+      table.remove(g.queue, 1)
+      handle:stepNow(dir)
+    end
     return
   end
+  g.held = 0
 
   local cx, cy = handle:position()
   if cx ~= p.x or cy ~= p.y then

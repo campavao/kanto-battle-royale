@@ -1003,6 +1003,35 @@ do
   end
 end
 
+-- ------- the ghost walks like a trainer, not a metronome (POK-70)
+
+do
+  local Ghosts = require("mods.battle_royale.lib.ghosts")
+  local steps, placed = {}, false
+  local handle = {
+    setPassable = function() end,
+    isMoving = function() return false end,
+    stepNow = function(_, d) steps[#steps + 1] = d end,
+    position = function() return 0, 0 end,
+    placeAt = function() placed = true end,
+    face = function() end,
+  }
+  local self = setmetatable({ ghosts = {} }, { __index = Ghosts })
+  self._handle = function() return handle end
+  local g = { mapId = "M", queue = { "up" }, npcId = 1 }
+  self.ghosts.x = g
+  local peer = { map = "M", x = 0, y = 0, facing = "down", status = "alive" }
+  for _ = 1, Ghosts.HOLD_TICKS do self:_syncOne(nil, "x", "M", peer) end
+  eq(#steps, 0, "a lone step is held for the jitter buffer")
+  self:_syncOne(nil, "x", "M", peer)
+  eq(#steps, 1, "and plays once the grace runs out")
+  g.queue = { "up", "left" }
+  self:_syncOne(nil, "x", "M", peer)
+  eq(#steps, 2, "a second queued step releases the first at once")
+  eq(g.queue[1], "left", "leaving the follower queued")
+  ok(not placed, "no snap-teleport happened on the way")
+end
+
 -- ------- escapable, not merely walkable (POK-23)
 
 do
