@@ -61,24 +61,27 @@ function Peek.botParty(Bots, seed, id, data, level)
   return party
 end
 
--- ------- rows for a ListMenu
+-- ------- views for the real screens (POK-53)
 
-local function speciesName(data, species)
-  local def = data and data.pokemon and data.pokemon[species]
-  return (def and def.name) or tostring(species)
-end
-
--- "PIDGEY L12" with "23/40" -- and the status, when there is one
-function Peek.partyRows(data, party)
-  local rows = {}
-  for i, m in ipairs(party or {}) do
-    local right = ("%d/%d"):format(m.hp or 0, m.maxHp or 0)
-    if m.status then right = right .. " " .. tostring(m.status):sub(1, 3) end
-    rows[#rows + 1] = { label = ("%s L%d"):format(speciesName(data, m.species), m.level or 1),
-                        right = right, value = i }
+-- a party the engine's own PartyMenu can draw: save-mon lookalikes built
+-- from the summaries -- only species the receiver's data knows, and
+-- stats.hp synthesized for the HP bar.  The screen is the vanilla one;
+-- just the data is borrowed.
+function Peek.saveView(data, party)
+  local view = {}
+  for _, m in ipairs(party or {}) do
+    if data and data.pokemon and data.pokemon[m.species] then
+      view[#view + 1] = {
+        species = m.species,
+        level = m.level or 1,
+        hp = math.max(0, m.hp or 0),
+        status = m.status,
+        stats = { hp = math.max(1, m.maxHp or 1) },
+        moves = m.moves,
+      }
+    end
   end
-  if #rows == 0 then rows[1] = { label = "(no POKeMON)" } end
-  return rows
+  return view
 end
 
 function Peek.moveRows(data, mon)
@@ -91,15 +94,18 @@ function Peek.moveRows(data, mon)
   return rows
 end
 
--- "POTION" with "x2", and the money as its own row
-function Peek.bagRows(data, items, money)
+-- rows in BagMenu's own shape, for the vanilla floating item box: the
+-- item name, "xN" on the right, and the money as a last row of its own.
+-- Empty stays empty -- the item box prints the engine's "Nothing here."
+function Peek.itemRows(data, items, money)
   local rows = {}
   for _, it in ipairs(items or {}) do
     local def = data and data.items and data.items[it.id]
-    rows[#rows + 1] = { label = (def and def.name) or tostring(it.id), right = "x" .. tostring(it.n or 0) }
+    rows[#rows + 1] = { value = it.id,
+                        label = (def and def.name) or tostring(it.id),
+                        right = "x" .. tostring(it.n or 0) }
   end
   if (money or 0) > 0 then rows[#rows + 1] = { label = ("¥%d"):format(money) } end
-  if #rows == 0 then rows[1] = { label = "(nothing)" } end
   return rows
 end
 

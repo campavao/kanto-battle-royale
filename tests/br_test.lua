@@ -981,6 +981,28 @@ do
   end
 end
 
+-- ------- the rival's ambushes never fire in a match (POK-67)
+
+do
+  local src = io.open("mods/battle_royale/main.lua"):read("*a")
+  for _, n in ipairs({
+    "EVENT_BATTLED_RIVAL_IN_OAKS_LAB",
+    "EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE", "EVENT_BEAT_ROUTE22_RIVAL_2ND_BATTLE",
+    "EVENT_BEAT_CERULEAN_RIVAL", "EVENT_BEAT_SS_ANNE_RIVAL",
+    "EVENT_BEAT_POKEMON_TOWER_RIVAL", "EVENT_BEAT_SILPH_CO_RIVAL",
+  }) do
+    ok(src:find(n, 1, true) ~= nil, n .. " rides the loadout")
+    local story = io.open("data/scripts/story.lua"):read("*a")
+      .. io.open("data/scripts/story5.lua"):read("*a")
+    if n ~= "EVENT_BATTLED_RIVAL_IN_OAKS_LAB"
+       and n ~= "EVENT_BEAT_POKEMON_TOWER_RIVAL"
+       and n ~= "EVENT_BEAT_SILPH_CO_RIVAL" then
+      ok(story:find(n, 1, true) ~= nil,
+         n .. " is the engine script's own gate")
+    end
+  end
+end
+
 -- ------- escapable, not merely walkable (POK-23)
 
 do
@@ -1134,14 +1156,19 @@ do
   eq(table.concat(s.party[1].moves, ","), "GUST,SAND_ATTACK", "move ids only")
   ok(s.party[1].dvs == nil and s.party[1].exp == nil, "and nothing that rebuilds the record")
   eq(s.money, 500, "the money rides along")
-  local rows = Peek.partyRows(data, s.party)
-  eq(rows[1].label .. " | " .. rows[1].right, "PIDGEY L12 | 23/40 PSN", "a party row reads name, level, HP, status")
-  eq(Peek.partyRows(data, {})[1].label, "(no POKeMON)", "an empty party says so")
+  -- the vanilla screens draw a borrowed view (POK-53)
+  local view = Peek.saveView(data, s.party)
+  eq(#view, 1, "the save view keeps known species")
+  eq(view[1].hp .. "/" .. view[1].stats.hp, "23/40", "hp, and a synthesized stats.hp for the bar")
+  eq(view[1].status, "PSN", "the status rides into the view")
+  eq(#Peek.saveView(data, { { species = "MISSINGNO", level = 5 } }), 0,
+     "an unknown species never reaches the screen")
   eq(Peek.moveRows(data, s.party[1])[2].label, "SAND-ATTACK", "moves by name")
-  local bag = Peek.bagRows(data, s.items, s.money)
-  eq(bag[1].label .. " " .. bag[1].right, "POTION x2", "a bag row reads name and count")
-  eq(bag[2].label, "¥500", "and the money is a row of its own")
-  eq(Peek.bagRows(data, {}, 0)[1].label, "(nothing)", "an empty bag says so")
+  local bag = Peek.itemRows(data, s.items, s.money)
+  eq(bag[1].label .. " " .. bag[1].right, "POTION x2", "an item row in BagMenu's own shape")
+  eq(bag[1].value, "POTION", "and it carries the id")
+  eq(bag[2].label, "¥500", "the money is a row of its own")
+  eq(#Peek.itemRows(data, {}, 0), 0, "an empty bag stays empty -- the item box says Nothing here")
   local Bots = require("mods.battle_royale.lib.bots")
   local bot = Peek.botParty(Bots, 1, Bots.idFor(1), nil, 30)
   ok(#bot >= 1 and bot[1].species ~= nil, "a bot's party is derived from the seed")

@@ -41,7 +41,7 @@ Fog.PHASES = { 15, 9, 7, 5, 3, 1.5, 0, Fog.EVERYWHERE }
 -- match therefore reaches the all-fog endgame at about sixteen minutes; the
 -- mod exposes it as an option so a short game (or a test) can turn it right
 -- down.
-Fog.DEFAULT_PHASE_SECONDS = 120
+Fog.DEFAULT_PHASE_SECONDS = 240
 
 -- Fog damage, taken by every party member this often while you are outside
 -- the ring.  Gen 1's overworld poison is a flat 1 HP per 4 steps, and that

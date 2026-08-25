@@ -142,6 +142,14 @@ local STORY_FLAGS = {
   "EVENT_FOLLOWED_OAK_INTO_LAB", "EVENT_GOT_STARTER", "EVENT_GOT_POKEDEX",
   "EVENT_GOT_POKEBALLS_FROM_OAK", "EVENT_PALLET_AFTER_GETTING_POKEBALLS",
   "EVENT_GOT_OAKS_PARCEL", "EVENT_OAK_GOT_PARCEL",
+  -- the rival's story ambushes never fire in a match (POK-67): every one
+  -- of his scripted fights gates on its own beaten-flag, so the loadout
+  -- says they all already happened.  The names are the engine scripts'
+  -- own set_flag/check_flag strings (data/scripts/story*.lua).
+  "EVENT_BATTLED_RIVAL_IN_OAKS_LAB",
+  "EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE", "EVENT_BEAT_ROUTE22_RIVAL_2ND_BATTLE",
+  "EVENT_BEAT_CERULEAN_RIVAL", "EVENT_BEAT_SS_ANNE_RIVAL",
+  "EVENT_BEAT_POKEMON_TOWER_RIVAL", "EVENT_BEAT_SILPH_CO_RIVAL",
 }
 
 return function(mod)
@@ -1696,12 +1704,22 @@ return function(mod)
     local data = game.data
     local state = self.peeked
     local name = watchedName()
-    local rows = (state and state.id == self.watching) and Peek.partyRows(data, state.party)
-                 or { { label = ("(no word from\n%s yet)"):format(name) } }
-    game.stack:push(mod.ui.ListMenu.new(game, name .. "'s TEAM", rows, {
-      onChoose = function(item)
-        local mon = state and state.party and item.value and state.party[item.value]
-        if not mon then return end
+    if not (state and state.id == self.watching) then
+      game.stack:push(mod.ui.ListMenu.new(game, name .. "'s TEAM",
+        { { label = ("(no word from\n%s yet)"):format(name) } },
+        { onChoose = function() end }))
+      return
+    end
+    -- the engine's own Party screen over the synced view (POK-53).
+    -- pickOnly + keepOpen make it read-only: A opens the mon's moves on
+    -- top of the list, B backs out -- no SWITCH, no STATS, no field moves
+    local PartyMenu = require("src.ui.PartyMenu")
+    game.stack:push(PartyMenu.new(game, {
+      party = Peek.saveView(data, state.party),
+      pickOnly = true,
+      keepOpen = true,
+      pickText = name .. "'s POKeMON.",
+      onSwitch = function(mon)
         game.stack:push(mod.ui.ListMenu.new(game,
           (data.pokemon[mon.species] and data.pokemon[mon.species].name) or tostring(mon.species),
           Peek.moveRows(data, mon), { onChoose = function() end }))
@@ -1712,12 +1730,18 @@ return function(mod)
   function BR:openWatchedBag(game)
     local state = self.peeked
     local name = watchedName()
-    local rows = (state and state.id == self.watching)
-                 and Peek.bagRows(game.data, state.items, state.money)
-                 or { { label = ("(no word from\n%s yet)"):format(name) } }
-    game.stack:push(mod.ui.ListMenu.new(game, name .. "'s BAG", rows, {
-      onChoose = function() end,
-    }))
+    if not (state and state.id == self.watching) then
+      game.stack:push(mod.ui.ListMenu.new(game, name .. "'s BAG",
+        { { label = ("(no word from\n%s yet)"):format(name) } },
+        { onChoose = function() end }))
+      return
+    end
+    -- the vanilla floating item box (POK-53), read-only: BagMenu's row
+    -- shape through ListMenu's itemBox geometry, and an empty bag prints
+    -- the engine's own "Nothing here."
+    game.stack:push(mod.ui.ListMenu.new(game, "ITEMS",
+      Peek.itemRows(game.data, state.items, state.money),
+      { kind = "bag", itemBox = true, onChoose = function() end }))
   end
 
   -- keep the watched trainer in frame
@@ -1952,12 +1976,22 @@ return function(mod)
          and not (self.lastAutoA and (now - self.lastAutoA) < 1) then
         self.lastAutoA = now
         if game.input and game.input.pressQueue then
-          table.insert(game.input.pressQueue, "a")
+          -- B, never A (POK-66): B advances text exactly like A, but in
+          -- any menu it BACKS OUT instead of choosing -- the watchdog can
+          -- keep a stalled duel moving yet can never pick a move.  Full
+          -- silence still drifts to the action menu, where the POK-59
+          -- clock forfeits it.
+          table.insert(game.input.pressQueue, "b")
         end
       end
     else
       self.linkWaitSince = nil
     end
+    -- a battle on the stack silences the runner watchdog (POK-66): a
+    -- script-started trainer fight keeps the runner busy for the whole
+    -- battle, and pressing A into it picks moves nobody chose.  Battle
+    -- text paces like vanilla; only the overworld's own dialogs resolve.
+    if self.localBattle then self.runnerBusySince = nil return end
     local ow = mod.world:overworld()
     local busy = ow and ow.runner and ow.runner.isRunning and ow.runner:isRunning()
     if not (busy and now) then self.runnerBusySince = nil return end
@@ -3344,7 +3378,7 @@ return function(mod)
   -- The match's two clocks, cycled from the lobby (POK-44) -- the MODS
   -- manager still works, but nobody should need four screens to find the
   -- knobs that shape a match.  Defined here so redefineOptions is above.
-  local FOG_LADDER = { 60, 90, 120, 180, 240 }
+  local FOG_LADDER = { 60, 90, 120, 180, 240, 360, 480 }
   local SAFARI_LADDER = { 0, 60, 120, 180, 240 }
   local function nextRung(ladder, current)
     for i, v in ipairs(ladder) do
