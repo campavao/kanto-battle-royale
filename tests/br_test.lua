@@ -1226,6 +1226,10 @@ do
         isOpen = function() return false end,
         botsAtStart = function(self) return self.botCount end,
         playerName = function() return "RED" end,
+        skinLabel = function() return "RED" end,
+        skinId = function() return "RED" end,
+        winCount = function() return 0 end,
+        setSkin = function() end,
         relayAddress = function() return "127.0.0.1:7790" end,
         fogSeconds = function() return 120 end,
         safariSeconds = function() return 120 end,
@@ -1260,7 +1264,7 @@ do
     local BR = fakeBR()
     local items, view = BRMenu.items({}, BR, {})
     eq(view, "menu", "no room is the first face")
-    eq(labels(items), "QUICK PLAY|SOLO VS BOTS|HOST GAME|JOIN BY CODE|NAME: RED|SERVER...",
+    eq(labels(items), "QUICK PLAY|SOLO VS BOTS|HOST GAME|JOIN BY CODE|NAME: RED|SKIN: RED|SERVER...",
        "the first face, in order")
     local allOpen = true
     for _, it in ipairs(items) do if not it.keepOpen then allOpen = false end end
@@ -1560,6 +1564,33 @@ do
      "keyAt finds the bag's cell")
   ok(S:keyAt("ROUTE_2", mon.x, mon.y) == nil, "keyAt is per-map")
   ok(S:keyAt("ROUTE_1", 40, 40) == nil, "an empty cell has no key")
+end
+
+-- POK-79: the skin ladder
+do
+  local Skins = require("mods.battle_royale.lib.skins")
+  eq(#Skins.LADDER, 9, "nine skins incl. the original")
+  local want = { 0, 1, 3, 5, 10, 15, 20, 25, 30 }
+  for i, e in ipairs(Skins.LADDER) do
+    eq(e.wins, want[i], "ladder rung " .. i)
+  end
+  ok(Skins.isUnlocked(Skins.LADDER[1], 0), "RED is free")
+  ok(not Skins.isUnlocked(Skins.get("GIOVANNI"), 29), "GIOVANNI holds out at 29")
+  ok(Skins.isUnlocked(Skins.get("GIOVANNI"), 30), "GIOVANNI yields at 30")
+  eq(Skins.get("nope").id, "RED", "an unknown id falls back to RED")
+  eq(#Skins.justUnlocked(0, 1), 1, "the first win unlocks one skin")
+  eq(Skins.justUnlocked(0, 1)[1].id, "YOUNGSTER", "and it is the YOUNGSTER")
+  eq(#Skins.justUnlocked(3, 5), 1, "3->5 unlocks exactly the SAILOR")
+  eq(#Skins.justUnlocked(5, 5), 0, "standing still unlocks nothing")
+  -- every wardrobe entry points at shipped data
+  local okS, sprites = pcall(require, "data.generated.sprites")
+  local okT, trainers = pcall(require, "data.generated.trainers")
+  if okS and okT then
+    for _, e in ipairs(Skins.LADDER) do
+      ok(sprites[e.walk] ~= nil, "walk sheet exists: " .. e.id)
+      if e.class then ok(trainers[e.class] ~= nil, "trainer class exists: " .. e.id) end
+    end
+  end
 end
 
 io.write(("\nbattle royale: %d passed, %d failed\n"):format(passed, failed))

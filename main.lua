@@ -312,6 +312,68 @@ return function(mod)
     if h then BR.sentMap, BR.sentFacing = h.mapId, h.facing end
   end
 
+  -- ------- trainer skins (POK-79)
+  --
+  -- The walk sheet every other trainer sees, unlocked by career wins.  The
+  -- ladder and the picker live in lib/skins.lua; the wins and the choice
+  -- persist in mod.storage next to the name.  The engine seam is
+  -- field.playerSprites.walk: Player builds its sheet from it, mySprite()
+  -- advertises it on the wire, and the TownMap marker follows for free --
+  -- applied only inside the throwaway match world and restored on the way
+  -- out, so a real playthrough never wears it.
+
+  function BR:winCount() return self.wins or 0 end
+
+  function BR:skinId()
+    local Skins = require("mods.battle_royale.lib.skins")
+    return Skins.get(self.skin).id
+  end
+
+  function BR:skinLabel()
+    local Skins = require("mods.battle_royale.lib.skins")
+    return Skins.get(self.skin).label
+  end
+
+  function BR:setSkin(id)
+    local Skins = require("mods.battle_royale.lib.skins")
+    local entry = Skins.get(id)
+    if not Skins.isUnlocked(entry, self:winCount()) then
+      return nil, ("unlock at %d wins"):format(entry.wins)
+    end
+    self.skin = entry.id
+    pcall(function() mod.storage:write(self.game, "skin", entry.id) end)
+    if self.matchWorld then self:applySkinWalk() end
+    if self.relay and self.relay:isOpen() then broadcastPlace() end
+    return entry.id
+  end
+
+  function BR:applySkinWalk()
+    local Skins = require("mods.battle_royale.lib.skins")
+    local data = self.game and self.game.data
+    local ps = data and data.field and data.field.playerSprites
+    if not ps then return end
+    self.stockWalk = self.stockWalk or ps.walk or "SPRITE_RED"
+    local walk = Skins.get(self.skin).walk
+    if data.sprites and not data.sprites[walk] then walk = self.stockWalk end
+    ps.walk = walk
+  end
+
+  function BR:restoreSkinWalk()
+    local data = self.game and self.game.data
+    local ps = data and data.field and data.field.playerSprites
+    if ps and self.stockWalk then ps.walk = self.stockWalk end
+  end
+
+  function BR:recordWin()
+    local Skins = require("mods.battle_royale.lib.skins")
+    local before = self:winCount()
+    self.wins = before + 1
+    pcall(function() mod.storage:write(self.game, "wins", tostring(self.wins)) end)
+    for _, e in ipairs(Skins.justUnlocked(before, self.wins)) do
+      sayLater(("You unlocked the\n%s skin!"):format(e.label), 3)
+    end
+  end
+
   -- ------- room lifecycle
 
   -- What a fallen trainer's BAG holds (POK-25, the other half of D8): the
@@ -531,6 +593,7 @@ return function(mod)
   -- and nothing else changed.  If we are in that world, go back to the title.
   function BR:teardown(message)
     local wasMatchWorld = self.matchWorld
+    self:restoreSkinWalk()
     if self.relay then self.relay:leave() end
     self:reset()
     if wasMatchWorld and self.game then
@@ -736,6 +799,7 @@ return function(mod)
     save.flags = save.flags or {}
     for _, f in ipairs(STORY_FLAGS) do save.flags[f] = true end
     save.player.name = Wire.cleanName(BR.myName or save.player.name)
+    BR:applySkinWalk()
     save.player.map = BR.arming.map
     save.player.x, save.player.y = BR.arming.x, BR.arming.y
     save.player.facing = "down"
@@ -2953,6 +3017,7 @@ return function(mod)
     -- banner said directly (POK-49)
     if id == self.myId then
       sayLater("You are the last\ntrainer standing!\nYou win!", 0.5)
+      self:recordWin()
       -- and the Champion gets the Champion's ending (POK-47)
       self.pendingParade = (clock() or 0) + 2.5
     elseif id then
@@ -3427,6 +3492,10 @@ return function(mod)
     if ok and type(stored) == "string" and stored ~= "" then
       BR.myName = Wire.cleanName(stored)
     end
+    local okW, wins = pcall(function() return mod.storage:read(ev.game, "wins") end)
+    if okW and tonumber(wins) then BR.wins = math.floor(tonumber(wins)) end
+    local okS, skin = pcall(function() return mod.storage:read(ev.game, "skin") end)
+    if okS and type(skin) == "string" and skin ~= "" then BR.skin = skin end
   end)
 
   -- A match plays in a throwaway world: writing it into the player's save
@@ -3462,6 +3531,30 @@ return function(mod)
   mod.exports.playAgain = function() return BR:playAgain() end
   mod.exports.setRelay = function(addr) return BR:setRelayAddress(addr) end
   mod.exports.setName = function(name) return BR:setName(name) end
+  mod.exports.setSkin = function(id) return BR:setSkin(id) end
+  mod.exports.skinState = function()
+    local Skins = require("mods.battle_royale.lib.skins")
+    local out = { wins = BR:winCount(), skin = BR:skinId(), walk = mySprite() }
+    for _, e in ipairs(Skins.LADDER) do
+      out[#out + 1] = { id = e.id, wins = e.wins,
+                        unlocked = Skins.isUnlocked(e, BR:winCount()) }
+    end
+    return out
+  end
+  mod.exports.debugSetWins = function(n)
+    BR.wins = math.max(0, math.floor(tonumber(n) or 0))
+    pcall(function() mod.storage:write(BR.game, "wins", tostring(BR.wins)) end)
+    return BR.wins
+  end
+  mod.exports.openSkinPicker = function()
+    local Skins = require("mods.battle_royale.lib.skins")
+    if not BR.game then return nil, "no game" end
+    BR.game.stack:push(Skins.Picker.new(BR.game, {
+      wins = BR:winCount(), current = BR:skinId(),
+      onPick = function(id) BR:setSkin(id) end,
+    }))
+    return true
+  end
   mod.exports.setBots = function(n)
     BR.botCount = math.max(0, math.min(Bots.MAX, math.floor(tonumber(n) or 0)))
     return BR.botCount

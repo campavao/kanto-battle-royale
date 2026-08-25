@@ -164,6 +164,14 @@ function Menu.items(mod, BR, game)
         end,
       }))
     end)
+    -- the sprite every other trainer sees; wins unlock the wardrobe (POK-79)
+    setting("SKIN: " .. BR:skinLabel(), function()
+      local Skins = require("mods.battle_royale.lib.skins")
+      game.stack:push(Skins.Picker.new(game, {
+        wins = BR:winCount(), current = BR:skinId(),
+        onPick = function(id) BR:setSkin(id) end,
+      }))
+    end)
     -- the relay address is a mod option; this row surfaces it and lets
     -- you point at a different server without editing files
     setting("SERVER...", function()
