@@ -30,7 +30,7 @@ local Engage = require("mods.battle_royale.lib.engage")
 local Ghosts = require("mods.battle_royale.lib.ghosts")
 local Channel = require("mods.battle_royale.lib.channel")
 local LocalRoom = require("mods.battle_royale.lib.localroom")
-local Shim = require("mods.battle_royale.lib.shim")
+local Seams = require("mods.battle_royale.lib.seams")
 local Bots = require("mods.battle_royale.lib.bots")
 local Fog = require("mods.battle_royale.lib.fog")
 local Levels = require("mods.battle_royale.lib.levels")
@@ -173,13 +173,21 @@ return function(mod)
   -- On one that does not, it installs them from outside so the same mod
   -- folder runs on a stock build.  First, because everything below assumes
   -- they exist.
-  Shim.apply()
+
   -- The match log (POK-86).  say() is the story, deep() is off unless
   -- someone asks (DEBUG LOG in the lobby), and both carry the room code
   -- and seed so this log
   -- and the relay's own can be lined up afterwards.
   local log = Log.new(mod.log)
-  log:say("battle royale: %s", Shim.summary())
+  -- One line at boot saying whether this engine really has what the mod
+  -- is built on (POK-29).  manifest.json gates the version, but a fork or
+  -- a local build can still be missing a seam, and a named complaint here
+  -- beats a stack trace three screens later.
+  if Seams.ok() then
+    log:say("battle royale: %s", Seams.summary())
+  else
+    log:warn("battle royale: %s", Seams.summary())
+  end
 
   -- The BAG on the ground (POK-25) is our own 16x16 sheet, drawn in the
   -- item ball's four shades -- Gen 1 has no bag sprite -- and registered
@@ -579,7 +587,6 @@ return function(mod)
     self.fledFrom, self.fleeGrace, self.fleeLockout, self.fleeing = {}, {}, {}, nil
     self.peeked, self.lastPeekAt = nil, nil
     self.pendingDrop = nil   -- a release that never landed (POK-34)
-    self.claimedCatch = nil  -- custody taken on a shimmed engine, unconsumed
     self.pendingSays = {}
     self.runnerBusySince, self.lastAutoA = nil, nil
     self.stats = nil
@@ -2880,17 +2887,16 @@ return function(mod)
 
   -- A full party never sends a catch to the box -- there is no box in a
   -- match (POK-36) -- so the decision is the player's: release a team
-  -- member for it, or let the catch go (POK-34).  On an engine with the
-  -- seam the hook carries the battle and the picker opens right here; on a
-  -- shimmed one it carries only the mon, so custody is taken now and the
-  -- pokemon.caught event (which has the battle) drives the same picker.
+  -- member for it, or let the catch go (POK-34).  RFC 0018's hook carries
+  -- the battle, so the picker opens right here.
+  --
+  -- There used to be a second path: a shimmed engine raised this from
+  -- inside Boxes.deposit with only the mon, so the mod took CUSTODY and
+  -- waited for pokemon.caught to supply the battle.  The shim is gone
+  -- (POK-29) and with it that whole detour.
   mod.hooks:wrap("catch.party_full", function(next, ctx)
     if not inMatch() then return next(ctx) end
-    if ctx.battle then
-      BR:offerDropForCatch(ctx.battle, ctx.mon)
-      return true
-    end
-    BR.claimedCatch = ctx.mon
+    BR:offerDropForCatch(ctx.battle, ctx.mon)
     return true
   end)
 
@@ -3034,16 +3040,6 @@ return function(mod)
     end
   end)
 
-  -- Custody taken on a shimmed engine (catch.party_full above): the deposit
-  -- was refused, the box text lied, and the mon is only in this payload.
-  -- On a seam engine the destination is "mod" and this never matches.
-  mod.events:on("pokemon.caught", function(ev)
-    local claimed = BR.claimedCatch
-    BR.claimedCatch = nil
-    if not (claimed and ev and ev.mon and claimed == ev.mon) then return end
-    if not (BR:inRound() and ev.battle) then return end
-    BR:offerDropForCatch(ev.battle, ev.mon)
-  end)
 
   -- the record keeps count (POK-47)
   mod.events:on("pokemon.caught", function()
@@ -3057,7 +3053,6 @@ return function(mod)
   -- out, which world.blacked_out below turns into elimination.
   mod.events:on("battle.ended", function(ev)
     BR.localBattle = nil
-    BR.claimedCatch = nil   -- custody never consumed: nothing is pending
     BR:reclaimGhostLead()   -- the Safari's stand-in leaves with the screen
     local npc = BR.npcFight
     BR.npcFight = nil

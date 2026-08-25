@@ -1481,9 +1481,8 @@ end
 -- ------------------------------------------------------------------
 do
   local CodeEntry = require("src.link.CodeEntry")
-  -- fromText is an RFC 0014 seam; on a stock engine the shim supplies it,
-  -- exactly as it does for the running mod (shim_test covers both worlds)
-  if not CodeEntry.fromText then require("mods.battle_royale.lib.shim").apply() end
+  -- fromText is an RFC 0014 seam, native since gen1recomp v0.2.26 --
+  -- seams_test is what asserts it is really there (POK-29)
   -- Entry.ADDRESS without pulling in the screen (which wants love + a game)
   local ADDRESS = { charset = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:",
                     length = 40 }

@@ -467,64 +467,41 @@ diff:
 
 All of them are generic — any mod with a self-driven actor, an adopted link
 transport, its own new-game flow, or a rule it wants to hold for a while
-wants them. The first four are proposed upstream as **RFC 0014**, the two
-battle-rule hooks as **RFC 0015**, and the full-party catch hook as
-**RFC 0018**.
+wants them. **All three RFCs are upstream and shipped:** the first four as
+RFC 0014 ([#1746](https://github.com/bryanthaboi/gen1recomp/pull/1746)), the
+two battle-rule hooks as RFC 0015
+([#1798](https://github.com/bryanthaboi/gen1recomp/pull/1798)), and the
+full-party catch hook as RFC 0018
+([#1799](https://github.com/bryanthaboi/gen1recomp/pull/1799)) — all of them
+in **gen1recomp v0.2.26**, which is what this mod now requires.
 
-### ...and running without them
+### There is no fallback any more
 
-`lib/shim.lua` installs the same behaviour from outside on an engine that
-does not have the seams, so **this mod folder works on a stock build too**.
-On an engine that has them it does nothing at all. The boot log says which:
+There used to be one. `lib/shim.lua` installed all seven seams from
+*outside* — 562 lines of patching engine modules from a mod — so the folder
+would run on a stock build. It was a fallback, never a design: two mods
+patching one function clobber each other instead of chaining, and there is
+no version contract to reason about.
+
+Now there is one. `manifest.json` requires `>=0.2.26`, the release that has
+every seam, and the loader refuses anything older rather than limping.
+
+What remains is `lib/seams.lua`, which installs nothing and only looks: one
+line at boot naming anything absent, because a version string is a promise
+and a fork or a local build can still be missing a piece —
 
 ```
 battle royale: engine has every seam natively
-battle royale: shimmed: world.talk (interact wrapper), CodeEntry (...), ...
+battle royale: MISSING ENGINE SEAMS: battle.style (RFC 0015) — this build …
 ```
 
-It is a fallback, not a design. Patching engine modules from a mod is worse
-than a hook in every way that matters — two mods patching one function
-clobber each other instead of chaining, and there is no version contract, so
-an upstream refactor breaks it silently. Each patch therefore touches one
-function, and the summary line keeps "still shimming X" visible instead of
-letting it become the permanent normal.
-
-Five of the six are values that are either there or not. `world.talk` is
-the awkward one: a call site in the *middle* of `interact()`, so there is
-nothing to extend and no way for a mod to see whether it exists. The shim
-raises the hook first and hands the press back to the untouched original
-whenever nobody claims it, and decides whether it is needed at all by asking
-whether the other four are native — they ship in one commit. Guessing wrong
-would raise the hook twice for one press, so it fails toward not patching.
-
-Two known gaps, both harmless here: an object reached *across a counter* is
-not claimed by the shimmed path (a ghost is never behind a mart counter),
-and `os.time` is denied to mods, so a shimmed `startNewGame` does not stamp
-`sessionStartedAt` — a match world is thrown away, and nothing reads it.
-
-The two battle-rule hooks are the newest and the least clean to shim.
-`catch.nickname` is fine: the prompt is its own method, so the patch asks the
-hook first and, when it declines, fills the engine's reserved queue slot with
-a text box that closes itself. `battle.style` is not: the stock engine reads
-the OPTION value inline at the moment the foe faints, inside a function far
-too big to replace, so the shim swaps the value for the battle's duration
-(`enter` to `finish`) and puts it back. That is exactly the write-the-row
-workaround the seam exists to avoid — one speed-hotkey press mid-battle
-persists SET to disk, and the restore repairs it on the next press. It is
-reported in the boot line like everything else, so it cannot quietly become
-the normal.
-
-`catch.party_full` is the same shape of problem as `world.talk` — a call
-site in the middle of `storeCaughtMon` — but it has a name to check: a seam
-engine answers through `BattleState:partyFullDestination()`, so the shim
-stands down by looking for the method. Without it, the shim asks the hook
-from inside `Boxes.deposit`, and a claim refuses the deposit so nothing
-reaches a box either way. What that cannot repair is the text: the stock
-branch prints "But every BOX is full!" before the mod's picker opens — the
-wrong reason for the right decision, and the argument for the seam.
-
-`tests/shim_test.lua` runs the same assertions on both engines and is the
-thing that proves the fallback is honest; run it in either tree.
+Two of the seven cannot be probed: `world.talk` is a `Runtime.call` in the
+middle of `OverworldState:interact`, and the WorldAPI handle's `stepNow`
+lives on a class a mod is never handed. Neither is a value to test, so both
+ride on the RFC 0014 trio they shipped with — an engine that took those
+three without the call site would look complete and would not be.
+`tests/seams_test.lua` asserts the whole contract against the engine in your
+checkout.
 
 ## What's here / what's next
 
@@ -550,7 +527,7 @@ a fight with a *player* on sight rather than only closing distance.
 ```sh
 luajit mods/battle_royale/tests/br_test.lua        # wire, engage, spawn, a live relay round-trip
 luajit mods/battle_royale/tests/br_load_test.lua   # loads through the real headless loader
-luajit mods/battle_royale/tests/shim_test.lua      # the seams, native or shimmed
+luajit mods/battle_royale/tests/seams_test.lua     # the engine really has the seams
 cd mods/battle_royale/relay && node --test && cd -  # the relay server over real sockets
 ```
 
