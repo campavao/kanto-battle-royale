@@ -10,39 +10,35 @@
 --   say()   the match's STORY, at info: the phases, the drop, each ring,
 --           every elimination and what did it, the winner, the teardown.  A
 --           handful of lines per match.  This is what you read first.
---   deep()  everything else.  Off unless BR_DEBUG is set in the environment
---           (or setDeep is called), because it is exactly the tier that
---           would otherwise bury the story.
+--   deep()  everything else.  Off until someone asks for it — the DEBUG LOG
+--           row in the lobby, or mod.exports.setDebug — because it is
+--           exactly the tier that would otherwise bury the story.
 --   warn()  straight through: a warning is always worth printing.
 --
+-- It is NOT an environment variable, though it was one for a day.  A mod
+-- runs inside LegacyCompat's sandbox, where os.getenv answers nil for every
+-- name that is not home-like AND warns that it did — so BR_DEBUG was dead
+-- in the game, alive only under the headless test loader, and the attempt
+-- to read it put a sandbox warning into the very log this file exists to
+-- clean up.  A switch a player can reach beats one they cannot.
+--
 -- **Correlation.**  Every line carries the room code and the match seed once
--- they exist -- "[A7QK/91823] ..." -- and the relay prints the same code on
+-- they exist — "[A7QK/91823] ..." — and the relay prints the same code on
 -- every room line of its own.  That is what lets a client log and a server
 -- log for the same game be lined up afterwards, which is the whole point of
 -- the ticket.
 --
 -- Nothing here belongs on the hot path: these are called at events, never
 -- per frame.  deep() returns before it formats when it is off, so the cost
--- of a line nobody asked for is one boolean test -- but an argument that is
+-- of a line nobody asked for is one boolean test — but an argument that is
 -- expensive to BUILD is still built by the caller, so keep those out of the
 -- call or guard them with isDeep().
 
 local Log = {}
 Log.__index = Log
 
--- os.getenv is not guaranteed under every host the mod runs in, so the
--- read is guarded; a log that throws while starting up is worse than a
--- quiet one.
-local function envDeep()
-  local ok, v = pcall(os.getenv, "BR_DEBUG")
-  if not ok or v == nil then return false end
-  return v ~= "" and v ~= "0" and v ~= "false" and v ~= "no"
-end
-
-Log.envDeep = envDeep
-
 function Log.new(out)
-  return setmetatable({ out = out, deepOn = envDeep() }, Log)
+  return setmetatable({ out = out, deepOn = false }, Log)
 end
 
 -- Which game this client is in, for the prefix.  Called when the room comes

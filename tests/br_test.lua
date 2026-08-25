@@ -1234,6 +1234,10 @@ do
         fogSeconds = function() return 120 end,
         safariSeconds = function() return 120 end,
         cycleFog = function(self) self.cycledFog = true end,
+        -- the deep-log switch the DEBUG LOG row reads (POK-86)
+        debugOn = false,
+        isDebug = function(self) return self.debugOn end,
+        setDebug = function(self, on) self.debugOn = on and true or false end,
         cycleSafari = function(self) self.cycledSafari = true end,
       }
       for k, v in pairs(over or {}) do BR[k] = v end
@@ -1281,10 +1285,18 @@ do
     BR.solo = true
     items, view = BRMenu.items({}, BR, {})
     eq(view, "lobby", "an open room is the lobby")
-    eq(labels(items), "BOTS: 3|FOG: 120s|SAFARI: 120s|START MATCH|LEAVE",
+    eq(labels(items), "BOTS: 3|FOG: 120s|SAFARI: 120s|DEBUG LOG: OFF|START MATCH|LEAVE",
        "solo: bots, the two clocks, start, leave")
     find(items, "FOG").onSelect()
     ok(BR.cycledFog, "the FOG row cycles the fog clock (POK-44)")
+    -- BR_DEBUG could never work in the game (the mod sandbox hides the
+    -- environment), so the deep tier is a row like any other knob
+    find(items, "DEBUG LOG: OFF").onSelect()
+    ok(BR:isDebug(), "the DEBUG LOG row turns the deep tier on (POK-86)")
+    items = BRMenu.items({}, BR, {})
+    ok(find(items, "DEBUG LOG: ON") ~= nil, "and the row says so next frame")
+    find(items, "DEBUG LOG: ON").onSelect()
+    ok(not BR:isDebug(), "...and back off")
     ok(find(items, "SAFARI: 120s") ~= nil and find(items, "SAFARI: 120s").keepOpen,
        "the SAFARI row is a setting that keeps the screen")
     ok(find(items, "BOTS").keepOpen, "changing BOTS keeps the screen")
@@ -1296,7 +1308,7 @@ do
     BR.startsIn = function() return 12 end
     items = BRMenu.items({}, BR, {})
     eq(labels(items),
-       "CODE ABCDEF|- RED*|- BLUE|OPEN: NO|BOTS: 3|FOG: 120s|SAFARI: 120s|FILL TO: OFF|TRAINERS: 5|START MATCH (12)|LEAVE",
+       "CODE ABCDEF|- RED*|- BLUE|OPEN: NO|BOTS: 3|FOG: 120s|SAFARI: 120s|DEBUG LOG: OFF|FILL TO: OFF|TRAINERS: 5|START MATCH (12)|LEAVE",
        "hosting: code, roster, OPEN, BOTS, the clocks, FILL TO, the total, the countdown")
 
     -- a guest waits

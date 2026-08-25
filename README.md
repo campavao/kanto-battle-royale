@@ -622,9 +622,17 @@ carries the room code and the match seed —
 server prints the same room code on its own lines, so a client log and a
 server log for one game can be lined up afterwards.
 
-Set `BR_DEBUG=1` (or call `setDebug(true)` on the mod's exports) for the
-tier below that: per-map detail, and anything else that would otherwise
-bury the story. It is off by default on purpose.
+**DEBUG LOG** in the lobby turns on the tier below that: per-map detail,
+and anything else that would otherwise bury the story. It is off by
+default on purpose. `mod.exports.setDebug(true)` is the same switch, for
+a driver.
+
+> It is not an environment variable. `BR_DEBUG` was documented as one in
+> v0.25.0 and never worked in the game: a mod runs inside the engine's
+> compat sandbox, where `os.getenv` answers `nil` for any name that is not
+> home-like — and warns that it did, putting a line into the very log it
+> was meant to help with. It works only under the headless test loader,
+> which is why it looked fine.
 
 The relay logs connections with their identity, room create/join/leave, a
 census of the message types each connection actually sent when it goes,

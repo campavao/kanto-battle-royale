@@ -109,6 +109,12 @@ function Menu.items(mod, BR, game)
       setting(BR:safariSeconds() > 0
               and ("SAFARI: " .. BR:safariSeconds() .. "s") or "SAFARI: OFF",
               function() BR:cycleSafari() end)
+      -- the log's deep tier, where the other knobs already are (POK-86).
+      -- It was an environment variable for one release, which a mod cannot
+      -- read: the sandbox hides the environment.  The log it thickens is
+      -- this client's own, so it sits with the host's other switches.
+      setting("DEBUG LOG: " .. (BR:isDebug() and "ON" or "OFF"),
+              function() BR:setDebug(not BR:isDebug()) end)
       -- Only meaningful when humans might still arrive: it holds seats
       -- open for them and lets bots take whatever is left.  In a solo
       -- room nobody can arrive, so it would only ever be a second, more

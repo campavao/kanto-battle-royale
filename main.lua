@@ -175,11 +175,11 @@ return function(mod)
   -- they exist.
   Shim.apply()
   -- The match log (POK-86).  say() is the story, deep() is off unless
-  -- BR_DEBUG is set, and both carry the room code and seed so this log
+  -- someone asks (DEBUG LOG in the lobby), and both carry the room code
+  -- and seed so this log
   -- and the relay's own can be lined up afterwards.
   local log = Log.new(mod.log)
   log:say("battle royale: %s", Shim.summary())
-  if log:isDeep() then log:say("BR_DEBUG is on: the deep tier is printing") end
 
   -- The BAG on the ground (POK-25) is our own 16x16 sheet, drawn in the
   -- item ball's four shades -- Gen 1 has no bag sprite -- and registered
@@ -2664,10 +2664,12 @@ return function(mod)
     if self.relay then self.relay:broadcast(Wire.botout(id)) end
     self.ghosts:despawn(id)
     self:spillBot(id, p)
-    if killerName then
-      log:say("OUT: %s (beaten by %s), %d left", tostring(p.name),
-              tostring(killerName), self:aliveCount())
-    end
+    -- The fog has no killer, and this line used to be inside
+    -- `if killerName` -- so the one event POK-72 is about, a wave of
+    -- bots going down together, left no trace in the log at all.
+    log:say("OUT: %s (%s), %d left", tostring(p.name),
+            killerName and ("beaten by " .. tostring(killerName)) or "fog",
+            self:aliveCount())
     self:checkWinner()
   end
 
@@ -3828,6 +3830,16 @@ return function(mod)
     end
     return ladder[1]
   end
+  -- The log's deep tier (POK-86), as a method so the lobby row and
+  -- mod.exports.setDebug are one switch rather than two.
+  function BR:isDebug() return log:isDeep() end
+
+  function BR:setDebug(on)
+    log:setDeep(on ~= false)
+    log:say("deep logging %s", log:isDeep() and "on" or "off")
+    return log:isDeep()
+  end
+
   function BR:cycleFog()
     redefineOptions(nextRung(FOG_LADDER, self:fogSeconds()), self:safariSeconds())
   end
@@ -3863,12 +3875,8 @@ return function(mod)
   -- checkWinner finds one left, parade and all (POK-47/82).
   -- POK-86: the deep tier without restarting the game (BR_DEBUG does the
   -- same from the environment).  Returns what it is now.
-  mod.exports.setDebug = function(on)
-    log:setDeep(on ~= false)
-    log:say("deep logging %s", log:isDeep() and "on" or "off")
-    return log:isDeep()
-  end
-  mod.exports.isDebug = function() return log:isDeep() end
+  mod.exports.setDebug = function(on) return BR:setDebug(on) end
+  mod.exports.isDebug = function() return BR:isDebug() end
   mod.exports.debugWin = function()
     if not BR:inRound() then return nil, "not in a round" end
     BR:onWinner(BR.myId)
@@ -3943,6 +3951,38 @@ return function(mod)
     if not w then return nil end
     return { id = w.id, steps = w.steps }
   end
+  -- A driver cannot reliably get itself killed -- the fog decides that, and
+  -- where you dropped decides the fog.  So it can step out (POK-72), by the
+  -- same path a whiteout takes, to reach the spectator camera at all.
+  mod.exports.debugOut = function(why)
+    if not BR:inRound() then return nil, "not in a round" end
+    BR:eliminate("You are out of\nthe match.", why or "debug")
+    return BR.status
+  end
+
+  -- POK-72: the tick runs behind ONE pcall, so a throw in any subsystem
+  -- is swallowed and only warned once.  A driver needs to see that it
+  -- happened at all.
+  mod.exports.tickError = function() return BR.lastTickError end
+
+  -- ...and the spectator camera's state, which is what a freeze looks
+  -- like from outside: a hidden, walk-through body with a stale pan.
+  mod.exports.cameraProbe = function()
+    local ow = mod.world:overworld()
+    local top = BR.game and BR.game.stack and BR.game.stack:top()
+    return {
+      phase = BR.phase, status = BR.status, watching = BR.watching,
+      cameraOwned = BR.cameraOwned or false,
+      alive = BR:aliveCount(),
+      hidden = (ow and ow.playerHidden) or false,
+      passable = (ow and ow.player and ow.player.passable) or false,
+      panned = (ow and ow.cameraPan) ~= nil,
+      onOverworld = ow ~= nil and top == ow,
+      moving = (ow and ow.player and ow.player.moving) or false,
+      transitioning = (ow and ow.transitioning) or false,
+    }
+  end
+
   -- a diagnostic window into the fog gate, for the smokes
   mod.exports.fogProbe = function()
     local here = mod.world:current()
