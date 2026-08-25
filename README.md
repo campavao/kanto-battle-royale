@@ -12,34 +12,6 @@ The fog shrinks the world on a shared clock, everyone's level rides the
 same clock, and a fallen team spills onto the ground as Poké Balls anyone
 can claim. See "What's here / what's next" below.
 
-The fog shrinks the world on a shared clock, everyone's level rides the
-same clock, and a fallen team spills onto the ground as Poké Balls anyone
-can claim. See "What's here / what's next" below.
-
-The fog shrinks the world on a shared clock, everyone's level rides the
-same clock, and a fallen team spills onto the ground as Poké Balls anyone
-can claim. See "What's here / what's next" below.
-
-The fog shrinks the world on a shared clock, everyone's level rides the
-same clock, and a fallen team spills onto the ground as Poké Balls anyone
-can claim. See "What's here / what's next" below.
-
-The fog shrinks the world on a shared clock, everyone's level rides the
-same clock, and a fallen team spills onto the ground as Poké Balls anyone
-can claim. See "What's here / what's next" below.
-
-The fog shrinks the world on a shared clock, everyone's level rides the
-same clock, and a fallen team spills onto the ground as Poké Balls anyone
-can claim. See "What's here / what's next" below.
-
-The fog shrinks the world on a shared clock, everyone's level rides the
-same clock, and a fallen team spills onto the ground as Poké Balls anyone
-can claim. See "What's here / what's next" below.
-
-The fog shrinks the world on a shared clock, everyone's level rides the
-same clock, and a fallen team spills onto the ground as Poké Balls anyone
-can claim. See "What's here / what's next" below.
-
 A mod for [gen1recomp](https://github.com/bryanthaboi/gen1recomp).
 
 ## Install
