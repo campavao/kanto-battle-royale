@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-25T00:21:25.547Z",
+  "generated_at": "2026-08-25T00:43:40.750Z",
   "categories": [
     "MULTIPLAYER"
   ],
@@ -9,7 +9,7 @@
       "id": "battle_royale",
       "name": "Kanto Battle Royale",
       "author": "campavao",
-      "version": "0.18.0",
+      "version": "0.19.0",
       "summary": "Last trainer standing, in Kanto. Real-time presence, forced face-to-face battles, bots, and a fog that closes on the Town Map.",
       "categories": [
         "MULTIPLAYER"
@@ -38,15 +38,15 @@
       "first_release": "2026-08-23",
       "last_release": "2026-08-25",
       "latest": {
-        "version": "0.18.0",
-        "tag": "v0.18.0",
-        "name": "v0.18.0 — the live-playtest batch",
+        "version": "0.19.0",
+        "tag": "v0.19.0",
+        "name": "v0.19.0 — spectating and the world around it",
         "prerelease": false,
-        "published_at": "2026-08-25T00:21:24Z",
+        "published_at": "2026-08-25T00:43:40Z",
         "zip": {
-          "name": "battle_royale-v0.18.0.zip",
-          "url": "https://github.com/campavao/kanto-battle-royale/releases/download/v0.18.0/battle_royale-v0.18.0.zip",
-          "size": 164608
+          "name": "battle_royale-v0.19.0.zip",
+          "url": "https://github.com/campavao/kanto-battle-royale/releases/download/v0.19.0/battle_royale-v0.19.0.zip",
+          "size": 165914
         }
       },
       "update_check": "ok"
