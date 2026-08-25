@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-25T18:07:12.399Z",
+  "generated_at": "2026-08-25T20:45:56.179Z",
   "categories": [
     "MULTIPLAYER"
   ],
@@ -9,7 +9,7 @@
       "id": "battle_royale",
       "name": "Kanto Battle Royale",
       "author": "campavao",
-      "version": "0.25.1",
+      "version": "0.26.0",
       "summary": "Last trainer standing, in Kanto. Real-time presence, forced face-to-face battles, bots, and a fog that closes on the Town Map.",
       "categories": [
         "MULTIPLAYER"
@@ -26,7 +26,7 @@
       "repo": "campavao/kanto-battle-royale",
       "github": "https://github.com/campavao/kanto-battle-royale",
       "api": 2,
-      "game_version": ">=0.0.0-0 <2.0.0",
+      "game_version": ">=0.2.26 <2.0.0",
       "profile": "content",
       "affects_link": true,
       "permissions": [
@@ -38,15 +38,15 @@
       "first_release": "2026-08-23",
       "last_release": "2026-08-25",
       "latest": {
-        "version": "0.25.1",
-        "tag": "v0.25.1",
-        "name": "v0.25.1 — the debug switch actually exists",
+        "version": "0.26.0",
+        "tag": "v0.26.0",
+        "name": "v0.26.0 — the shim is gone",
         "prerelease": false,
-        "published_at": "2026-08-25T18:07:11Z",
+        "published_at": "2026-08-25T20:45:55Z",
         "zip": {
-          "name": "battle_royale-v0.25.1.zip",
-          "url": "https://github.com/campavao/kanto-battle-royale/releases/download/v0.25.1/battle_royale-v0.25.1.zip",
-          "size": 194475
+          "name": "battle_royale-v0.26.0.zip",
+          "url": "https://github.com/campavao/kanto-battle-royale/releases/download/v0.26.0/battle_royale-v0.26.0.zip",
+          "size": 185363
         }
       },
       "update_check": "ok"
