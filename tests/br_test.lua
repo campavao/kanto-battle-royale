@@ -324,7 +324,8 @@ do
   ok(Fog.isSafe(locations, "INDOORS", center, 1.5),
      "a building is as safe as the town it stands in")
   ok(not Fog.isSafe(locations, "FARAWAY", center, 3), "still out at radius 3")
-  ok(Fog.isSafe(locations, "FARAWAY", center, 15), "everything is in at phase 1")
+  ok(Fog.isSafe(locations, "FARAWAY", center, Fog.radius(1)),
+     "everything is in at phase 1")
   ok(Fog.isSafe(locations, "NOWHERE", center, 1.5),
      "a map with no square is never punished")
   ok(Fog.isSafe(locations, "HOME", center, 0), "at radius 0 the centre is safe")
@@ -381,6 +382,81 @@ do
   ok(Fog.immune({ species = "ZUBAT" }, data), "a Poison type is immune")
   ok(not Fog.immune({ species = "RATTATA" }, data), "a Normal type is not")
   ok(not Fog.immune(nil, data), "no lead is not immune")
+end
+
+-- ------- phase 1 really is no fog anywhere (POK-93)
+--
+-- The grace period was arithmetic in a comment: phase 1's radius was 15 and
+-- the comment called that "larger than the grid's diagonal", when 15 is the
+-- grid's WIDTH and its diagonal is 21.22.  Real Kanto fell through the gap
+-- -- LAVENDER_TOWN (14,5) is 15.62 squares from CINNABAR_ISLAND (2,15) --
+-- so a Cinnabar eye put a Lavender lander in the fog on the frame they
+-- touched the ground.  This checks the geometry against the shipped
+-- location table and against the corners of the board, not against prose.
+
+do
+  local Fog = require("mods.battle_royale.lib.fog")
+
+  -- the whole board, whatever the data says: every corner from every corner
+  local corners = { { x = 0, y = 0 }, { x = 15, y = 0 },
+                    { x = 0, y = 15 }, { x = 15, y = 15 } }
+  local grid = {}
+  for j, p in ipairs(corners) do grid["C" .. j] = { x = p.x, y = p.y } end
+  local allCorners = true
+  for _, c in ipairs(corners) do
+    for j = 1, #corners do
+      if not Fog.isSafe(grid, "C" .. j, c, Fog.radius(1)) then allCorners = false end
+    end
+  end
+  ok(allCorners, "phase 1 reaches corner to corner of the 16x16 grid")
+  ok(Fog.radius(1) > math.sqrt(15 * 15 + 15 * 15),
+     "phase 1's radius clears the grid's true diagonal ("
+     .. tostring(Fog.radius(1)) .. " > 21.22)")
+
+  local okField, field = pcall(dofile, "data/generated/field.lua")
+  local locations = okField and type(field) == "table"
+    and field.townMap and field.townMap.locations
+  if not locations then
+    io.write("  (skipping the real-Kanto phase-1 sweep: no imported data)\n")
+  else
+    -- every placed map must be safe at phase 1 from every place the eye
+    -- can land.  The eye is drawn from townList(), which is towns and
+    -- cities; sweeping EVERY placed square is stricter and cheap.
+    local worst, worstPair = -1, nil
+    local unsafe = {}
+    for centreId, c in pairs(locations) do
+      if c.x and c.y then
+        local centre = { x = c.x, y = c.y, id = centreId }
+        for mapId, l in pairs(locations) do
+          if l.x and l.y then
+            local dx, dy = l.x - c.x, l.y - c.y
+            local d = dx * dx + dy * dy
+            if d > worst then worst, worstPair = d, centreId .. " -> " .. mapId end
+            if not Fog.isSafe(locations, mapId, centre, Fog.radius(1))
+               and #unsafe < 4 then
+              unsafe[#unsafe + 1] = centreId .. " -> " .. mapId
+            end
+          end
+        end
+      end
+    end
+    ok(#unsafe == 0, "no placed map is in the fog at phase 1"
+       .. (#unsafe > 0 and (": " .. table.concat(unsafe, ", ")) or ""))
+    ok(Fog.radius(1) > math.sqrt(worst),
+       ("phase 1 clears Kanto's widest pair (%s, %.2f squares)")
+       :format(tostring(worstPair), math.sqrt(worst)))
+    -- the pair that actually shipped the bug, named so a future radius
+    -- change cannot quietly re-open it
+    if locations.LAVENDER_TOWN and locations.CINNABAR_ISLAND then
+      local c = locations.CINNABAR_ISLAND
+      ok(Fog.isSafe(locations, "LAVENDER_TOWN",
+                    { x = c.x, y = c.y, id = "CINNABAR_ISLAND" }, Fog.radius(1)),
+         "a Lavender drop is safe under a Cinnabar eye at phase 1")
+      ok(not Fog.isSafe(locations, "LAVENDER_TOWN",
+                        { x = c.x, y = c.y, id = "CINNABAR_ISLAND" }, Fog.radius(2)),
+         "and is in the fog once the ring actually shrinks")
+    end
+  end
 end
 
 -- ------- the loot spill (DESIGN D8)
@@ -620,6 +696,114 @@ do
      "a challenge from the one we are challenging is accepted")
 end
 
+-- ------- the bag obeys the doorway rule too (POK-94)
+--
+-- The balls go through placeAround and its predicate; the BAG lands on the
+-- cell its owner fell on, which is what makes it read as "this is where
+-- they went down" -- and is the one placement the predicate never saw.  A
+-- player cannot stand still on a warp, but a BOT walks on plain tile
+-- walkability and could stop in a doorway, and a bag on a mart's door
+-- shuts that building for the match exactly as a ball would.
+
+do
+  local Spills = require("mods.battle_royale.lib.spills")
+  local bag = { items = { { id = "POTION", n = 1 } }, money = 500, name = "SAM" }
+  local everywhere = function() return true end
+  local door = function(x, y) return x == 5 and y == 5 end
+
+  -- no rule supplied: the old behaviour, the bag lands where they fell
+  local plain = Spills.build(1, "M", 5, 5, {}, everywhere, bag)
+  eq(plain.bag.x .. "," .. plain.bag.y, "5,5", "with no rule the bag lands on the spot")
+
+  -- with the doorway rule, it steps off
+  local moved = Spills.build(1, "M", 5, 5, {}, everywhere, bag, door)
+  ok(not (moved.bag.x == 5 and moved.bag.y == 5),
+     "a bag aimed at a door does not stay on it")
+  ok(math.abs(moved.bag.x - 5) <= 1 and math.abs(moved.bag.y - 5) <= 1,
+     "and lands right beside it (" .. moved.bag.x .. "," .. moved.bag.y .. ")")
+
+  -- an ordinary cell is left exactly alone
+  local fine = Spills.build(1, "M", 9, 9, {}, everywhere, bag, door)
+  eq(fine.bag.x .. "," .. fine.bag.y, "9,9", "a cell that is not a door is untouched")
+
+  -- the relocation still respects walkability: only the one free neighbour
+  local onlyOne = function(x, y) return (x == 4 and y == 5) or (x == 5 and y == 5) end
+  local tight = Spills.build(1, "M", 5, 5, {}, onlyOne, bag, door)
+  eq(tight.bag.x .. "," .. tight.bag.y, "4,5",
+     "it moves to a cell the balls would have taken")
+
+  -- and a spill of balls around a door still puts none on it
+  local spill = Spills.build(1, "M", 4, 5, { { species = "RATTATA", level = 5, hp = 1 },
+                                             { species = "PIDGEY", level = 5, hp = 1 },
+                                             { species = "ODDISH", level = 5, hp = 1 } },
+                             function(x, y) return not door(x, y) end, bag, door)
+  local onDoor = 0
+  for _, m in ipairs(spill.mons) do
+    if door(m.x, m.y) then onDoor = onDoor + 1 end
+  end
+  eq(onDoor, 0, "no ball lands on the door either")
+  eq(#spill.mons, 3, "and every ball still gets placed")
+end
+
+-- ------- you never engage what you cannot see (POK-96)
+
+do
+  local Engage = require("mods.battle_royale.lib.engage")
+
+  -- the faithful Game Boy view: 160x144 world pixels, camera centred
+  eq(Engage.visibleRange("left", 160), 5,
+     "a 160px-wide view reaches five cells along a row, not six")
+  eq(Engage.visibleRange("right", 160), 5, "the same the other way")
+  eq(Engage.visibleRange("up", 144), 4, "and four down a column")
+  eq(Engage.visibleRange("down", 144), 4, "the same downward")
+  ok(Engage.visibleRange("left", 160) < Engage.RANGE,
+     "which is a real cut from the tuned row range")
+  eq(Engage.visibleRange("up", 144), Engage.RANGE_Y,
+     "while the column range was already honest")
+
+  -- capped, never extended: a wider window must not buy a longer eyeline,
+  -- or the biggest monitor spots everyone first
+  eq(Engage.visibleRange("left", 1600), Engage.RANGE,
+     "a zoomed-out view is still held to the tuned range")
+  eq(Engage.visibleRange("up", 1600), Engage.RANGE_Y, "on the column too")
+
+  -- and a view so small nothing would be visible still leaves one cell:
+  -- the trainer standing directly in front of you is always engageable
+  eq(Engage.visibleRange("left", 16), 1, "a tiny view still sees the next cell")
+  eq(Engage.visibleRange("left", nil), Engage.RANGE,
+     "an unaskable renderer falls back to the tuned range")
+  eq(Engage.visibleRange("left", 0), Engage.RANGE, "so does a zero span")
+
+  -- ...and the cell a trainer is engaged ON is the one they are DRAWN on
+  -- (POK-96).  A ghost replays steps at walking pace, so it trails the
+  -- wire; engaging off the wire opens a fight against somebody this screen
+  -- has not put anywhere yet.
+  do
+    local Ghosts = require("mods.battle_royale.lib.ghosts")
+    local ghosts = setmetatable({ ghosts = {} }, { __index = Ghosts })
+    local npc = { cellX = 3, cellY = 7 }
+    ghosts._handle = function(_, g) return g.here and { npc = npc } or nil end
+    ghosts.ghosts.a = { mapId = "M", npcId = 1, queue = {}, here = true }
+    ghosts.ghosts.b = { mapId = "M", npcId = 2, queue = {} }   -- no handle
+    local x, y = ghosts:cellOf("a")
+    eq(x .. "," .. y, "3,7", "cellOf reports where the ghost is standing")
+    ok(ghosts:cellOf("b") == nil, "and nil for a ghost with no live NPC")
+    ok(ghosts:cellOf("nobody") == nil, "or for a peer we have never drawn")
+    -- an NPC that has not been given a cell yet is not a position either
+    ghosts.ghosts.c = { mapId = "M", npcId = 3, queue = {}, here = true }
+    npc.cellX = nil
+    ok(ghosts:cellOf("c") == nil, "nor one with no cell yet")
+  end
+
+  -- the cap really shortens the line the target search walks
+  local me = { x = 0, y = 0, facing = "right", status = "alive" }
+  local far = { id = 2, map = nil, x = 6, y = 0, status = "alive" }
+  eq(Engage.target(me, { far }, { range = Engage.RANGE }), 2,
+     "six cells away is a target at the tuned range")
+  ok(Engage.target(me, { far }, { range = Engage.visibleRange("right", 160) }) == nil,
+     "and is not one once the frame has its say")
+end
+
 -- ------- spawn (against the real imported data when it is present)
 -- Spawn leans on src.world.Map's real tileset semantics, so a faithful
 -- synthetic fixture would have to reproduce the whole tileset format.  We
@@ -685,6 +869,45 @@ do
     ok(landing and landing[1] and landing[1].map == "PALLET_TOWN", "a town landing is on that town")
     ok(landing and Spawn.walkable(maps, tilesets, "PALLET_TOWN", landing[1].x, landing[1].y),
        "on a walkable cell")
+
+    -- a doorway is not a floor (POK-94).  A warp tile is walkable BY
+    -- DESIGN -- you have to be able to step on it -- so walkability alone
+    -- happily let a spilled ball land on the VIRIDIAN mart's door, and a
+    -- solid ball on a warp shuts that building for the whole match, for
+    -- everyone, because every client lays the same spill out.
+    local doors = (maps.VIRIDIAN_CITY or {}).warps or {}
+    ok(#doors > 0, "VIRIDIAN_CITY has doors to test (" .. #doors .. ")")
+    local walkableDoors, caught = 0, 0
+    for _, w in ipairs(doors) do
+      if Spawn.walkable(maps, tilesets, "VIRIDIAN_CITY", w.x, w.y) then
+        walkableDoors = walkableDoors + 1
+        if Spawn.isWarp(maps, "VIRIDIAN_CITY", w.x, w.y) then caught = caught + 1 end
+      end
+    end
+    ok(walkableDoors > 0,
+       "and its doors really are walkable tiles (" .. walkableDoors .. ")")
+    eq(caught, walkableDoors, "isWarp catches every one of them")
+    ok(not Spawn.isWarp(maps, "VIRIDIAN_CITY", 0, 0),
+       "and does not cry warp on an ordinary cell")
+    ok(not Spawn.isWarp(maps, "NOT_A_MAP", 1, 1), "an unknown map has no warps")
+    ok(not Spawn.isWarp(nil, "VIRIDIAN_CITY", 23, 25), "nor does no map table")
+
+    -- the placement search must route around a door rather than stack on
+    -- it: aim a four-ball spill right at one and check none of them land
+    local door = doors[1]
+    if door then
+      local Spills = require("mods.battle_royale.lib.spills")
+      local cells = Spills.placeAround(door.x, door.y, 4, function(x, y)
+        return Spawn.walkable(maps, tilesets, "VIRIDIAN_CITY", x, y)
+           and not Spawn.isWarp(maps, "VIRIDIAN_CITY", x, y)
+      end)
+      local onADoor = 0
+      for _, c in ipairs(cells) do
+        if Spawn.isWarp(maps, "VIRIDIAN_CITY", c.x, c.y) then onADoor = onADoor + 1 end
+      end
+      eq(onADoor, 0, "a spill aimed at a door puts nothing on it")
+      eq(#cells, 4, "and still places every ball")
+    end
   end
 end
 
@@ -1032,6 +1255,108 @@ do
   ok(not placed, "no snap-teleport happened on the way")
 end
 
+-- ------- and at the player's pace, not an NPC's (POK-97)
+--
+-- The stutter POK-70 could not cure was a RATE mismatch, not arrival
+-- jitter: Player steps a cell in 16 frames, NPC in 32, and a ghost is a
+-- replay of somebody else's player.  Fed one step per 16 frames and
+-- playing one per 32, the queue gained a step it could not spend every
+-- other step, overran MAX_BACKLOG in about a second and a half of steady
+-- walking, and resolved as a teleport.
+--
+-- This drives _syncOne frame by frame against a handle that actually
+-- models how long a step takes, so the failure is the observable one: a
+-- snap during a walk nobody interrupted.
+
+do
+  local Ghosts = require("mods.battle_royale.lib.ghosts")
+
+  -- a peer walking steadily: one committed step every `arrivalFrames`
+  local function walkFor(frames, stepFrames, arrivalFrames)
+    local h = { left = 0, snaps = 0, steps = 0 }
+    local handle = {
+      setPassable = function() end,
+      isMoving = function() return h.left > 0 end,
+      stepNow = function() h.left = stepFrames; h.steps = h.steps + 1 end,
+      position = function() return 0, 0 end,
+      placeAt = function() h.snaps = h.snaps + 1 end,
+      face = function() end,
+    }
+    local ghosts = setmetatable({ ghosts = {} }, { __index = Ghosts })
+    ghosts._handle = function() return handle end
+    ghosts.ghosts.x = { mapId = "M", queue = {}, npcId = 1 }
+    -- the peer never leaves the cell we report, so the only thing that can
+    -- call placeAt is the backlog overrun itself
+    local peer = { map = "M", x = 0, y = 0, facing = "down", status = "alive" }
+    for f = 1, frames do
+      if f % arrivalFrames == 0 then ghosts:pushStep("x", "up") end
+      ghosts:_syncOne(nil, "x", "M", peer)
+      if h.left > 0 then h.left = h.left - 1 end
+    end
+    return h
+  end
+
+  -- ten seconds of walking, one step arriving every 16 frames
+  local slow = walkFor(600, 32, 16)
+  ok(slow.snaps > 0,
+     "an NPC-paced ghost still snaps during a steady walk (" .. slow.snaps .. ")")
+  local matched = walkFor(600, 16, 16)
+  eq(matched.snaps, 0, "a player-paced one never does")
+  ok(matched.steps > 30,
+     "and it walks the whole way instead (" .. matched.steps .. " steps)")
+
+  -- the spawn really pins it, read off a stubbed world
+  local spawned = {}
+  local handle = { npc = spawned, setPassable = function() end }
+  local mod = {
+    log = { warn = function() end },
+    world = {
+      spawnNpc = function() return 7 end,
+      removeNpc = function() return true end,
+      npc = function() return handle end,
+      overworld = function() return { player = { stepFrames = 16 } } end,
+    },
+  }
+  local ghosts = Ghosts.new(mod)
+  ghosts:_spawn(nil, "x", "M", 3, 4, "down", { status = "alive" })
+  eq(spawned.stepFrames, 16, "a fresh ghost is given the player's step length")
+
+  -- a build that retimes walking retimes the ghosts with it
+  mod.world.overworld = function() return { player = { stepFrames = 8 } } end
+  ghosts:_spawn(nil, "y", "M", 3, 4, "down", { status = "alive" })
+  eq(spawned.stepFrames, 8, "whatever this build's player step actually is")
+
+  -- ...and no overworld at all must not crash a spawn
+  mod.world.overworld = function() return nil end
+  ghosts:_spawn(nil, "z", "M", 3, 4, "down", { status = "alive" })
+  ok((spawned.stepFrames or 0) > 0, "with a sane fallback when there is no world")
+end
+
+-- ------- the world does not pause because our screen did (POK-98)
+
+do
+  local Ghosts = require("mods.battle_royale.lib.ghosts")
+  local ticked = {}
+  local map = { id = "M" }
+  local function npcFor(name)
+    return { update = function(_, m, e) ticked[#ticked + 1] = name .. ":" .. tostring(m.id) end }
+  end
+  local here, away = npcFor("here"), npcFor("away")
+  local ghosts = setmetatable({ ghosts = {} }, { __index = Ghosts })
+  ghosts._handle = function(_, g)
+    return { npc = (g.mapId == "M") and here or away,
+             ow = { map = map, entities = {} } }
+  end
+  ghosts.ghosts.a = { mapId = "M", npcId = 1, queue = {} }
+  ghosts.ghosts.b = { mapId = "OTHER", npcId = 2, queue = {} }
+
+  ghosts:advance("M")
+  eq(#ticked, 1, "only the ghosts on our own map are advanced")
+  eq(ticked[1], "here:M", "and they are advanced against that map")
+  ghosts:advance(nil)
+  eq(#ticked, 1, "no map, nothing to advance")
+end
+
 -- ------- escapable, not merely walkable (POK-23)
 
 do
@@ -1105,6 +1430,50 @@ do
      "roughly one bag in four holds a prize (" .. prizes .. "/" .. total .. ")")
 end
 
+-- ------- the endgame hunt (POK-95)
+--
+-- A playtest watched a match get down to three survivors who then paced
+-- their own maps until the fog decided it.  Same-map hunting already
+-- worked; nothing pulled a bot ACROSS a seam toward anybody.
+
+do
+  local Bots = require("mods.battle_royale.lib.bots")
+
+  -- the seam clock tightens as the roster thins
+  eq(Bots.roamSeconds(20), Bots.ROAM_SECONDS, "a full lobby ambles")
+  ok(Bots.roamSeconds(Bots.HUNT_FROM) < Bots.ROAM_SECONDS,
+     "a thinning one crosses seams more often")
+  ok(Bots.roamSeconds(3) < Bots.roamSeconds(Bots.HUNT_FROM),
+     "and the last few sooner still")
+  ok(Bots.roamSeconds(nil) == Bots.ROAM_SECONDS,
+     "an unknown roster ambles rather than sprints")
+  local prev = 0
+  for n = 2, 20 do
+    local s = Bots.roamSeconds(n)
+    ok(s >= prev, "the clock never tightens as the field GROWS (" .. n .. ")")
+    prev = s
+  end
+
+  -- Bots.homeward ranks exits by whatever distance it is handed, which is
+  -- what lets the same routine walk a bot at the ring's eye early and at
+  -- the nearest trainer late.  Prove it moves toward a target rather than
+  -- toward a fixed centre.
+  local rng = Bots.rng(1, 1)
+  -- three exits; B is the one nearest the prey
+  local toPrey = { A = 25, B = 4, C = 16 }
+  eq(Bots.homeward({ "A", "B", "C" }, function(m) return toPrey[m] end, 36, rng),
+     "B", "the seam that closes on the prey is the one walked")
+  -- ...and it holds when nothing is closer than standing still, which is
+  -- the same-map case the tick's own prey search takes over
+  ok(Bots.homeward({ "A", "B", "C" }, function(m) return toPrey[m] end, 0, rng) == nil,
+     "already nearest: hold, and let the same-map hunt do the work")
+
+  -- an unplaceable map ranks last rather than winning by being nil
+  local partial = { A = nil, B = 9 }
+  eq(Bots.homeward({ "A", "B" }, function(m) return partial[m] end, 100, rng),
+     "B", "a map the Town Map cannot place is not a shortcut")
+end
+
 -- ------- the Hall of Fame (POK-47)
 
 do
@@ -1164,6 +1533,43 @@ do
     table.sort(early)
     ok(#early == 0, "no local helper is used above its definition"
        .. (#early > 0 and (": " .. table.concat(early, "; ")) or ""))
+  end
+end
+
+-- ------- the ladder never climbs mid-fight (POK-91)
+--
+-- scaleMon replaces mon.stats wholesale and can evolve the thing standing
+-- on the field, and BattleState's battlers alias the very party tables it
+-- rewrites -- so a fog shrink that landed during a battle took a Lv5 lead
+-- to Lv15 between turns.  The guard used to be `BR.status ~= "battle"` at
+-- the call site, and `status` only says "battle" for a PvP duel or a bot
+-- fight: a WILD encounter or one of Kanto's own trainers left it "alive"
+-- and levelled straight through the fight.
+--
+-- tickLevels needs a whole Game to run, so this reads the source: the
+-- battle guard must be inside the function and must come before the first
+-- thing that mutates a party.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the mid-fight scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    local body = src:match("function BR:tickLevels%(%)(.-)\n  end\n")
+    ok(body ~= nil, "found BR:tickLevels in main.lua")
+    if body then
+      local guardAt = body:find("liveLocalBattle", 1, true)
+      local scaleAt = body:find("needsScaling", 1, true)
+      ok(guardAt ~= nil, "tickLevels asks liveLocalBattle before it scales")
+      ok(scaleAt ~= nil, "tickLevels is still the thing that scales")
+      ok(guardAt and scaleAt and guardAt < scaleAt,
+         "the battle guard comes before any party is touched")
+      -- the guard must be a RETURN, not a log line
+      ok(body:match("liveLocalBattle%(%)%s*then%s*return") ~= nil,
+         "and it returns rather than carrying on")
+    end
   end
 end
 

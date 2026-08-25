@@ -72,7 +72,19 @@ end
 -- (POK-25): items and money as one more thing on the ground, on the very
 -- cell they fell on, the balls around it.  `key` is unique across the
 -- match so a client can say "this one is gone" without ambiguity.
-function Spills.build(ownerId, mapId, x, y, party, walkable, bag)
+-- `barred(x, y)` is the narrow "and not HERE, whatever else is true" rule
+-- for the BAG's own cell (POK-94: a doorway).  The bag lands on the cell
+-- its owner fell on rather than in the ring -- that is what makes a bag
+-- read as "this is where they went down" -- so it is the one placement
+-- `walkable` never got a say in.  A player cannot stand still on a warp,
+-- but a BOT could walk onto one, and a bag on a mart's door shuts that
+-- building for the whole match exactly as a ball would.
+--
+-- Deliberately NOT the full `walkable` predicate: that also refuses a cell
+-- with somebody standing on it, and a bag under an NPC is a thing drivers
+-- stage on purpose (POK-75).  Only the doorway rule moves the bag, and it
+-- moves it to the nearest cell the balls would have accepted.
+function Spills.build(ownerId, mapId, x, y, party, walkable, bag, barred)
   local alive = {}
   for _, mon in ipairs(party or {}) do
     if (mon.hp or 0) >= 0 and mon.species then alive[#alive + 1] = mon end
@@ -90,7 +102,18 @@ function Spills.build(ownerId, mapId, x, y, party, walkable, bag)
   end
   local carried
   if bag and ((bag.items and #bag.items > 0) or (bag.money or 0) > 0) then
-    carried = { key = ownerId .. ":bag", x = x, y = y, items = bag.items or {},
+    local bx, by = x, y
+    if barred and barred(bx, by) then
+      local spot = Spills.placeAround(x, y, 1, function(cx, cy)
+        if barred(cx, cy) then return false end
+        return not walkable or walkable(cx, cy)
+      end)[1]
+      -- placeAround always returns something; if its whole search was
+      -- barred it hands back the aim cell, and a bag nobody can reach
+      -- still beats a bag that walls a door
+      if spot and not barred(spot.x, spot.y) then bx, by = spot.x, spot.y end
+    end
+    carried = { key = ownerId .. ":bag", x = bx, y = by, items = bag.items or {},
                 money = bag.money or 0, name = bag.name }
   end
   if #out == 0 and not carried then return nil end

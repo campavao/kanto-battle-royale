@@ -119,6 +119,32 @@ Bots.DELTA = DELTA
 -- not a jump to somewhere convenient.
 Bots.ROAM_SECONDS = 25
 
+-- WHEN A BOT STARTS HUNTING ACROSS MAPS (POK-95).
+--
+-- Same-map hunting has always worked; the endgame did not.  With three
+-- trainers left on three different routes, each one walked its own map
+-- forever and the match was decided by the fog rather than by anybody
+-- meeting anybody -- the survivors "just walk back and forth", which is
+-- the worst possible last act.
+--
+-- Below this many trainers alive, a bot's seam choice stops drifting
+-- toward the ring's eye and starts closing on the nearest live trainer.
+-- Above it the eye is still the right pull: early on the field is wide,
+-- the ring is doing the herding, and bots beelining at players from three
+-- routes away would read as aimbots rather than trainers.
+Bots.HUNT_FROM = 6
+
+-- ...and it considers crossing more often as the roster shrinks.  A
+-- twenty-five second seam clock is a pleasant amble with twenty trainers
+-- alive and far too patient with three: the last pair could spend a whole
+-- fog phase two maps apart, each politely waiting out its own timer.
+function Bots.roamSeconds(alive)
+  alive = tonumber(alive) or math.huge
+  if alive <= 3 then return 8 end
+  if alive <= Bots.HUNT_FROM then return 14 end
+  return Bots.ROAM_SECONDS
+end
+
 -- After a fight, both sides get a breather before another one, so a crowded
 -- map does not resolve its whole roster in a couple of ticks.
 Bots.FIGHT_COOLDOWN = 12

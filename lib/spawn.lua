@@ -51,6 +51,24 @@ local function blocked(def)
   return set
 end
 
+-- Is this cell a warp -- a door, a cave mouth, a stairwell?
+--
+-- Walkability says nothing about it: a doorway is a perfectly walkable
+-- tile, which is the whole point of it.  But it is walkable in order to be
+-- STEPPED ON, and anything solid parked there closes the building for good
+-- (POK-94: a spilled Poke Ball sat on the VIRIDIAN mart's door and nobody
+-- could get in for the rest of the match).  Answered off the map
+-- DEFINITION so it works for a map nobody is standing on, the same as
+-- Spawn.walkable.
+function Spawn.isWarp(maps, mapId, x, y)
+  local def = maps and maps[mapId]
+  if not def then return false end
+  for _, w in ipairs(def.warps or {}) do
+    if w.x == x and w.y == y then return true end
+  end
+  return false
+end
+
 -- Can an actor stand on this cell?  Answered off the map DEFINITION, not a
 -- loaded map, so the host can walk a bot around a map nobody is standing on.
 function Spawn.walkable(maps, tilesets, mapId, x, y)

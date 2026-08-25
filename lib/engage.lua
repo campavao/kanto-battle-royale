@@ -39,6 +39,34 @@ function Engage.rangeFor(facing)
   return (facing == "up" or facing == "down") and Engage.RANGE_Y or Engage.RANGE
 end
 
+-- YOU NEVER ENGAGE WHAT YOU CANNOT SEE (POK-96).
+--
+-- The tuning above reasons about a Game Boy screen -- ten cells across,
+-- nine down -- but reasons slightly wrong: the camera centres you, so half
+-- a screen is five cells, and a trainer six cells along a row is off the
+-- edge.  Players kept getting jumped by somebody who was never drawn, and
+-- the walk-up beat (POK-85) was wasted on a bot that stepped in from
+-- outside the frame.
+--
+-- So the reach is capped by what is actually on screen.  `span` is the
+-- world view in PIXELS along the axis being looked down; a cell `d` away
+-- is at least partly visible while d * 16 < span / 2 + 8.
+--
+-- Capped, never extended: min() with the tuned range is the whole point.
+-- The view grows when a player zooms out or widens the window, and reach
+-- that grew with it would hand the biggest monitor the longest eyeline --
+-- one client seeing further than another in a game about spotting people
+-- first.  A smaller window only ever costs you reach you could not have
+-- used fairly anyway.
+function Engage.visibleRange(facing, span)
+  local base = Engage.rangeFor(facing)
+  span = tonumber(span)
+  if not span or span <= 0 then return base end
+  local reach = math.ceil((span / 2 + 8) / 16) - 1
+  if reach < 1 then reach = 1 end
+  return math.min(base, reach)
+end
+
 local DELTA = { up = { 0, -1 }, down = { 0, 1 }, left = { -1, 0 }, right = { 1, 0 } }
 
 -- The cell immediately in front of a player table { x=, y=, facing= }.

@@ -30,12 +30,24 @@
 
 local Fog = {}
 
--- Radii in town-map squares.  15 is larger than the grid's diagonal, so
--- phase 1 is "no fog anywhere" without needing a special case.  0 is the
--- centre's own square only (the town and its buildings).  A negative radius
--- is EVERYWHERE: no square is inside it, whatever the distance.
+-- Radii in town-map squares.  Phase 1 is "no fog anywhere" -- expressed as
+-- a radius wider than the board rather than as a special case, so isSafe
+-- stays one comparison.  0 is the centre's own square only (the town and
+-- its buildings).  A negative radius is EVERYWHERE: no square is inside it,
+-- whatever the distance.
 Fog.EVERYWHERE = -1
-Fog.PHASES = { 15, 9, 7, 5, 3, 1.5, 0, Fog.EVERYWHERE }
+-- The board is field.townMap's 16x16 grid, so squares run 0..15 and the
+-- longest line across it is sqrt(15^2 + 15^2) = 21.22.  This used to be 15,
+-- described in this very comment as "larger than the grid's diagonal" --
+-- which is the width of the grid, not its diagonal.  The gap was real
+-- geography: LAVENDER_TOWN (14,5) is 15.62 squares from CINNABAR_ISLAND
+-- (2,15), so a match whose eye landed on Cinnabar put anyone dropping into
+-- Lavender in the fog on the frame they touched the ground, with no grace
+-- period at all (POK-93).  NOWHERE clears the true diagonal with room to
+-- spare, and br_test proves it against the real location table rather than
+-- against arithmetic in a comment.
+Fog.NOWHERE = 24
+Fog.PHASES = { Fog.NOWHERE, 9, 7, 5, 3, 1.5, 0, Fog.EVERYWHERE }
 
 -- How long each phase lasts before the next shrink, in seconds.  A default
 -- match therefore reaches the all-fog endgame at about sixteen minutes; the

@@ -134,6 +134,10 @@ local SAFARI_BALLS = 30
 local SAFARI_STEPS = 502          -- what the gate script writes (data/scripts/safari.lua)
 local DEFAULT_SAFARI_SECONDS = 120
 local SAFARI_BEAT_SECONDS = 5     -- how often the host re-announces the clock
+-- How long the PA humours a battle that is still open at the buzzer
+-- (POK-92).  Long enough for a ball already in the air to land -- a throw
+-- and its shakes run about two seconds -- and far too short to hide in.
+local BUZZER_BATTLE_GRACE = 3
 local PVP_TURN_SECONDS = 30       -- the PvP shot clock: pick or forfeit (POK-59)
 -- the two south warps out of the centre, to the gate: there is no leaving
 -- early -- the buzzer is the only way out
@@ -593,11 +597,14 @@ return function(mod)
     self.walkUp = nil
     self.pendingParade = nil
     self.ringDistOf = nil
+    self.ringLocs = nil
     self.dropSeq = nil
     self.safariEndsAt = nil  -- the Safari opening's clock (POK-21)
     self.lastSafariBeat = nil
     self.safariGhost = nil
     self.buzzed = nil
+    self.buzzedAt = nil
+    self.lastBuzzB = nil
     self.pickingTown = nil
     self.matchSeed = nil
     self.botFight = nil
@@ -1116,6 +1123,18 @@ return function(mod)
     end)
   end
 
+  -- The world view along one axis, in pixels, for POK-96's eyeline cap.
+  -- Renderer:worldViewSize already accounts for zoom, the faithful-ratio
+  -- lock and the window; nil whenever it cannot be asked, and the cap then
+  -- falls back to the tuned range.
+  function BR:viewSpan(facing)
+    local renderer = self.game and self.game.renderer
+    if not (renderer and renderer.worldViewSize) then return nil end
+    local ok, vw, vh = pcall(renderer.worldViewSize, renderer)
+    if not ok then return nil end
+    return (facing == "up" or facing == "down") and vh or vw
+  end
+
   function BR:tryEngage()
     if self.status ~= "alive" or self.battle or self.pending then return end
     local ow = mod.world:overworld()
@@ -1127,7 +1146,18 @@ return function(mod)
                  moving = false, status = "alive", busy = false }
     local others = {}
     for id, p in pairs(self.players) do
-      others[#others + 1] = { id = id, map = p.map, x = p.x, y = p.y,
+      -- Their GHOST's cell, not their wire cell (POK-96).  The wire is
+      -- where they really are; the ghost is where this screen has drawn
+      -- them, and a fight that opens against the wire is a fight against
+      -- somebody the player was never shown -- "a battle is triggered and
+      -- I don't even see the other player".  The two are a step or two
+      -- apart on a live walk and were much further apart before POK-97
+      -- fixed the replay rate.  Asking the screen can only ever make an
+      -- engage LATER, never earlier, and an idle ghost is snapped onto the
+      -- truth by the very next sync.
+      local gx, gy = self.ghosts:cellOf(id)
+      others[#others + 1] = { id = id, map = p.map, x = gx or p.x,
+                              y = gy or p.y,
                               facing = p.facing, moving = false,
                               status = p.status,
                               busy = p.status == "battle" }
@@ -1137,6 +1167,10 @@ return function(mod)
     -- nearest-first case Engage.target already resolves)
     local map = ow.map
     local target = Engage.target(me, others, {
+      -- and the frame stops it too (POK-96): a fight that opens against
+      -- somebody who was never drawn reads as the game jumping you, and
+      -- it wasted the walk-up beat on a bot stepping in from off screen
+      range = Engage.visibleRange(me.facing, self:viewSpan(me.facing)),
       blocked = function(x, y)
         return not (map:inBounds(x, y) and map:isWalkableCell(x, y))
       end,
@@ -1179,7 +1213,15 @@ return function(mod)
 
   local function canWalk(mapId, x, y)
     local data = BR.game and BR.game.data
-    return Spawn.walkable(data and data.maps, data and data.tilesets, mapId, x, y)
+    local maps, tilesets = data and data.maps, data and data.tilesets
+    if not Spawn.walkable(maps, tilesets, mapId, x, y) then return false end
+    -- and never onto a doorway (POK-94).  src/world/NPC.lua refuses this
+    -- for Kanto's own NPCs already -- "never wander onto warps, so NPCs
+    -- don't walk out of the map" -- and ours were walking on raw tile
+    -- walkability, so a bot could stand in a mart's door, block it, and
+    -- drop its bag there when it fell.  Roam placement never could: it
+    -- deals cells from Spawn.cellsOf, which has excluded warps all along.
+    return not Spawn.isWarp(maps, mapId, x, y)
   end
 
   local function clock()
@@ -1219,6 +1261,49 @@ return function(mod)
     return cells
   end
 
+  -- THE ENDGAME HUNT (POK-95).
+  --
+  -- Squared town-map distance from any map to the NEAREST live trainer's
+  -- map -- the same grid the fog is drawn on, so it costs a lookup rather
+  -- than a search across Kanto's warp graph.  Returned as a function so
+  -- Bots.homeward can rank a bot's exits by it exactly the way it ranks
+  -- them by distance to the ring's eye.
+  --
+  -- nil means "no hunt this beat": too many trainers still alive (the ring
+  -- is doing the herding and a beeline would read as an aimbot), no ring
+  -- yet, or nobody placeable to hunt.  The caller falls back to the eye.
+  --
+  -- self.players never holds the local player, so we are added by hand --
+  -- a bot that hunts every trainer except the human is not a hunt.
+  function BR:huntDistOf(botId)
+    if self.phase ~= "match" then return nil end
+    if self:aliveCount() > Bots.HUNT_FROM then return nil end
+    local locs = self.ringLocs
+    if not locs then return nil end
+    local targets = {}
+    local me = here()
+    if self.status ~= "out" and me and locs[me.mapId] then
+      targets[#targets + 1] = locs[me.mapId]
+    end
+    for id, o in pairs(self.players) do
+      if id ~= botId and o.status == "alive" and o.map and locs[o.map] then
+        targets[#targets + 1] = locs[o.map]
+      end
+    end
+    if #targets == 0 then return nil end
+    return function(mapId)
+      local l = locs[mapId]
+      if not (l and l.x and l.y) then return nil end
+      local best
+      for _, t in ipairs(targets) do
+        local dx, dy = l.x - t.x, l.y - t.y
+        local d = dx * dx + dy * dy
+        if not best or d < best then best = d end
+      end
+      return best
+    end
+  end
+
   local function roamBot(id, p, now)
     local data = BR.game and BR.game.data
     local exits = Bots.exits(data and data.maps[p.map])
@@ -1229,9 +1314,21 @@ return function(mod)
     -- shrinking ground.  The distances are cached on BR by applyRing --
     -- this helper sits above townLocations and must not call it (the
     -- POK-24 lesson).
+    --
+    -- LATE ON, THE PULL CHANGES (POK-95): once the roster is down to a
+    -- handful the eye stops being the interesting gradient -- everyone is
+    -- already near it -- and the bot walks at whoever is nearest instead.
+    -- Otherwise the last three trainers pace three separate maps until the
+    -- fog decides it, which is what a playtest actually watched happen.
+    local hunt = BR:huntDistOf(id)
     local dist = BR.ringDistOf
     local dest
-    if dist then
+    if hunt then
+      -- no safe-here exemption: standing still is exactly the failure
+      -- being fixed.  homeward still holds when no exit is any closer.
+      dest = Bots.homeward(exits, hunt, hunt(p.map), p.rng)
+      if not dest then p.lastRoam = now return end
+    elseif dist then
       -- holding still is only wisdom INSIDE the ring; outside it, the
       -- least-bad seam beats waiting for the fog
       local r = BR.ring and BR.ring.radius
@@ -1312,11 +1409,14 @@ return function(mod)
     if not (self.relay and self.relay:isHost() and self:inRound()) then return end
     local now = clock()
     local striding = self.walkUp and self.walkUp.id
+    -- once per tick, not once per bot: the seam clock tightens as the
+    -- roster thins (POK-95) and every bot reads the same roster
+    local roamEvery = Bots.roamSeconds(self:aliveCount())
     for id, p in pairs(self.players) do
       -- a bot on its way over is not also strolling somewhere (POK-85)
       if p.bot and p.status == "alive" and p.map and id ~= striding then
         -- every so often, walk a seam into a connected map
-        if now and (now - (p.lastRoam or 0)) >= Bots.ROAM_SECONDS then
+        if now and (now - (p.lastRoam or 0)) >= roamEvery then
           roamBot(id, p, now)
         end
         local due = now == nil or (now - (p.lastStep or 0)) >= BOT_STEP_SECONDS
@@ -1481,6 +1581,7 @@ return function(mod)
     if self.phase ~= "safari" then return end
     self:setPhase("drop", "the buzzer")
     self.buzzed = true
+    self.buzzedAt = clock()
     self:dropBots()
   end
 
@@ -1556,8 +1657,52 @@ return function(mod)
     end
   end
 
+  -- The PA is patient, not infinitely so (POK-92).
+  --
+  -- tickDrop below only works on the overworld, so a battle that is open at
+  -- the buzzer simply parks the whole drop -- and a player who kept
+  -- throwing balls (or just sat in the SAFARI menu) stayed in the zone
+  -- catching a team while everyone else was already picking a town.  That
+  -- is the one thing the Safari clock exists to prevent.
+  --
+  -- So: a throw already in flight gets BUZZER_BATTLE_GRACE seconds to land,
+  -- and then the battle is closed out from under it.  BattleState:finish is
+  -- the engine's own choke point for leaving a battle -- it restores the
+  -- map music, pops itself and emits battle.ended -- so the ghost lead is
+  -- still reclaimed (POK-21) and the return fade still plays.  It pops the
+  -- TOP of the stack, though, so anything the player parked above the
+  -- battle (the bag, a party screen) is backed out with B first -- never A,
+  -- which would choose something in there (the POK-66 rule).
+  function BR:closeBuzzedBattle()
+    if self.phase ~= "drop" then return end
+    local battle = self:liveLocalBattle()
+    if not battle then return end
+    local game, now = self.game, clock()
+    if not (game and now) then return end
+    self.buzzedAt = self.buzzedAt or now
+    if (now - self.buzzedAt) < BUZZER_BATTLE_GRACE then return end
+
+    if game.stack:top() ~= battle then
+      if self.lastBuzzB and (now - self.lastBuzzB) < 0.5 then return end
+      self.lastBuzzB = now
+      if game.input and game.input.pressQueue then
+        table.insert(game.input.pressQueue, "b")
+      end
+      return
+    end
+
+    log:say("the buzzer closed a battle that was still open")
+    battle.result = battle.result or "run"
+    local ok, err = pcall(battle.finish, battle)
+    if not ok then
+      mod.log:warn("couldn't close the buzzed battle: %s", tostring(err))
+      return
+    end
+    self.localBattle = nil
+  end
+
   -- The buzzer's work, once we are standing on the overworld with no battle
-  -- open (a catch in flight finishes first; the PA is patient).  Caught
+  -- open (closeBuzzedBattle above is what guarantees we get there).  Caught
   -- nothing: out.  Still in the zone: the vanilla game-over -- the PA
   -- jingle, "Time's up!", the walk to the gate.  Then the picker, at the
   -- gate -- or straight away for a player the PA already sent there.
@@ -1590,6 +1735,58 @@ return function(mod)
     end
   end
 
+  -- YOU PICK YOUR DROP ON THE MAP (POK-101).
+  --
+  -- It was a list of town names, which is the one screen in Gen 1 that
+  -- tells you nothing about where anywhere IS -- and where you drop is a
+  -- geography decision: how far from the others, how far from wherever the
+  -- fog will close.  So it is the TOWN MAP with a cursor, the way the game
+  -- already asks "fly where?".
+  --
+  -- Built by handing TownMap its fly picker and then swapping the fly list
+  -- for the drop list.  The engine's own list is `field.flyOrder` filtered
+  -- to towns the save has VISITED, which at the buzzer is very nearly
+  -- nothing -- a fresh match has been outside exactly one building.  The
+  -- cursor machinery (Up/Down to cycle, A to commit, the banner naming
+  -- what is under it) is what we want; only its contents are ours.
+  --
+  -- The mod's ring overlay hooks this same screen by metatable, so the
+  -- fog eye draws on it for free -- though at the buzzer the eye has not
+  -- been announced yet, since the clock starts at the landing.
+  function BR:openTownPickerMap(towns)
+    local game = self.game
+    local okTM, TownMap = pcall(require, "src.ui.TownMap")
+    if not (okTM and TownMap and TownMap.new) then return nil end
+    local ok, screen = pcall(TownMap.new, game, {
+      fly = true,
+      onFly = function(mapId) BR:landIn(mapId) end,
+    })
+    if not (ok and screen and screen.byMap) then return nil end
+
+    local locs, ids = {}, {}
+    for _, town in ipairs(towns) do
+      local loc = screen.byMap[town.id]
+      -- a town the Town Map cannot place has no square to put a cursor on
+      if loc and loc.x and loc.y then
+        locs[#locs + 1] = loc
+        ids[#locs] = town.id
+      end
+    end
+    if #locs == 0 then return nil end
+
+    screen.fly = true                  -- new() leaves it unset with nothing
+    screen.onFly = function(mapId) BR:landIn(mapId) end
+    screen.locs = locs
+    screen.flyMapIds = ids
+    -- start on where we are standing (the Safari gate's town) if it is a
+    -- choice, so the cursor opens somewhere the player recognises
+    screen.sel = 1
+    for i, loc in ipairs(locs) do
+      if loc == screen.playerLoc then screen.sel = i break end
+    end
+    return screen
+  end
+
   function BR:openTownPicker()
     local game = self.game
     local towns = self:dropTowns()
@@ -1598,12 +1795,21 @@ return function(mod)
       self:landIn(nil)
       return
     end
+    -- B closes either picker like any other screen; the tick opens it
+    -- again, because there is no staying at the gate.  (tickDrop only runs
+    -- with the overworld on top, so it can never stack a second one.)
+    local mapPicker = self:openTownPickerMap(towns)
+    if mapPicker then
+      game.stack:push(mapPicker)
+      return
+    end
+    -- no Town Map on this build, or no town it can place: the names still
+    -- get you into Kanto
+    mod.log:warn("town map picker unavailable; falling back to the list")
     local items = {}
     for _, town in ipairs(towns) do
       items[#items + 1] = { label = town.name, value = town.id }
     end
-    -- B closes the list like any other; the tick opens it again, because
-    -- there is no staying at the gate
     game.stack:push(mod.ui.ListMenu.new(game, "DROP WHERE?", items, {
       onChoose = function(item, list)
         list:close()
@@ -1652,14 +1858,19 @@ return function(mod)
     -- every placed map's squared distance to the eye, for the bots'
     -- homeward roams (POK-42); cached here because roamBot is defined
     -- above townLocations
+    local locs = townLocations() or {}
     local dists = {}
-    for id, loc in pairs(townLocations() or {}) do
+    for id, loc in pairs(locs) do
       if loc.x and loc.y then
         local dx, dy = loc.x - cx, loc.y - cy
         dists[id] = dx * dx + dy * dy
       end
     end
     self.ringDistOf = dists
+    -- kept whole for the endgame hunt (POK-95): roamBot needs distances to
+    -- a MOVING target, not just to the eye, and it sits above
+    -- townLocations and may not call it (the POK-24 lesson)
+    self.ringLocs = locs
     log:say("ring %s: eye %s at %s,%s, radius %s", tostring(phase),
             tostring(place), tostring(cx), tostring(cy), tostring(radius))
     if was == nil then
@@ -2308,6 +2519,19 @@ return function(mod)
     -- an OUT player's party is a record of the fall, not a combatant --
     -- leave it alone (POK-38)
     if self.status == "out" then return end
+    -- NEVER MID-FIGHT (POK-91).  The rung you walked in with is the rung
+    -- you fight at: scaleMon replaces mon.stats wholesale and can evolve
+    -- the thing on the field, and BattleState's battlers alias those very
+    -- party tables (the aliasing the POK-31 fog bite relies on), so a
+    -- shrink that lands mid-battle used to take a Lv5 lead to Lv15
+    -- between turns.  The ring and the fog still move; only the ladder
+    -- waits, and the next tick after the battle closes pays it out.
+    --
+    -- `status` alone was the old guard and it is not enough: it only says
+    -- "battle" for a PvP duel or a bot fight (BR:beginBattle /
+    -- BR:startBotFight).  A WILD encounter or one of Kanto's own trainers
+    -- leaves it "alive", which is how this shipped.
+    if self.status == "battle" or self:liveLocalBattle() then return end
     local now = clock()
     if not now then return end
     if (now - (self.lastLevelTick or 0)) < 1 then return end
@@ -2380,15 +2604,24 @@ return function(mod)
   -- lands where they happened to be and nobody else can derive that.  Every
   -- client lays out the same balls; the first to open one says so.
 
-  -- Ground truth for a ball's landing cell (POK-75): a walkable tile AND
-  -- nobody standing there -- a ball under an NPC answers the NPC's talk,
-  -- not its own.  Occupancy is only checkable on the loaded map (elsewhere
-  -- there are no runtime objects); placement is computed by whoever fell
-  -- and broadcast (D8), so this one client's view is authoritative.
+  -- Ground truth for a ball's landing cell (POK-75): a walkable tile, NOT a
+  -- doorway (POK-94), and nobody standing there -- a ball under an NPC
+  -- answers the NPC's talk, not its own.  Occupancy is only checkable on
+  -- the loaded map (elsewhere there are no runtime objects); placement is
+  -- computed by whoever fell and broadcast (D8), so this one client's view
+  -- is authoritative.
+  --
+  -- The doorway rule is not about looking untidy.  A ball is a solid
+  -- runtime object and a warp only fires when you STEP ON it, so a ball on
+  -- a mart's door shuts that building for the rest of the match -- for
+  -- everyone, since every client lays the spill out the same way.  A
+  -- doorway is walkable by design, which is exactly why walkability alone
+  -- never caught it.
   local function spillCellFree(data, mapId, x, y)
     if not Spawn.walkable(data.maps, data.tilesets, mapId, x, y) then
       return false
     end
+    if Spawn.isWarp(data.maps, mapId, x, y) then return false end
     local ow = mod.world:overworld()
     if ow and ow.map and ow.map.id == mapId and ow.npcs then
       local Collision = require("src.world.Collision")
@@ -2407,7 +2640,10 @@ return function(mod)
                                function(x, y)
                                  return spillCellFree(data, here.mapId, x, y)
                                end,
-                               bagOf(game.save, self:playerName()))
+                               bagOf(game.save, self:playerName()),
+                               function(x, y)
+                                 return Spawn.isWarp(data.maps, here.mapId, x, y)
+                               end)
     if not spill then return end
     relay:broadcast(Wire.spill(spill.map, spill.mons, spill.bag))
     self.spills:add(spill)
@@ -2705,7 +2941,7 @@ return function(mod)
     bag.name = p.name
     local spill = Spills.build(id, p.map, p.x, p.y, party, function(x, y)
       return spillCellFree(data, p.map, x, y)
-    end, bag)
+    end, bag, function(x, y) return Spawn.isWarp(data.maps, p.map, x, y) end)
     if spill and self.relay then
       self.relay:broadcast(Wire.spill(spill.map, spill.mons, spill.bag))
       self.spills:add(spill)
@@ -3354,14 +3590,27 @@ return function(mod)
             broadcastPlace()
           end
           BR.ghosts:sync(game, h.mapId, BR.players)
+          -- Our screen paused; the match did not (POK-98).  While anything
+          -- sits above the overworld -- the START menu, a dialog, a wild
+          -- battle -- StateStack:update never reaches OverworldState, so
+          -- the ghosts' walk animation stalls and every step the wire
+          -- delivers piles up until it resolves as a teleport.  Advance
+          -- them here instead, and ONLY here: when the overworld is on top
+          -- its own update already does it, and doing both walks them at
+          -- twice speed.
+          if game.stack:top() ~= mod.world:overworld() then
+            BR.ghosts:advance(h.mapId)
+          end
           BR.spills:sync(h.mapId)
           -- nobody fights in the Safari (POK-21), nor at the gate on the
           -- way out of it
           if BR.phase == "match" then BR:tryEngage() end
         end
       end
-      -- the Safari opening: its clock, then the buzzer's work
+      -- the Safari opening: its clock, the buzzer's patience running out
+      -- on any battle still open (POK-92), then the buzzer's work
       BR:tickSafari()
+      BR:closeBuzzedBattle()
       BR:tickDrop()
       -- bots keep walking while we are in a battle or a menu: their world
       -- does not pause because ours did
@@ -3375,11 +3624,10 @@ return function(mod)
         -- (biting outside the lockstep is a desync; both players sit in
         -- the same fog anyway), and a bot fight only holds it thirty
         -- seconds (POK-63) before the POK-31 in-battle bite resumes.
-        -- Levels still wait for the overworld.
+        -- Levels own theirs too, and they are stricter: no battle of any
+        -- kind is levelled through (POK-91).
         BR:tickFog()
-        if BR.status ~= "battle" then
-          BR:tickLevels()
-        end
+        BR:tickLevels()
         BR:spectatorInput(game)
         BR:tickWatch()
       end
@@ -3664,6 +3912,29 @@ return function(mod)
       -- below).  A row that lies leaves the menu (POK-33); the veto stays
       -- as the guarantee for anything else that tries.
       mod.ui.removeLabel(out, "SAVE")
+      -- OPTION and MODS are doors out of the match (POK-99).  The manager
+      -- can disable this very mod with a live room open, and the options
+      -- screen can flip BATTLE STYLE or TEXT SPEED underneath a lockstep
+      -- duel -- states nothing downstream is built to survive.  Neither
+      -- row is worth surfacing for the length of a match; both come back
+      -- with the throwaway world.
+      mod.ui.removeLabel(out, "OPTION")
+      mod.ui.removeLabel(out, "MODS")
+      -- The ring is drawn on the TOWN MAP, which makes the map match
+      -- information rather than a keepsake -- and reaching it through the
+      -- bag meant OWNING a TOWN_MAP.  A spectator reads the watched
+      -- trainer's bag (POK-18), so watching someone who never picked one
+      -- up left you with no way to see the fog at all.  So the map gets
+      -- its own row, always, however the match is going for you (POK-100).
+      mod.ui.insertBefore(out, "QUIT", {
+        label = "MAP",
+        onSelect = function()
+          local okMap = pcall(function()
+            require("src.ui.Screens").push(game, "TownMap")
+          end)
+          if not okMap then say("The TOWN MAP is\nunreadable here.") end
+        end,
+      })
     end
     -- out and watching (POK-18): POKeMON and ITEM open what the watched
     -- trainer carries, read-only, in place of our own empty screens
@@ -3680,7 +3951,10 @@ return function(mod)
         end
       end
     end
-    return mod.ui.insertBefore(out, "OPTION", {
+    -- Anchored on QUIT, not OPTION: a missing anchor APPENDS, and OPTION
+    -- is removed for the length of a match (POK-99), which would have put
+    -- the mod's own row below QUIT.  QUIT is the one row always there.
+    return mod.ui.insertBefore(out, "QUIT", {
       label = label,
       onSelect = function() mod.ui.push(game, SCREEN) end,
     })
@@ -3915,7 +4189,8 @@ return function(mod)
     local party = withMon and { { species = "RATTATA", level = 5, hp = 10 } } or {}
     local spill = Spills.build(999, here.mapId, x, y, party,
       function(cx, cy) return spillCellFree(data, here.mapId, cx, cy) end,
-      { items = { { id = "POTION", n = 1 } }, money = 500, name = "DEBUG" })
+      { items = { { id = "POTION", n = 1 } }, money = 500, name = "DEBUG" },
+      function(cx, cy) return Spawn.isWarp(data.maps, here.mapId, cx, cy) end)
     if not spill then return nil, "nothing to spill" end
     BR.spills:add(spill)
     return spill
