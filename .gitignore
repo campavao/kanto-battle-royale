@@ -1,3 +1,8 @@
 # the mod loader's option-schema export, written next to the working directory
 /mod_option_schemas.json
 node_modules/
+
+# release zips are built here and uploaded to the GitHub release, which is
+# the only copy players ever fetch -- three of them got committed by a
+# `git add -A` during a release and sat in the tree for a dozen versions
+battle_royale-v*.zip
