@@ -117,5 +117,46 @@ do
   end
 end
 
+-- ------- Pewter's gym escort stands down for a match (POK-122)
+--
+-- The escort is armed from two places; this covers the map-script half.
+-- What must not regress is the COMPOSITION: the contribution has to be in
+-- the chain (so it runs) and must not replace vanilla (so a real
+-- playthrough with this mod installed still gets walked to the gym).
+-- Setting EVENT_BEAT_BROCK would have been the obvious fix and is the
+-- wrong one -- data/scripts/gyms.lua branches BROCK's own talk on that
+-- same flag, so it would leave every match a gym leader nobody can fight.
+
+do
+  -- Data.map_scripts is only populated on a real boot; a headless load
+  -- leaves the contribution in the registry that MapScripts reads its
+  -- chain from, so ask the registry directly.
+  local reg = run.loader.content and run.loader.content.map_scripts
+  T.check(reg ~= nil, "the engine offers a map_scripts registry")
+  local chain = reg and reg:chain("PEWTER_CITY")
+  T.check(chain ~= nil and #chain > 0,
+          "the mod contributes a PEWTER_CITY map script")
+  T.check(not (reg and reg:chainReplacesBase("PEWTER_CITY")),
+          "it composes with vanilla rather than replacing it")
+
+  local mine
+  for _, entry in ipairs(chain or {}) do
+    if type(entry) == "table" and entry.onStep then mine = entry end
+  end
+  T.check(mine ~= nil, "and the contribution carries an onStep")
+
+  if mine then
+    -- Idle, the guard stands down entirely: every cell falls through to
+    -- base, escort included.  A mod that is installed but not in a match
+    -- must leave Kanto exactly as it found it.
+    T.eq(mine.onStep(nil, nil, 35, 17), false,
+         "idle: a trigger cell is left to vanilla")
+    T.eq(mine.onStep(nil, nil, 37, 19), false,
+         "idle: the far trigger cell is left to vanilla")
+    T.eq(mine.onStep(nil, nil, 1, 1), false,
+         "idle: an ordinary cell is not consumed")
+  end
+end
+
 run.release()
 T.finish("br_load")

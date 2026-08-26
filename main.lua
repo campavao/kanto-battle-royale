@@ -8,6 +8,7 @@
 --   lib/ghosts.lua   the other players as real overworld NPCs
 --   lib/channel.lua  one battle's transport, tunnelled through the room
 --   lib/menu.lua     the BATTLE ROYALE start-menu screen
+--   lib/career.lua   the name/skin/wins that outlive a playthrough
 --   this file        the wiring
 --
 -- The loop, once a match starts: everyone drops onto a random Kanto cell
@@ -44,6 +45,7 @@ local Gyms = require("mods.battle_royale.lib.gyms")
 local Peek = require("mods.battle_royale.lib.peek")
 local BRMenu = require("mods.battle_royale.lib.menu")
 local Machines = require("mods.battle_royale.lib.machines")
+local Career = require("mods.battle_royale.lib.career")
 local Log = require("mods.battle_royale.lib.log")
 
 local SCREEN = "BattleRoyaleMenu"
@@ -225,6 +227,10 @@ return function(mod)
       default = DEFAULT_SAFARI_SECONDS, min = 0, max = 600 },
   })
 
+  -- The career (POK-120) comes off mod.cache, which is keyed by mod id
+  -- alone and so outlives the throwaway NEW GAME a match is played in.
+  local career = Career.load(mod)
+
   local BR = {
     relay = nil,
     ghosts = Ghosts.new(mod),
@@ -247,7 +253,9 @@ return function(mod)
     winnerId = nil,       -- who the host crowned (POK-107)
     arming = nil,         -- { map, x, y } while save.new_game reshapes the skeleton
     started = false,      -- have I dropped into the world yet this match
-    myName = nil,         -- chosen on the NAME row; nil falls back to the save
+    myName = career.name, -- chosen on the NAME row; nil falls back to the save
+    skin = career.skin,   -- the walk sheet every other trainer sees (POK-79)
+    wins = Career.cleanWins(career.wins),  -- career wins: the wardrobe's key
     matchWorld = false,   -- in a BR world: SAVE stays vetoed until a real save
     tearingDown = false,  -- an exit is already in flight (POK-115)
     wasHost = false,      -- were we the host as of the last roster (POK-116)
@@ -321,8 +329,7 @@ return function(mod)
 
   function BR:setName(name)
     self.myName = Wire.cleanName(name)
-    -- remembered across sessions where durable storage is available
-    pcall(function() mod.storage:write(self.game, "name", self.myName) end)
+    self:saveCareer()
     return self.myName
   end
 
@@ -382,11 +389,18 @@ return function(mod)
   --
   -- The walk sheet every other trainer sees, unlocked by career wins.  The
   -- ladder and the picker live in lib/skins.lua; the wins and the choice
-  -- persist in mod.storage next to the name.  The engine seam is
+  -- persist through lib/career.lua next to the name.  The engine seam is
   -- field.playerSprites.walk: Player builds its sheet from it, mySprite()
   -- advertises it on the wire, and the TownMap marker follows for free --
   -- applied only inside the throwaway match world and restored on the way
   -- out, so a real playthrough never wears it.
+
+  -- One writer for the whole career, so the name, the skin and the wins
+  -- can never disagree about which of them was written last.
+  function BR:saveCareer()
+    return Career.save(mod, { name = self.myName, skin = self.skin,
+                              wins = self:winCount() }, log)
+  end
 
   function BR:winCount() return self.wins or 0 end
 
@@ -407,7 +421,7 @@ return function(mod)
       return nil, ("unlock at %d wins"):format(entry.wins)
     end
     self.skin = entry.id
-    pcall(function() mod.storage:write(self.game, "skin", entry.id) end)
+    self:saveCareer()
     if self.matchWorld then self:applySkinWalk() end
     if self.relay and self.relay:isOpen() then broadcastPlace() end
     return entry.id
@@ -450,7 +464,7 @@ return function(mod)
     local Skins = require("mods.battle_royale.lib.skins")
     local before = self:winCount()
     self.wins = before + 1
-    pcall(function() mod.storage:write(self.game, "wins", tostring(self.wins)) end)
+    self:saveCareer()
     for _, e in ipairs(Skins.justUnlocked(before, self.wins)) do
       sayLater(("You unlocked the\n%s skin!"):format(e.label), 3)
     end
@@ -2066,10 +2080,19 @@ return function(mod)
       sayLater(("The fog will close\non %s.\fCheck your\nTOWN MAP."):format(
         place or "KANTO"))
     elseif was ~= phase and phase > 1 then
+      -- ONE box per shrink, not three.  The ring, the level rung and the
+      -- rod all move on the same beat by design -- lib/levels.lua and
+      -- lib/rods.lua both index off the fog phase precisely so the match
+      -- keeps one rhythm -- so three messages in a row said one thing
+      -- three times and buried the one that mattered under the two that
+      -- did not.  The level number and the rod's name were the detail
+      -- nobody was reading; that the fog moved and everything got
+      -- stronger is the news.  WHERE it closed stays on the TOWN MAP,
+      -- which the opening message above points at.
       if Fog.coversAll(radius) then
-        sayLater("The fog covers\nall of KANTO!")
+        sayLater("The fog covers\nall of KANTO!\fYour POKeMON and\nitems grew\nstronger!")
       else
-        sayLater(("The fog closes in\non %s!"):format(place or "KANTO"))
+        sayLater("The fog spreads!\fYour POKeMON and\nitems grew\nstronger!")
       end
     end
     -- after the announcement, so the news lands before the gift
@@ -2096,8 +2119,10 @@ return function(mod)
     if have == want or not Rods.isBetter(want, have) then return end
     for _, id in ipairs(Rods.ALL) do save.inventory[id] = nil end
     save.inventory[want] = 1
-    local line = Rods.upgradeLine(want)
-    if line and have then sayLater(line, 1.0) end
+    -- Silent on screen: the ring's own message already said the items
+    -- got better, and this fires on that same beat.  The transition is
+    -- still named in the log, which is where anyone debugging a rung
+    -- goes looking for it.
     log:say("rod: %s -> %s", tostring(have or "none"), tostring(want))
   end
 
@@ -2797,11 +2822,12 @@ return function(mod)
     end
     if raised > 0 and self.announcedLevel ~= target then
       self.announcedLevel = target
-      if evolved then
-        sayLater(("Your POKeMON grew\nto Lv%d, and one\nevolved!"):format(target))
-      else
-        sayLater(("Your POKeMON grew\nto Lv%d!"):format(target))
-      end
+      -- The rung itself is announced by the ring that caused it, in the
+      -- one message that also covers the rod (see applyRing).  An
+      -- evolution is the part of that beat the ring cannot carry -- it is
+      -- per-player and not known until the party is actually scaled --
+      -- and it is rare enough to be news rather than noise.
+      if evolved then sayLater("One of your\nPOKeMON evolved!") end
     end
   end
 
@@ -4082,6 +4108,36 @@ return function(mod)
   -- walking into someone, so here A just names them (and, if we are already
   -- adjacent and facing, is a second way to start the fight).
 
+  -- ------- Pewter's gym escort stands down for a match (POK-122)
+  --
+  -- Vanilla Pewter stops a trainer heading east and walks them to the gym
+  -- (data/scripts/story5.lua M.PEWTER_CITY), gated on EVENT_BEAT_BROCK.
+  -- In a match that flag can never be set: BROCK is a contested boss
+  -- (POK-26) and his own talk branches on the SAME flag
+  -- (data/scripts/gyms.lua PEWTER_GYM.talk), so listing it in STORY_FLAGS
+  -- would hand every match a gym leader who cannot be fought and a TM
+  -- nobody can win.  The escort is headed off at its triggers instead.
+  --
+  -- It has to not fire at all, rather than merely stop after the first
+  -- time: a lockstep walk is not a cutscene here, it is a movement lock
+  -- while the ring closes and other trainers hunt.  There are two
+  -- triggers, and this is the first -- map_scripts composes onStep
+  -- first-truthy-consumes with a mod's contribution ahead of base
+  -- (src/script/MapScripts.lua), so returning true on the four trigger
+  -- cells means base never sees the step.  Outside a session it returns
+  -- false and vanilla Pewter is untouched, which matters: this mod is
+  -- installed alongside real playthroughs.
+  local PEWTER_ESCORT_CELLS = {
+    ["35,17"] = true, ["36,17"] = true, ["37,18"] = true, ["37,19"] = true,
+  }
+
+  mod.content.map_scripts:register("PEWTER_CITY", {
+    onStep = function(_, _, x, y)
+      if not BR:inSession() then return false end
+      return PEWTER_ESCORT_CELLS[x .. "," .. y] == true
+    end,
+  })
+
   mod.hooks:wrap("world.talk", function(next, ow, npc)
     -- The Cable Club receptionist is the other door to the engine's link
     -- play (POK-84).  Same reason as the START row, so the same window:
@@ -4120,6 +4176,16 @@ return function(mod)
     if BR:inRound() and ow and ow.map and ow.map.id == "SAFARI_ZONE_GATE"
        and not (BR.game and BR.game.save and BR.game.save.safari) then
       say("The SAFARI ZONE\nis closed for\nthe match.")
+      return
+    end
+    -- The other half of POK-122: the youngster arms the very same escort
+    -- from a conversation (story5.lua M.PEWTER_CITY.talk calls
+    -- pewterGymEscort directly), so guarding the trigger cells alone
+    -- leaves the walk one A press away.  He keeps a line; what he does
+    -- not keep is the right to march you across town mid-match.
+    if BR:inSession() and def and def.name == "PEWTERCITY_YOUNGSTER"
+       and ow and ow.map and ow.map.id == "PEWTER_CITY" then
+      say("BROCK is taking\non all comers\ntoday!")
       return
     end
     -- a spilled ball: press A to open it, like every item ball in Kanto.
@@ -4310,6 +4376,50 @@ return function(mod)
     Font.draw(text, (tx + 1) * 8, (ty + 1) * 8)
     return w
   end
+
+  -- ------- "the other one is still choosing" (POK-106)
+  --
+  -- A link turn is lockstep: submit() puts our action on the wire, sets
+  -- `phase = "waitRemote"` and parks until the peer's arrives
+  -- (src/link/LinkBattle.lua).  BattleState draws nothing for that phase --
+  -- no menu, no prompt -- so a player who has picked a move sits looking at
+  -- a still screen with no way to tell a thinking opponent from a hung
+  -- client.  Over a relay that pause can be seconds.
+  --
+  -- No engine change needed: the wait is exactly "we have a pending action
+  -- and no remote one yet", and both fields are on the state the stack is
+  -- already holding.  The dots animate on purpose -- a static box is the
+  -- one thing that would not answer the question the player is asking,
+  -- which is whether anything is still happening.  Padded to a fixed width
+  -- so the box does not breathe with them.
+  mod.hooks:wrap("render.hud", function(next, game, viewport)
+    local out = next(game, viewport)
+    if not (BR:inSession() and viewport and game.stack) then return out end
+    local top = game.stack:top()
+    if not (top and top.phase == "waitRemote"
+            and top.pendingMyAction and not top.remoteAction) then
+      return out
+    end
+    local okFont, Font = pcall(require, "src.render.Font")
+    if not okFont or not Font.draw then return out end
+
+    local sx = (viewport.gameWidth or 160) / 160
+    local sy = (viewport.gameHeight or 144) / 144
+    local g = love.graphics
+    g.push("all")
+    g.translate(viewport.gameX or 0, viewport.gameY or 0)
+    g.scale(sx, sy)
+    -- Into the battle's OWN message box: BattleState:drawTextArea has
+    -- already put it on screen and this phase leaves it empty, so we use
+    -- its exact text origin (8, 112) and its black, the same as a real
+    -- "used PSYCHIC!" line.  A bordered box of our own nested inside that
+    -- one read as a debug overlay rather than as the game talking.
+    g.setColor(0, 0, 0, 1)
+    local dots = ("."):rep(math.floor((clock() or 0) * 3) % 4)
+    Font.draw(("WAITING%-3s"):format(dots), 8, 112)
+    g.pop()
+    return out
+  end)
 
   mod.hooks:wrap("render.hud", function(next, game, viewport)
     local out = next(game, viewport)
@@ -4512,17 +4622,39 @@ return function(mod)
     BR.matchWorld = false
   end)
 
-  -- pick up the game handle early and any remembered name
+  -- Pick up the game handle early, and rescue a career written before
+  -- POK-120 moved the store.  The old keys lived in mod.storage, which the
+  -- engine scopes to one playthrough, so this finds something only on the
+  -- save that happened to be live when they were written -- which is
+  -- exactly the save whose wins are worth keeping.  The cache wins every
+  -- tie: once a field is in the career file, the old key is never read
+  -- again, so this cannot walk a career backwards.
   mod.events:on("game.ready", function(ev)
     BR.game = ev.game
-    local ok, stored = pcall(function() return mod.storage:read(ev.game, "name") end)
-    if ok and type(stored) == "string" and stored ~= "" then
-      BR.myName = Wire.cleanName(stored)
+    local function legacy(key)
+      local ok, value = pcall(function() return mod.storage:read(ev.game, key) end)
+      if ok then return value end
+      return nil
     end
-    local okW, wins = pcall(function() return mod.storage:read(ev.game, "wins") end)
-    if okW and tonumber(wins) then BR.wins = math.floor(tonumber(wins)) end
-    local okS, skin = pcall(function() return mod.storage:read(ev.game, "skin") end)
-    if okS and type(skin) == "string" and skin ~= "" then BR.skin = skin end
+    local rescued = false
+    if not BR.myName then
+      local stored = legacy("name")
+      if type(stored) == "string" and stored ~= "" then
+        BR.myName, rescued = Wire.cleanName(stored), true
+      end
+    end
+    if not BR.skin then
+      local skin = legacy("skin")
+      if type(skin) == "string" and skin ~= "" then BR.skin, rescued = skin, true end
+    end
+    if BR:winCount() == 0 then
+      local wins = tonumber(legacy("wins"))
+      if wins and wins >= 1 then BR.wins, rescued = Career.cleanWins(wins), true end
+    end
+    if rescued then
+      log:say("career carried over from this save's old storage")
+      BR:saveCareer()
+    end
   end)
 
   -- A match plays in a throwaway world: writing it into the player's save
@@ -4569,8 +4701,8 @@ return function(mod)
     return out
   end
   mod.exports.debugSetWins = function(n)
-    BR.wins = math.max(0, math.floor(tonumber(n) or 0))
-    pcall(function() mod.storage:write(BR.game, "wins", tostring(BR.wins)) end)
+    BR.wins = Career.cleanWins(n)
+    BR:saveCareer()
     return BR.wins
   end
   mod.exports.openSkinPicker = function()

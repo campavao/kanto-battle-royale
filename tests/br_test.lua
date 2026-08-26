@@ -2113,12 +2113,6 @@ do
   ok(Rods.isBetter("OLD_ROD", nil), "any rod beats no rod")
   ok(not Rods.isBetter("OLD_ROD", "SUPER_ROD"), "and OLD never beats SUPER")
   ok(not Rods.isBetter("SUPER_ROD", "SUPER_ROD"), "a rod does not beat itself")
-
-  -- the swap is announced only when something is actually replaced
-  ok(Rods.upgradeLine("GOOD_ROD"), "an upgrade to GOOD has a line")
-  ok(Rods.upgradeLine("SUPER_ROD"), "and so does one to SUPER")
-  ok(Rods.upgradeLine("OLD_ROD") == nil,
-     "the rod you started with is not news")
 end
 
 -- ------------------------------------------------------------------
@@ -2434,6 +2428,88 @@ do
      "keyAt finds the bag's cell")
   ok(S:keyAt("ROUTE_2", mon.x, mon.y) == nil, "keyAt is per-map")
   ok(S:keyAt("ROUTE_1", 40, 40) == nil, "an empty cell has no key")
+end
+
+-- POK-120: the career that outlives a playthrough
+do
+  local Career = require("mods.battle_royale.lib.career")
+
+  local function roundTrip(t) return Career.decode(Career.encode(t)) end
+
+  local full = roundTrip({ name = "ASH", skin = "HIKER", wins = 12 })
+  eq(full.name, "ASH", "name round-trips")
+  eq(full.skin, "HIKER", "skin round-trips")
+  eq(full.wins, 12, "wins round-trip")
+
+  local bare = roundTrip({})
+  ok(bare.name == nil, "no name is no row")
+  ok(bare.skin == nil, "no skin is no row")
+  eq(bare.wins, 0, "a career always states its wins")
+
+  -- Wire.cleanName lets punctuation through and `=` is punctuation; the
+  -- FIRST `=` splits, so the rest of the name survives intact
+  eq(roundTrip({ name = "A=B" }).name, "A=B", "an = in the name survives")
+  eq(roundTrip({ name = "MR. MIME" }).name, "MR. MIME", "a space in the name survives")
+
+  eq(Career.cleanWins(-3), 0, "wins never go negative")
+  eq(Career.cleanWins(2.7), 2, "wins are whole")
+  eq(Career.cleanWins("5"), 5, "a numeric string is a count")
+  eq(Career.cleanWins("nope"), 0, "nonsense is no wins")
+  eq(Career.cleanWins(nil), 0, "absent is no wins")
+  eq(roundTrip({ wins = -4 }).wins, 0, "a negative count is stored as zero")
+
+  -- a file poked by hand loses a field at worst
+  local poked = Career.decode("wins=9\nbogus=1\nnot a row\nskin=LASS\n")
+  eq(poked.wins, 9, "an unknown row does not derail the parse")
+  eq(poked.skin, "LASS", "rows after the junk still read")
+  ok(poked.name == nil, "a missing row is simply absent")
+  eq(next(Career.decode("")), nil, "an empty file is an empty career")
+  eq(next(Career.decode(nil)), nil, "a missing file is an empty career")
+
+  -- in case the file is ever touched by a Windows editor
+  eq(Career.decode("name=RED\r\nwins=3\r\n").name, "RED", "CRLF keeps the name")
+  eq(Career.decode("name=RED\r\nwins=3\r\n").wins, 3, "CRLF keeps the wins")
+
+  -- ------- the store, against an in-memory mod.cache
+
+  local function fakeMod(refuseWrites)
+    local files = {}
+    return {
+      files = files,
+      cache = {
+        read = function(_, key) return files[key] end,
+        write = function(_, key, bytes)
+          if refuseWrites then return nil, "disk is full" end
+          files[key] = bytes
+          return true
+        end,
+      },
+    }
+  end
+
+  local m = fakeMod()
+  eq(next(Career.load(m)), nil, "a fresh install has no career")
+  ok(Career.save(m, { name = "BLUE", skin = "ROCKET", wins = 21 }),
+     "save reports success")
+  local back = Career.load(m)
+  eq(back.name, "BLUE", "the name comes back")
+  eq(back.skin, "ROCKET", "the skin comes back")
+  eq(back.wins, 21, "the wins come back")
+  ok(m.files[Career.KEY] ~= nil, "and it landed under the versioned key")
+  -- the whole point of the ticket: the store is not keyed by a playthrough,
+  -- so a later launch reading the same cache finds the same career
+  eq(Career.load(m).wins, 21, "a later session reads the same career")
+
+  local warned = {}
+  local log = { warn = function(_, fmt, ...) warned[#warned + 1] = fmt:format(...) end }
+  local okSave, err = Career.save(fakeMod(true), { wins = 1 }, log)
+  ok(not okSave, "a refused write reports failure")
+  eq(err, "disk is full", "and hands back the reason")
+  eq(#warned, 1, "and says so once in the log, instead of swallowing it")
+
+  -- an engine without mod.cache degrades to no career, never to a throw
+  eq(next(Career.load({})), nil, "no cache is an empty career")
+  ok(not Career.save({}, { wins = 1 }), "and a save that cannot land says so")
 end
 
 -- POK-79: the skin ladder

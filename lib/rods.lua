@@ -49,13 +49,9 @@ end
 
 function Rods.isBetter(a, b) return Rods.rank(a) > Rods.rank(b) end
 
--- What the player is told when the fog hands them a better rod.  Kept here
--- with the ladder so the wording and the rung cannot drift apart.
-local SAID = {
-  GOOD_ROD  = "Your OLD ROD was\nreplaced by a\nGOOD ROD!",
-  SUPER_ROD = "Your GOOD ROD was\nreplaced by a\nSUPER ROD!",
-}
-
-function Rods.upgradeLine(id) return SAID[id] end
+-- Nothing announces the rod by name any more: the ring says "your POKeMON
+-- and items grew stronger" once, for the level rung and this together,
+-- rather than three boxes for one beat.  The swap is still named in the
+-- match log.  The per-rod wording that used to live here went with it.
 
 return Rods
