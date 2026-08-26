@@ -14,6 +14,12 @@
 //   {type:"host_room", name}           -> room_hosted {code, id}, then a roster
 //   {type:"join_room", code, name}     -> room_joined {code, id, host}, or
 //                                         room_error {reason}
+//   {type:"stat", id, v, solo, since}   how much play there has been: a random
+//                                      install id, the mod version, solo matches
+//                                      since the last one, and a first-seen date.
+//                                      Never a trainer name. Logged, counted, not
+//                                      answered -- the client sends it on a
+//                                      connection it already had (POK-124).
 //   {type:"lock_room", locked}         host only: refuse new joiners (a match
 //                                      in progress)
 //   {type:"leave_room"}
@@ -71,7 +77,7 @@ const NAME_MAX = 10;
 // Bytes actually written, so "what is this costing" has an answer that is not
 // a guess.  Egress is the line item that scales with players.
 const traffic = { bytesOut: 0, linesOut: 0, roomsOpened: 0, peakRooms: 0,
-                  peakConns: 0, rejected: 0 };
+                  peakConns: 0, rejected: 0, statSolo: 0, statSeen: 0 };
 
 export function stats() { return { ...traffic }; }
 
@@ -374,6 +380,30 @@ export function createRelay(options = {}) {
         return;
       }
 
+      case "stat": {
+        // Play the client could not otherwise report: SOLO VS BOTS never
+        // opens a socket, so it arrives here on the next connection made
+        // for some other reason. Logged and counted; deliberately not
+        // answered, so a client can send one and forget it.
+        //
+        // Everything is bounded before it reaches a log line: an id that is
+        // not a short hex string, or a count that is not a sane number, is
+        // dropped rather than written, because this is the one message
+        // whose whole content is chosen by the client.
+        const id = typeof msg.id === "string" && /^[0-9a-f]{1,32}$/.test(msg.id)
+          ? msg.id : null;
+        if (!id) return;
+        const solo = Number.isFinite(msg.solo)
+          ? Math.max(0, Math.min(100000, Math.floor(msg.solo))) : 0;
+        const version = typeof msg.v === "string" && msg.v.length <= 16
+          ? msg.v : "?";
+        const since = typeof msg.since === "string"
+          && /^\d{4}-\d{2}-\d{2}$/.test(msg.since) ? msg.since : "?";
+        traffic.statSeen += 1;
+        traffic.statSolo += solo;
+        log(`stat ${id} v${version} | solo +${solo} | since ${since}`);
+        return;
+      }
       default:
         // unknown control types are ignored rather than fatal: a newer
         // client talking to an older relay should degrade, not disconnect
@@ -470,6 +500,8 @@ export function createRelay(options = {}) {
     log(`rooms ${rooms.size}/${limits.rooms} conns ${conns.size}/${limits.conns}`
         + ` | sent ${human(traffic.bytesOut)} in ${traffic.linesOut} lines`
         + ` | peak ${traffic.peakRooms} rooms ${traffic.peakConns} conns`
+        + (traffic.statSeen
+           ? ` | stats ${traffic.statSeen} (solo ${traffic.statSolo})` : "")
         + (traffic.rejected ? ` | refused ${traffic.rejected}` : ""));
   }, 5 * 60_000);
   reporter.unref();

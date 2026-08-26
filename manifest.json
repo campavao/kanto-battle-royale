@@ -1,7 +1,7 @@
 {
   "id": "battle_royale",
   "name": "Kanto Battle Royale",
-  "version": "0.31.0",
+  "version": "0.32.0",
   "api": 2,
   "github": "campavao/kanto-battle-royale",
   "entry": "main.lua",

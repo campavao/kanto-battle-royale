@@ -457,3 +457,58 @@ test("garbage lines are dropped, a flood of them disconnects", async () => {
     assert.equal(closed.type, "__closed");
   }, { badLines: 5 });
 });
+
+test("a stat line is counted and never answered", async () => {
+  await withRelay(async (port) => {
+    const before = stats();
+    const a = await connect(port);
+    a.send({ type: "stat", id: "0123456789abcdef", v: "0.31.0",
+             solo: 3, since: "2026-08-20" });
+    // nothing comes back: the client sends this and forgets it, so a reply
+    // would be a message no client is listening for
+    a.send({ type: "ping" });
+    assert.equal((await a.next()).type, "pong");
+    const after = stats();
+    assert.equal(after.statSeen, before.statSeen + 1, "the stat was seen");
+    assert.equal(after.statSolo, before.statSolo + 3, "and its solo count added");
+    a.end();
+  });
+});
+
+test("a stat with a junk id or count is dropped, not logged", async () => {
+  await withRelay(async (port) => {
+    const before = stats();
+    const a = await connect(port);
+    // the id is the one field whose whole content the client chooses, so a
+    // non-hex id must never reach a log line
+    a.send({ type: "stat", id: "../../etc/passwd", solo: 1 });
+    a.send({ type: "stat", id: "not hex at all", solo: 1 });
+    a.send({ type: "stat", solo: 1 });
+    a.send({ type: "ping" });
+    assert.equal((await a.next()).type, "pong");
+    assert.equal(stats().statSeen, before.statSeen, "none of them counted");
+
+    // a sane id with a nonsense count still counts the install, at zero
+    a.send({ type: "stat", id: "abc123", solo: -5 });
+    a.send({ type: "ping" });
+    assert.equal((await a.next()).type, "pong");
+    const after = stats();
+    assert.equal(after.statSeen, before.statSeen + 1, "the install counted");
+    assert.equal(after.statSolo, before.statSolo, "the bad count did not");
+    a.end();
+  });
+});
+
+test("a stat needs no room, which is the whole point", async () => {
+  await withRelay(async (port) => {
+    const before = stats();
+    const a = await connect(port);
+    // never hosts, never joins -- a solo player's count arriving on a
+    // connection that exists for some other reason
+    a.send({ type: "stat", id: "feedface", v: "0.31.0", solo: 12 });
+    a.send({ type: "ping" });
+    assert.equal((await a.next()).type, "pong");
+    assert.equal(stats().statSolo, before.statSolo + 12, "counted without a room");
+    a.end();
+  });
+});

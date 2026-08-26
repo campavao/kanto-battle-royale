@@ -9,6 +9,7 @@
 --   lib/channel.lua  one battle's transport, tunnelled through the room
 --   lib/menu.lua     the BATTLE ROYALE start-menu screen
 --   lib/career.lua   the name/skin/wins that outlive a playthrough
+--   lib/stats.lua    how much play there has been (never opens a socket)
 --   this file        the wiring
 --
 -- The loop, once a match starts: everyone drops onto a random Kanto cell
@@ -46,6 +47,7 @@ local Peek = require("mods.battle_royale.lib.peek")
 local BRMenu = require("mods.battle_royale.lib.menu")
 local Machines = require("mods.battle_royale.lib.machines")
 local Career = require("mods.battle_royale.lib.career")
+local Stats = require("mods.battle_royale.lib.stats")
 local Log = require("mods.battle_royale.lib.log")
 
 local SCREEN = "BattleRoyaleMenu"
@@ -230,6 +232,10 @@ return function(mod)
   -- The career (POK-120) comes off mod.cache, which is keyed by mod id
   -- alone and so outlives the throwaway NEW GAME a match is played in.
   local career = Career.load(mod)
+  -- The install id and the solo counter (POK-124).  Reading this cannot
+  -- block: mod.cache is a local file, and nothing in lib/stats.lua ever
+  -- touches the network.
+  local stats = Stats.ensure(mod)
 
   local BR = {
     relay = nil,
@@ -402,6 +408,14 @@ return function(mod)
                               wins = self:winCount() }, log)
   end
 
+  -- The player's say in POK-124.  Off means nothing is counted and nothing
+  -- is sent -- the solo counter stops moving too, so turning it off does
+  -- not leave a backlog to be flushed the moment it goes back on.
+  function BR:statsOn() return not stats.off end
+  function BR:setStatsOn(on)
+    return not Stats.setOff(mod, stats, not on, log)
+  end
+
   function BR:winCount() return self.wins or 0 end
 
   function BR:skinId()
@@ -514,6 +528,12 @@ return function(mod)
       if BR.quick and relay:isHost() then
         BR.autoStartAt = love.timer.getTime() + QUICK_START_SECONDS
       end
+      -- Whatever solo play has piled up since last time goes out on this
+      -- connection, which exists for its own reasons (POK-124).  Relay:stat
+      -- refuses a LocalRoom, so a solo room cannot eat the count, and the
+      -- counter is only cleared once the send is actually accepted.
+      local m = Stats.message(stats, mod.version)
+      if m and relay:stat(m) then Stats.flushed(mod, stats, log) end
     end)
     relay:on("roster", function(members)
       -- someone arriving with seconds left would be dropped into a match
@@ -861,6 +881,13 @@ return function(mod)
   function BR:startMatch()
     local relay = self.relay
     if not (relay and relay:isHost()) then return end
+    -- A solo match is the one nothing else can see: it runs on a LocalRoom
+    -- and never opens a socket (POK-124).  This is a counter bump and a
+    -- local file write -- deliberately NOT a connection, because
+    -- Net:connectTCP blocks for up to five seconds and the player just
+    -- asked for the offline mode.  The count rides the next real relay
+    -- connection instead.
+    if self.solo then Stats.recordSolo(mod, stats, log) end
     local ids = {}
     for _, m in ipairs(relay.members) do ids[#ids + 1] = m.id end
     table.sort(ids)
@@ -4700,6 +4727,8 @@ return function(mod)
     end
     return out
   end
+  mod.exports.statsOn = function() return BR:statsOn() end
+  mod.exports.setStatsOn = function(on) return BR:setStatsOn(on) end
   mod.exports.debugSetWins = function(n)
     BR.wins = Career.cleanWins(n)
     BR:saveCareer()

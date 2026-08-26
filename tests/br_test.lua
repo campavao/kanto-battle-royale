@@ -1804,6 +1804,8 @@ do
         -- the deep-log switch the DEBUG LOG row reads (POK-86)
         debugOn = false,
         isDebug = function(self) return self.debugOn end,
+        statsOn = function(self) return self.stats ~= false end,
+        setStatsOn = function(self, on) self.stats = on and true or false return self.stats end,
         setDebug = function(self, on) self.debugOn = on and true or false end,
         cycleSafari = function(self) self.cycledSafari = true end,
       }
@@ -1902,7 +1904,7 @@ do
     BR.solo = true
     items, view = BRMenu.items({}, BR, {})
     eq(view, "lobby", "an open room is the lobby")
-    eq(labels(items), "BOTS: 3|FOG: 120s|SAFARI: 120s|DEBUG LOG: OFF|START MATCH|LEAVE",
+    eq(labels(items), "BOTS: 3|FOG: 120s|SAFARI: 120s|DEBUG LOG: OFF|SEND STATS: ON|START MATCH|LEAVE",
        "solo: bots, the two clocks, start, leave")
     find(items, "FOG").onSelect()
     ok(BR.cycledFog, "the FOG row cycles the fog clock (POK-44)")
@@ -1925,7 +1927,7 @@ do
     BR.startsIn = function() return 12 end
     items = BRMenu.items({}, BR, {})
     eq(labels(items),
-       "CODE ABCDEF|- RED*|- BLUE|OPEN: NO|BOTS: 3|FOG: 120s|SAFARI: 120s|DEBUG LOG: OFF|FILL TO: OFF|TRAINERS: 5|START MATCH (12)|LEAVE",
+       "CODE ABCDEF|- RED*|- BLUE|OPEN: NO|BOTS: 3|FOG: 120s|SAFARI: 120s|DEBUG LOG: OFF|SEND STATS: ON|FILL TO: OFF|TRAINERS: 5|START MATCH (12)|LEAVE",
        "hosting: code, roster, OPEN, BOTS, the clocks, FILL TO, the total, the countdown")
 
     -- a guest waits
@@ -2510,6 +2512,120 @@ do
   -- an engine without mod.cache degrades to no career, never to a throw
   eq(next(Career.load({})), nil, "no cache is an empty career")
   ok(not Career.save({}, { wins = 1 }), "and a save that cannot land says so")
+end
+
+-- POK-124: counting play without ever opening a socket to report it
+do
+  local Stats = require("mods.battle_royale.lib.stats")
+
+  -- ------- the id
+
+  local id = Stats.newId()
+  eq(#id, 16, "an install id is 16 characters")
+  ok(id:match("^[0-9a-f]+$") ~= nil, "and hex, which is what the relay accepts")
+  ok(Stats.newId() ~= Stats.newId(), "two installs are not the same install")
+
+  -- ------- the file
+
+  local function roundTrip(t) return Stats.decode(Stats.encode(t)) end
+
+  local full = roundTrip({ id = "abc123", since = "2026-08-20", solo = 7 })
+  eq(full.id, "abc123", "id round-trips")
+  eq(full.since, "2026-08-20", "first-seen round-trips")
+  eq(full.solo, 7, "the solo count round-trips")
+  eq(full.off, false, "and the opt-out defaults to on")
+
+  eq(roundTrip({ off = true }).off, true, "an opt-out round-trips")
+  eq(Stats.cleanCount(-4), 0, "a count never goes negative")
+  eq(Stats.cleanCount(2.7), 2, "a count is whole")
+  eq(Stats.cleanCount("nope"), 0, "nonsense is no matches")
+  eq(next(Stats.decode("")), nil, "an empty file is an empty ledger")
+  eq(next(Stats.decode(nil)), nil, "so is a missing one")
+  eq(Stats.decode("solo=3\nbogus=1\nnot a row\n").solo, 3,
+     "a hand-poked file loses a field at worst")
+
+  -- ------- the store, against an in-memory mod.cache
+  --
+  -- The fake mod has a cache and NOTHING else -- no net, no relay, no
+  -- socket of any kind.  That every path below works against it is the
+  -- point of POK-124: recording play must not need a network, because
+  -- Net:connectTCP blocks for five seconds and a solo player asked to be
+  -- left alone.
+
+  local function fakeMod()
+    local files = {}
+    return { files = files, version = "0.31.0", cache = {
+      read = function(_, k) return files[k] end,
+      write = function(_, k, b) files[k] = b return true end } }
+  end
+
+  local m = fakeMod()
+  local s = Stats.ensure(m)
+  ok(s.id and #s.id == 16, "ensure mints an id on a fresh install")
+  ok(m.files[Stats.KEY] == nil,
+     "but writes nothing at boot -- an engine that cannot take a write must"
+     .. " not warn on every launch about play that has not happened")
+  Stats.recordSolo(m, s, nil)
+  ok(m.files[Stats.KEY] ~= nil, "the first thing worth reporting persists the id")
+  eq(Stats.ensure(m).id, s.id, "so the next launch is the same install")
+  Stats.flushed(m, s, nil)
+
+  -- ------- counting
+
+  Stats.recordSolo(m, s, nil)
+  Stats.recordSolo(m, s, nil)
+  eq(s.solo, 2, "two solo matches are two solo matches")
+  eq(Stats.load(m).solo, 2, "and they survive a restart")
+
+  local msg = Stats.message(s, m.version)
+  eq(msg and msg.type, "stat", "the wire message is a stat")
+  eq(msg and msg.solo, 2, "carrying the pending count")
+  eq(msg and msg.id, s.id, "and the install id")
+  eq(msg and msg.v, "0.31.0", "and the build, so a version spread is readable")
+  ok(msg and msg.name == nil, "and NOT the trainer name, which the player chose")
+
+  -- the count clears only once it has actually gone somewhere
+  Stats.flushed(m, s, nil)
+  eq(s.solo, 0, "a flushed count is zero")
+  eq(Stats.load(m).solo, 0, "durably")
+  eq(Stats.message(s, m.version).solo, 0, "and the next message says nothing new")
+
+  -- ------- the opt-out stops the counting, not just the sending
+
+  Stats.setOff(m, s, true, nil)
+  eq(Stats.message(s, m.version), nil, "opted out, there is no message to send")
+  Stats.recordSolo(m, s, nil)
+  eq(s.solo, 0, "and nothing is counted while it is off")
+  eq(Stats.load(m).off, true, "the choice is remembered")
+  Stats.setOff(m, s, false, nil)
+  Stats.recordSolo(m, s, nil)
+  eq(s.solo, 1, "turning it back on starts counting again")
+
+  -- an engine with no cache degrades to no ledger rather than throwing
+  eq(next(Stats.load({})), nil, "no cache is an empty ledger")
+  ok(not Stats.save({}, { id = "x" }), "and a save that cannot land says so")
+
+  -- ------- a stat never rides a LocalRoom (the guard against losing it)
+
+  local Relay = require("mods.battle_royale.lib.relay")
+  local sent = {}
+  local fakeNet = { closed = false, send = function(_, msg) sent[#sent + 1] = msg end }
+
+  local localRoom = Relay.new({ transport = fakeNet })
+  localRoom.status = "lobby"
+  eq(localRoom:stat({ id = "abc" }), false,
+     "a solo room has no address, so it refuses a stat")
+  eq(#sent, 0, "and nothing was written into the void")
+
+  local online = Relay.new({ address = "example:7790" })
+  online.net = fakeNet
+  online.status = "lobby"
+  eq(online:stat({ id = "abc", solo = 4 }), true, "a real relay takes it")
+  eq(sent[1] and sent[1].type, "stat", "as a stat")
+  eq(sent[1] and sent[1].solo, 4, "with the count")
+
+  online.status = "connecting"
+  eq(online:stat({ id = "abc" }), false, "and not before the room exists")
 end
 
 -- POK-79: the skin ladder

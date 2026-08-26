@@ -115,6 +115,12 @@ function Menu.items(mod, BR, game)
       -- this client's own, so it sits with the host's other switches.
       setting("DEBUG LOG: " .. (BR:isDebug() and "ON" or "OFF"),
               function() BR:setDebug(not BR:isDebug()) end)
+      -- How many matches get played, so there is some idea whether anyone
+      -- is out there (POK-124).  A random install id, the version and a
+      -- count -- never the name you picked.  Off stops the counting as
+      -- well as the sending.
+      setting("SEND STATS: " .. (BR:statsOn() and "ON" or "OFF"),
+              function() BR:setStatsOn(not BR:statsOn()) end)
       -- Only meaningful when humans might still arrive: it holds seats
       -- open for them and lets bots take whatever is left.  In a solo
       -- room nobody can arrive, so it would only ever be a second, more

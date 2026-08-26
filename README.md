@@ -128,6 +128,9 @@ Info on each game settings can be seen down in the Game lobby options section do
   - Control how long the Safari intro is
 - Debug Log (for nerds)
   - Enables debugging logs locally 
+- Send Stats
+  - Two options: ON (default) or OFF
+  - Counts how many matches get played — see "What gets sent" below
 - Fill To
   - Set amount to fill with Bots (if players aren't available)
 - Trainers
@@ -138,6 +141,38 @@ Info on each game settings can be seen down in the Game lobby options section do
   - When starting a game via "Quick Play" this kicks off automatically
 - Leave
   - Back out of the menu
+
+## What gets sent
+
+Short version: how many matches get played, and nothing about you.
+
+The relay has always seen the multiplayer side — it's the thing hosting the
+rooms. Solo games never touched it, so there was no way to tell whether anyone
+was playing at all. Now a solo match bumps a counter on your machine, and that
+number tags along the next time the game connects for a real reason (hosting,
+joining, Quick Play).
+
+What rides along:
+
+- A random ID, made up on your machine the first time
+- The mod version
+- How many solo matches since the last time it reported
+- The date you first played
+
+What doesn't:
+
+- Your trainer name — you picked it, it's yours
+- Anything about your save, your team, or where you've been
+- Your IP (the relay only ever sees the proxy's address anyway)
+
+It never dials out on its own. Solo stays offline: no connection is opened just
+to report a solo game, so playing with no wifi works exactly like it always
+did. The trade-off is that if you only ever play solo, nothing is counted until
+the first time you go online — and then it all arrives at once.
+
+Don't want it? `SEND STATS: OFF` in the lobby. Off stops the counting as well
+as the sending, so there's no pile of numbers waiting to go out if you switch
+it back on.
 
 ## Running the relay (for the nerds)
 

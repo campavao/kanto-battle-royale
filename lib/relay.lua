@@ -192,6 +192,22 @@ function Relay:lock(locked)
   return self:_raw({ type = "lock_room", locked = locked ~= false })
 end
 
+-- A stat rides a connection that already exists, or it does not go at all
+-- (POK-124).  Refused without an address, which is exactly the LocalRoom a
+-- solo match runs on: it has no listener and drops types it does not know
+-- silently, so a solo room could otherwise swallow the very count it was
+-- meant to be carrying.  Refused outside the lobby too -- there is no
+-- reason to spend a line mid-match on something that can wait.
+function Relay:stat(fields)
+  if not self.address then return false end
+  if self.status ~= "lobby" then return false end
+  local msg = { type = "stat" }
+  for k, v in pairs(fields or {}) do
+    if k ~= "type" then msg[k] = v end
+  end
+  return self:_raw(msg)
+end
+
 -- Offer (or withdraw) this client as the room's next host (POK-116).  The
 -- relay hands the room to the longest-standing member that has said yes, so
 -- saying nothing is how an older client keeps the old ending -- the room
