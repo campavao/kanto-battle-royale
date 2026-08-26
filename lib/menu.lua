@@ -214,9 +214,41 @@ function Menu.items(mod, BR, game)
   return items, view
 end
 
+-- How many rows the canvas can hold, in Menu's own terms.  Memoised because
+-- fit() runs every frame; pcall'd because lib/menu.lua is loaded by the
+-- headless test loader, which has no render stack -- and 18 tiles is the
+-- Gen 1 canvas either way.
+local screenRows
+local function canvasRows()
+  if not screenRows then
+    local ok, Renderer = pcall(require, "src.render.Renderer")
+    local h = (ok and Renderer and tonumber(Renderer.HEIGHT)) or 144
+    screenRows = math.floor(h / 8)
+  end
+  return screenRows
+end
+
 -- Size the box to the rows it holds now, the way Menu.new sized it to the
 -- rows it was born with (widest label + 3, nudged on-screen, one row step
--- per item plus the border).
+-- per item plus the border) -- but NEVER TALLER THAN THE SCREEN (POK-104).
+--
+-- The height used to be `#items * rowStep + 2` flat, which is right for a
+-- list of fixed length and wrong for this one.  The lobby grows a row per
+-- trainer in the room, so a host with a full house had START MATCH and
+-- LEAVE pushed off the bottom of the canvas with no way to reach either --
+-- the match could not be started from the screen that starts matches.
+--
+-- Menu has known how to scroll all along (maxVisible + clampScroll + the
+-- moreArrow glyph it draws while there is more below); nobody had told it
+-- the cap.  This is the same sum src/ui/StartMenu.lua does, for the same
+-- reason: its row count is not fixed either.
+-- How many rows fit on screen at a given row step (2 is Menu's default and
+-- the original's double-spaced style).  Public so the suite can check the
+-- faces against it without standing up a live Menu.
+function Menu.maxRows(rowStep)
+  return math.max(1, math.floor((canvasRows() - 2) / (rowStep or 2)))
+end
+
 local function fit(mod, menu)
   local Font = mod.ui.Font
   local widest = 0
@@ -227,7 +259,14 @@ local function fit(mod, menu)
   menu.tw = math.max(10, widest + 3)
   menu.tx = 10
   if menu.tx + menu.tw > 20 then menu.tx = math.max(0, 20 - menu.tw) end
-  menu.th = #menu.items * menu.rowStep + 2
+
+  local maxVisible = Menu.maxRows(menu.rowStep)
+  menu.maxVisible = maxVisible
+  local visible = math.min(maxVisible, #menu.items)
+  menu.th = visible * menu.rowStep + 2
+  -- the cursor may have moved (or the face changed) before the cap was
+  -- known; Menu:update clamps too, this keeps fit self-consistent
+  menu:clampScroll()
 end
 
 function Menu.build(mod, BR)

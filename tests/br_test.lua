@@ -1669,6 +1669,50 @@ do
       return nil
     end
 
+    -- ------- no face may run off the bottom of the screen (POK-104)
+    --
+    -- The box height was `#items * rowStep + 2` flat, which is right for a
+    -- fixed list and wrong for this one: the hosted lobby grows a row per
+    -- trainer in the room on top of the host's settings, so a real room
+    -- pushed START MATCH and LEAVE off the canvas with no way to reach
+    -- them -- the screen that starts matches could not start one.  Menu
+    -- knew how to scroll all along; nobody had set maxVisible.
+    do
+      local cap = BRMenu.maxRows(2)
+      eq(cap, 8, "eight double-spaced rows fit the 18-tile canvas")
+      eq(BRMenu.maxRows(), cap, "row step 2 is the default")
+      ok(BRMenu.maxRows(1) > cap, "a tighter row step fits more")
+      ok(BRMenu.maxRows(99) >= 1, "and an absurd one still leaves a row")
+
+      -- the first face must fit outright: it is the one nobody scrolls
+      local first = BRMenu.items({ version = "0.0.0" }, fakeBR(), {})
+      ok(#first <= cap,
+         "the first face fits on one screen (" .. #first .. "/" .. cap .. ")")
+
+      -- ...and the hosted lobby is the one that does not, which is the
+      -- whole reason the cap has to exist
+      local crowd = {}
+      for i = 1, 6 do crowd[i] = { id = i, name = "P" .. i } end
+      local lobbyBR = fakeBR({ relay = room(true, { members = crowd }) })
+      local lobby, lobbyView = BRMenu.items({ version = "0.0.0" }, lobbyBR, {})
+      eq(lobbyView, "lobby", "a room with a host is the lobby face")
+      ok(#lobby > cap,
+         "a full lobby overflows one screen (" .. #lobby .. " rows)")
+      -- the rows that were falling off are the ones you cannot do without
+      ok(find(lobby, "START MATCH") ~= nil, "START MATCH is in the list")
+      ok(find(lobby, "LEAVE") ~= nil, "so is LEAVE")
+
+      -- one row per member, so this grows without bound as a room fills:
+      -- a cap is the only thing that can hold it
+      local bigger = BRMenu.items({ version = "0.0.0" },
+        fakeBR({ relay = room(true, { members = (function()
+          local m = {}
+          for i = 1, 12 do m[i] = { id = i, name = "P" .. i } end
+          return m
+        end)() }) }), {})
+      ok(#bigger > #lobby, "a fuller room is a longer list still")
+    end
+
     -- the first face: every row keeps the screen, because the room it
     -- starts is what turns the screen into the lobby
     local BR = fakeBR()
