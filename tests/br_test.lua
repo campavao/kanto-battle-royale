@@ -2827,5 +2827,97 @@ do
   ok(okA, "no onDone is not an error")
 end
 
+-- ------- the lockstep cells still match the scenes they suppress
+--
+-- lib/lockstep.lua is a list of coordinates, and a coordinate list rots
+-- quietly: upstream moves a trigger, nothing errors, and a cutscene walks
+-- back into matches.  So drive VANILLA's own onStep at every cell the list
+-- claims and require it to fire there -- if it does not, the entry is
+-- either wrong or no longer earning its keep.
+--
+-- This is the only executable check standing behind the four YELLOW rows.
+-- There is no Yellow ROM in the dev setup, so unlike CERULEAN they cannot
+-- be smoke-tested end to end.  PEWTER is left out on purpose: its escort
+-- reaches for Music and TextBox on the way in, and it has been verified in
+-- play since POK-122.
+
+do
+  local Lockstep = require("mods.battle_royale.lib.lockstep")
+  local JJ = require("data.scripts.yellow_jessie_james")
+  local S5 = require("data.scripts.story5")
+
+  -- Just enough overworld for these handlers to reach the point where they
+  -- commit: a runner that records instead of running, and an NPC for the
+  -- ones that look one up before they start.
+  local function stub()
+    local ran = false
+    return {
+      npcs = {},
+      scriptMoves = {},
+      player = { cellX = 0, cellY = 0 },
+      runner = {
+        isRunning = function() return false end,
+        run = function() ran = true end,
+      },
+      npcByIndex = function() return { def = {} } end,
+    }, function() return ran end
+  end
+
+  -- MT_MOON wants a fossil in the bag before JESSIE and JAMES care, and
+  -- SILPH's base handler is short-circuited so only the YELLOW half is
+  -- under test.  Nothing here sets the four "already beaten" flags, or
+  -- EVENT_BEAT_CERULEAN_ROCKET_THIEF.
+  local function save()
+    return { flags = { EVENT_GOT_HELIX_FOSSIL = true,
+                       EVENT_BEAT_SILPH_CO_GIOVANNI = true } }
+  end
+
+  -- control cells: a neighbour, and for the two maps whose base handlers
+  -- were deliberately KEPT, the very cell that must stay contestable --
+  -- MT_MOON's SUPER NERD and SILPH's GIOVANNI.  A list that crept one
+  -- cell wider than vanilla would start eating ordinary steps.
+  local under = {
+    { "MT_MOON_B2F",        JJ.MT_MOON_B2F.onStep,        { { 13, 8 }, { 3, 6 } } },
+    { "ROCKET_HIDEOUT_B4F", JJ.ROCKET_HIDEOUT_B4F.onStep, { { 23, 14 }, { 24, 13 } } },
+    { "POKEMON_TOWER_7F",   JJ.POKEMON_TOWER_7F.onStep,   { { 9, 12 }, { 10, 11 } } },
+    { "SILPH_CO_11F",       JJ.SILPH_CO_11F.onStep,       { { 6, 13 }, { 7, 12 }, { 4, 3 } } },
+    { "CERULEAN_CITY",      S5.CERULEAN_CITY.onStep,      { { 30, 8 }, { 29, 7 }, { 20, 6 } } },
+  }
+
+  for _, row in ipairs(under) do
+    local mapId, onStep, controls = row[1], row[2], row[3]
+    local cells = Lockstep.CELLS[mapId]
+    ok(cells ~= nil and next(cells) ~= nil, mapId .. " is on the lockstep list")
+
+    for key in pairs(cells or {}) do
+      local sx, sy = key:match("^(%-?%d+),(%-?%d+)$")
+      local x, y = tonumber(sx), tonumber(sy)
+      ok(x ~= nil and y ~= nil, mapId .. " cell " .. key .. " parses")
+      if x and y then
+        local ow, fired = stub()
+        local called, res = pcall(onStep, { save = save() }, ow, x, y)
+        ok(called, ("%s (%d,%d): the vanilla handler runs"):format(mapId, x, y))
+        ok(called and (res == true or fired()),
+           ("%s (%d,%d) still starts a scripted walk"):format(mapId, x, y))
+        -- and the mod covers it
+        ok(Lockstep.blocks(mapId, x, y),
+           ("%s (%d,%d) is suppressed during a match"):format(mapId, x, y))
+      end
+    end
+
+    for _, c in ipairs(controls) do
+      ok(not Lockstep.blocks(mapId, c[1], c[2]),
+         ("%s (%d,%d) is not ours to consume"):format(mapId, c[1], c[2]))
+    end
+  end
+
+  -- the rule itself: forced battles stay reachable.  These are the cells
+  -- reviewed and kept -- if a future edit sweeps them onto the list, the
+  -- SUPER NERD, GIOVANNI and the DOJO master stop being contestable.
+  ok(not Lockstep.blocks("FIGHTING_DOJO", 4, 3), "the DOJO master is still fightable")
+  ok(Lockstep.CELLS.ROUTE_24 == nil, "Nugget Bridge is text, not a walk -- left alone")
+  ok(Lockstep.CELLS.LORELEIS_ROOM == nil, "the E4 rooms are out of scope for now")
+end
+
 io.write(("\nbattle royale: %d passed, %d failed\n"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

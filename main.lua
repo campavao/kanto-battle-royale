@@ -47,6 +47,7 @@ local Peek = require("mods.battle_royale.lib.peek")
 local BRMenu = require("mods.battle_royale.lib.menu")
 local Machines = require("mods.battle_royale.lib.machines")
 local Career = require("mods.battle_royale.lib.career")
+local Lockstep = require("mods.battle_royale.lib.lockstep")
 local Stats = require("mods.battle_royale.lib.stats")
 local Log = require("mods.battle_royale.lib.log")
 
@@ -4135,35 +4136,35 @@ return function(mod)
   -- walking into someone, so here A just names them (and, if we are already
   -- adjacent and facing, is a second way to start the fight).
 
-  -- ------- Pewter's gym escort stands down for a match (POK-122)
+  -- ------- Kanto's lockstep walks stand down for a match
   --
-  -- Vanilla Pewter stops a trainer heading east and walks them to the gym
-  -- (data/scripts/story5.lua M.PEWTER_CITY), gated on EVENT_BEAT_BROCK.
-  -- In a match that flag can never be set: BROCK is a contested boss
-  -- (POK-26) and his own talk branches on the SAME flag
-  -- (data/scripts/gyms.lua PEWTER_GYM.talk), so listing it in STORY_FLAGS
-  -- would hand every match a gym leader who cannot be fought and a TM
-  -- nobody can win.  The escort is headed off at its triggers instead.
+  -- Started with Pewter's gym escort (POK-122) and turned out not to be a
+  -- one-off: sweeping every vanilla onStep for handlers that take the
+  -- player rather than talk at them also turned up CERULEAN's Rocket thief
+  -- (POK-126) and, on YELLOW, four JESSIE and JAMES ambushes (POK-127).
+  -- The cells and the reasoning for each live in lib/lockstep.lua, kept as
+  -- data so br_test can drive the vanilla handlers they are meant to match
+  -- and prove the coordinates still line up.
   --
-  -- It has to not fire at all, rather than merely stop after the first
+  -- Each has to not fire AT ALL, rather than merely stop after the first
   -- time: a lockstep walk is not a cutscene here, it is a movement lock
-  -- while the ring closes and other trainers hunt.  There are two
-  -- triggers, and this is the first -- map_scripts composes onStep
-  -- first-truthy-consumes with a mod's contribution ahead of base
-  -- (src/script/MapScripts.lua), so returning true on the four trigger
-  -- cells means base never sees the step.  Outside a session it returns
-  -- false and vanilla Pewter is untouched, which matters: this mod is
-  -- installed alongside real playthroughs.
-  local PEWTER_ESCORT_CELLS = {
-    ["35,17"] = true, ["36,17"] = true, ["37,18"] = true, ["37,19"] = true,
-  }
-
-  mod.content.map_scripts:register("PEWTER_CITY", {
-    onStep = function(_, _, x, y)
-      if not BR:inSession() then return false end
-      return PEWTER_ESCORT_CELLS[x .. "," .. y] == true
-    end,
-  })
+  -- while the ring closes and other trainers hunt.  map_scripts composes
+  -- onStep first-truthy-consumes with a mod's contribution ahead of base
+  -- (src/script/MapScripts.lua), so returning true on a trigger cell means
+  -- base never sees the step.  Outside a session every one of them returns
+  -- false and vanilla is untouched, which matters: this mod is installed
+  -- alongside real playthroughs.
+  --
+  -- Two of these arm from a conversation as well; that half is in the
+  -- world.talk wrap below.
+  for mapId in pairs(Lockstep.CELLS) do
+    mod.content.map_scripts:register(mapId, {
+      onStep = function(_, _, x, y)
+        if not BR:inSession() then return false end
+        return Lockstep.blocks(mapId, x, y)
+      end,
+    })
+  end
 
   mod.hooks:wrap("world.talk", function(next, ow, npc)
     -- The Cable Club receptionist is the other door to the engine's link
@@ -4213,6 +4214,18 @@ return function(mod)
     if BR:inSession() and def and def.name == "PEWTERCITY_YOUNGSTER"
        and ow and ow.map and ow.map.id == "PEWTER_CITY" then
       say("BROCK is taking\non all comers\ntoday!")
+      return
+    end
+    -- The other half of POK-126, and exactly the trap Pewter set: the
+    -- thief arms the identical scene from a conversation (story5.lua
+    -- M.CERULEAN_CITY.talk points TEXT_CERULEANCITY_ROCKET straight at
+    -- rocketRows), so guarding his two cells alone would have left the
+    -- whole cutscene one A press away.  He keeps a line; what he loses is
+    -- the right to run a scene at us.  JESSIE and JAMES need no equivalent
+    -- -- they are hidden objects until their own scene reveals them.
+    if BR:inSession() and def and def.name == "CERULEANCITY_ROCKET"
+       and ow and ow.map and ow.map.id == "CERULEAN_CITY" then
+      say("Beat it, kid!\nI'm not sharing\nthis TM!")
       return
     end
     -- a spilled ball: press A to open it, like every item ball in Kanto.

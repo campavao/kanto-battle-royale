@@ -158,5 +158,71 @@ do
   end
 end
 
+-- ------- the other lockstep walks stand down too (POK-126, POK-127)
+--
+-- Same composition contract as the Pewter block above: in the chain so it
+-- runs, never replacing base so a real playthrough still gets its scenes.
+-- What these add is the CELL LIST, which is the part that rots -- a cell
+-- typo is silent, because the symptom is a cutscene that fires in a match
+-- nobody is running headlessly.
+
+do
+  local reg = run.loader.content and run.loader.content.map_scripts
+
+  -- CERULEAN's Rocket thief: story5.lua M.CERULEAN_CITY.onStep triggers on
+  -- (30,7) and (30,9).  Setting EVENT_BEAT_CERULEAN_ROCKET_THIEF instead
+  -- would still award TM_DIG and would skip the fade that hides GUARD2.
+  --
+  -- YELLOW's JESSIE and JAMES: four maps, and three of them gate on
+  -- nothing but the tile.  Registered on every cartridge because RED and
+  -- BLUE attach no script to these cells -- see the note in main.lua.
+  local suppressed = {
+    { "CERULEAN_CITY",      { { 30, 7 }, { 30, 9 } } },
+    { "MT_MOON_B2F",        { { 3, 5 } } },
+    { "ROCKET_HIDEOUT_B4F", { { 24, 14 }, { 25, 14 } } },
+    { "POKEMON_TOWER_7F",   { { 10, 12 }, { 11, 12 } } },
+    { "SILPH_CO_11F",       { { 0, 3 }, { 1, 3 }, { 2, 3 }, { 3, 3 } } },
+  }
+
+  for _, row in ipairs(suppressed) do
+    local mapId, cells = row[1], row[2]
+    local chain = reg and reg:chain(mapId)
+    T.check(chain ~= nil and #chain > 0,
+            "the mod contributes a " .. mapId .. " map script")
+    T.check(not (reg and reg:chainReplacesBase(mapId)),
+            mapId .. " composes with vanilla rather than replacing it")
+
+    local mine
+    for _, entry in ipairs(chain or {}) do
+      if type(entry) == "table" and entry.onStep then mine = entry end
+    end
+    T.check(mine ~= nil, mapId .. "'s contribution carries an onStep")
+
+    if mine then
+      -- Idle, every one of them stands down: a mod that is installed but
+      -- not in a match must leave Kanto exactly as it found it.
+      for _, c in ipairs(cells) do
+        T.eq(mine.onStep(nil, nil, c[1], c[2]), false,
+             ("idle: %s (%d,%d) is left to vanilla"):format(mapId, c[1], c[2]))
+      end
+    end
+  end
+
+  -- The base handlers that were reviewed and KEPT -- forced battles are
+  -- fine in a match, forced walks are not.  If a future cell list grows to
+  -- cover these, the SUPER NERD and GIOVANNI stop being contestable.
+  for _, row in ipairs({ { "MT_MOON_B2F", 13, 8 },
+                         { "SILPH_CO_11F", 6, 13 },
+                         { "SILPH_CO_11F", 7, 12 } }) do
+    local chain = reg and reg:chain(row[1])
+    for _, entry in ipairs(chain or {}) do
+      if type(entry) == "table" and entry.onStep then
+        T.eq(entry.onStep(nil, nil, row[2], row[3]), false,
+             ("%s (%d,%d) is not ours to consume"):format(row[1], row[2], row[3]))
+      end
+    end
+  end
+end
+
 run.release()
 T.finish("br_load")
