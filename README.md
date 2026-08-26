@@ -7,9 +7,9 @@ Play with up to 30 other players at one time, dropping all over Kanto, to be the
 ## Install
 
 1. **[Download the latest release zip](../../releases/latest)**
-2. Extract it into your gen1recomp `mods/` folder, so you end up with
-   `mods/battle_royale/main.lua`
-3. Launch the game. `BATTLE ROYALE` is on the title menu.
+2. Open [gen1recomp](https://github.com/bryanthaboi/gen1recomp), go to Mods, and import downloaded Battle Royale zip file.
+    - If the download is not a `.zip` file when you download, compress first and then import
+4. Launch the game. `BATTLE ROYALE` is on the title menu.
 
 > **This mod needs gen1recomp v0.2.26 or newer.**
 
