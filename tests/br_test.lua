@@ -1672,10 +1672,16 @@ do
     -- the first face: every row keeps the screen, because the room it
     -- starts is what turns the screen into the lobby
     local BR = fakeBR()
-    local items, view = BRMenu.items({}, BR, {})
+    local items, view = BRMenu.items({ version = "9.9.9" }, BR, {})
     eq(view, "menu", "no room is the first face")
-    eq(labels(items), "QUICK PLAY|SOLO VS BOTS|HOST GAME|JOIN BY CODE|NAME: RED|SKIN: RED|SERVER...",
+    eq(labels(items), "QUICK PLAY|SOLO VS BOTS|HOST GAME|JOIN BY CODE|NAME: RED|SKIN: RED|SERVER...|v9.9.9",
        "the first face, in order")
+    -- the stamp is read off the loader's own mod.version, never written
+    -- here, so it cannot drift from the manifest
+    eq(labels(BRMenu.items({ version = "1.2.3" }, fakeBR(), {})):match("[^|]+$"),
+       "v1.2.3", "the row reports whatever version the loader handed the mod")
+    eq(labels(BRMenu.items({}, fakeBR(), {})):match("[^|]+$"), "v?",
+       "and says so plainly when there is no version to read")
     local allOpen = true
     for _, it in ipairs(items) do if not it.keepOpen then allOpen = false end end
     ok(allOpen, "and every row keeps the screen open")

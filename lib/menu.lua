@@ -200,6 +200,15 @@ function Menu.items(mod, BR, game)
         end,
       }))
     end)
+    -- Which build this actually is.  Everyone in a match has to be on the
+    -- same one -- the wire has a PROTOCOL number and a mismatched pair
+    -- fails at the join rather than at the fault -- and "check your
+    -- version" is a useless thing to say to somebody with no way to read
+    -- it.  The launcher's MODS tab knows, but that is outside the game.
+    -- Read from mod.version (the loader hands each mod its own manifest
+    -- version) rather than written here, so it cannot drift from the
+    -- manifest the way a hand-kept copy would.
+    row("v" .. tostring(mod.version or "?"))
   end
 
   return items, view
