@@ -38,7 +38,16 @@ export const CODE_LENGTH = 6;
 
 export const DEFAULT_LIMITS = Object.freeze({
   line: 16 * 1024,      // bytes per line; the game caps at the same order
-  linesPerSec: 120,     // steps are ~4/s/player; this is a flood, not play
+  // Sustained rate, drained from a bucket -- NOT a per-second window.
+  // Steps are ~4/s/player, so 120/s is a flood and not play; but a host
+  // legitimately bursts far above its average in a single frame, and a
+  // window counter cannot tell the two apart.  When the ring first shrinks,
+  // every map it left behind runs out its grace on the SAME beat, and the
+  // host retires each of their trainers with an npcout -- a few hundred
+  // lines in one tick, from a client averaging four (POK-114).  It got
+  // dropped for flooding, and with no host migration that ended the match.
+  linesPerSec: 120,
+  burstLines: 1200,     // bucket depth: one fog sweep, with room over it
   badLines: 20,         // unparsable lines before we give up on a socket
   members: 16,
   // Ceilings, not targets.  A relay is billed by what it moves, and what
@@ -136,8 +145,9 @@ class Conn {
     this.name = "PLAYER";
     this.lastSeen = Date.now();
     this.openedAt = this.lastSeen;
-    this.windowStart = this.lastSeen;
-    this.windowLines = 0;
+    this.tokens = relay.limits.burstLines;
+    this.tokenAt = this.lastSeen;
+    this.minTokens = this.tokens;   // how close real play came to the wall
     this.badLines = 0;
     this.closed = false;
     // What this connection actually moved, by message TYPE and bytes
@@ -184,7 +194,8 @@ class Conn {
     this.relay.log(`drop ${this.name}#${this.id ?? "-"}`
       + `${this.room ? ` room ${this.room.code}` : ""} (${reason})`
       + ` after ${Math.round((Date.now() - this.openedAt) / 1000)}s`
-      + ` | in ${this.census()}`);
+      + ` | in ${this.census()}`
+      + ` | headroom ${Math.round(this.minTokens)}/${this.relay.limits.burstLines}`);
     this.relay.onClose(this, reason);
     this.socket.destroy();
   }
@@ -356,8 +367,12 @@ export function createRelay(options = {}) {
       conn.buf = conn.buf.slice(nl + 1);
       if (line.length === 0) continue;
       if (line.length > limits.line) { conn.destroy("line_too_long"); return; }
-      if (now - conn.windowStart >= 1000) { conn.windowStart = now; conn.windowLines = 0; }
-      if (++conn.windowLines > limits.linesPerSec) { conn.destroy("flood"); return; }
+      conn.tokens = Math.min(limits.burstLines,
+        conn.tokens + ((now - conn.tokenAt) / 1000) * limits.linesPerSec);
+      conn.tokenAt = now;
+      if (conn.tokens < 1) { conn.destroy("flood"); return; }
+      conn.tokens -= 1;
+      if (conn.tokens < conn.minTokens) conn.minTokens = conn.tokens;
       onLine(conn, line);
       if (conn.closed) return;
     }
@@ -452,6 +467,8 @@ if (isMain) {
   const limits = {};
   if (process.env.BR_MAX_ROOMS) limits.rooms = Number(process.env.BR_MAX_ROOMS);
   if (process.env.BR_MAX_CONNS) limits.conns = Number(process.env.BR_MAX_CONNS);
+  if (process.env.BR_LINES_PER_SEC) limits.linesPerSec = Number(process.env.BR_LINES_PER_SEC);
+  if (process.env.BR_BURST_LINES) limits.burstLines = Number(process.env.BR_BURST_LINES);
   const relay = createRelay({ limits,
     log: (line) => console.log(new Date().toISOString(), line) });
   process.on("uncaughtException", (err) => console.error("uncaught:", err));
