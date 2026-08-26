@@ -13,6 +13,24 @@ Play with up to 30 other players at one time, dropping all over Kanto, to be the
 
 > **This mod needs gen1recomp v0.2.26 or newer.**
 
+## Screenshots
+
+|  |  |  |
+| :--------: | :--------: | :--------: |
+| Start screen <img width="1278" height="1150" alt="image" src="https://github.com/user-attachments/assets/2086ae6f-d13f-49f7-8ab6-eb7c07491762" />  | Unlock skins <img width="1276" height="1144" alt="image" src="https://github.com/user-attachments/assets/4b0872d5-7ce7-46fd-8499-d949c218413a" />  | Catch what you can in the Safari <img width="1531" height="1146" alt="image" src="https://github.com/user-attachments/assets/265681c8-92b6-4cc0-baa8-5ef97955b473" />  |
+| Choose where to drop <img width="1203" height="1087" alt="image" src="https://github.com/user-attachments/assets/42d51022-0caf-483a-9e5a-1b02a56f6687" />  | Where the fog is closing in on <img width="1213" height="982" alt="image" src="https://github.com/user-attachments/assets/da7b0824-eaa7-439a-9c4c-394282da94a7" />  | Pick up fallen trainer's Pokemon <img width="1527" height="1143" alt="image" src="https://github.com/user-attachments/assets/1ea21048-d2d8-4df2-95a8-4aecd9c2f22e" />  |  
+| Don't get caught in the fog! <img width="1534" height="1144" alt="image" src="https://github.com/user-attachments/assets/32cc5a16-c873-46af-a968-10d30eb98267" />  | Game stats <img width="1531" height="1153" alt="image" src="https://github.com/user-attachments/assets/fd27b1c6-c978-4b60-a794-1734e932ded6" />  | Spectate others <img width="1531" height="1147" alt="image" src="https://github.com/user-attachments/assets/81d708e1-8ab8-4294-9d77-d7eabee41d19" />
+  | See fog on the map <img width="1201" height="1087" alt="image" src="https://github.com/user-attachments/assets/00fe02d5-629d-430d-b5f7-fa2564461e46" />  | 
+
+
+
+
+
+
+
+
+
+
 ## Getting started
 
 Here are the available options:
