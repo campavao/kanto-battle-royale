@@ -80,6 +80,11 @@ Info on each game settings can be seen down in the Game lobby options section do
 - **You start with all HMs**
   - Catch a Flying type early to have access to Fly, or a Water type for Surf
   - Meant to help you get around Kanto a bit easier, if you have the right Pokemon
+- **TMs and HMs are named after the move they teach**
+  - TM19 shows up as "SEISMIC TOSS", HM01 as "CUT"
+  - Works everywhere the item name shows: your bag, loot on the ground, a
+    beaten trainer's bag
+  - Only during a match - outside one they go back to TM01, TM02 and so on
 - **Apply Moves from the Pokemon screen**
   - Only available outside of battle
   - Swap your Pokemon's moves at any time to be any they can learn

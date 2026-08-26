@@ -43,6 +43,7 @@ local Fame = require("mods.battle_royale.lib.fame")
 local Gyms = require("mods.battle_royale.lib.gyms")
 local Peek = require("mods.battle_royale.lib.peek")
 local BRMenu = require("mods.battle_royale.lib.menu")
+local Machines = require("mods.battle_royale.lib.machines")
 local Log = require("mods.battle_royale.lib.log")
 
 local SCREEN = "BattleRoyaleMenu"
@@ -666,6 +667,16 @@ return function(mod)
     self.status = "lobby"
     self.started = false
     self.matchWorld = false
+    -- ...and go back to TM01..TM50 on the way out (POK-110).  game.data is
+    -- the engine's, shared with the player's real save, so a rename left
+    -- behind would follow them into an ordinary game.  resetMatch is the
+    -- one path every exit goes through -- a deliberate LEAVE, a teardown,
+    -- a host drop, PLAY AGAIN -- which is why it lives here and not in
+    -- teardown beside restoreSkinWalk.
+    if self.machineNames then
+      Machines.restore(self.game and self.game.data, self.machineNames)
+      self.machineNames = nil
+    end
     self.lastOpponent = nil
     self.fledFrom, self.fleeGrace, self.fleeLockout, self.fleeing = {}, {}, {}, nil
     self.peeked, self.lastPeekAt = nil, nil
@@ -932,6 +943,13 @@ return function(mod)
     if self.relay then self.relay:canHost(true) end
     self.started = true
     self.matchWorld = true
+    -- TMs say what they teach for the length of the match (POK-110).
+    -- Guarded on machineNames rather than on the phase: apply() is a no-op
+    -- the second time and would hand back an EMPTY restore table, so a
+    -- double call is how the way back gets lost.
+    if self.game and not self.machineNames then
+      self.machineNames = Machines.apply(self.game.data)
+    end
     self.stats = { catches = 0, beats = 0, steps = 0,
                    startedAt = (love.timer and love.timer.getTime
                                 and love.timer.getTime()) or 0 }

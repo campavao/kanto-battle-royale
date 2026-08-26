@@ -1275,6 +1275,96 @@ do
   end
 end
 
+-- ------------------------------------------------------------------
+-- POK-110: a TM that says what it teaches
+-- ------------------------------------------------------------------
+do
+  local Machines = require("mods.battle_royale.lib.machines")
+
+  -- a hand-built data handle first, so the rules are checked without a ROM
+  local fake = {
+    moves = {
+      MEGA_PUNCH = { name = "MEGA PUNCH" },
+      CUT = { name = "CUT" },
+      GHOST_MOVE = { name = "" },
+    },
+    items = {
+      TM_MEGA_PUNCH = { name = "TM01", machine = { kind = "TM", move = "MEGA_PUNCH" } },
+      HM_CUT        = { name = "HM01", machine = { kind = "HM", move = "CUT" } },
+      POTION        = { name = "POTION" },
+      TM_UNKNOWN    = { name = "TM99", machine = { kind = "TM", move = "NO_SUCH_MOVE" } },
+      TM_NAMELESS   = { name = "TM98", machine = { kind = "TM", move = "GHOST_MOVE" } },
+    },
+  }
+
+  local saved = Machines.apply(fake)
+  eq(fake.items.TM_MEGA_PUNCH.name, "MEGA PUNCH", "a TM says what it teaches")
+  eq(fake.items.HM_CUT.name, "CUT", "and so does an HM")
+  eq(fake.items.POTION.name, "POTION", "an ordinary item is left alone")
+  -- a machine this build cannot resolve keeps its number rather than
+  -- becoming a blank row in the bag
+  eq(fake.items.TM_UNKNOWN.name, "TM99", "a move the build lacks is left alone")
+  eq(fake.items.TM_NAMELESS.name, "TM98", "and so is a move with no name")
+
+  eq(saved.TM_MEGA_PUNCH, "TM01", "the way back is recorded")
+  eq(saved.POTION, nil, "and records only what actually changed")
+
+  -- The rename rides on game.data, which is the ENGINE's and shared with
+  -- the player's real save -- so the way out has to be exact.
+  eq(Machines.restore(fake, saved), 2, "restore puts back both machines")
+  eq(fake.items.TM_MEGA_PUNCH.name, "TM01", "TM01 is TM01 again")
+  eq(fake.items.HM_CUT.name, "HM01", "HM01 is HM01 again")
+
+  -- Applying twice without restoring is a no-op the second time, so its
+  -- `saved` is empty: the call site must guard, and this pins the reason.
+  local first = Machines.apply(fake)
+  local second = Machines.apply(fake)
+  ok(next(first) ~= nil, "the first apply has a way back")
+  ok(next(second) == nil, "a second apply has none -- the call site guards")
+  Machines.restore(fake, first)
+  eq(fake.items.TM_MEGA_PUNCH.name, "TM01", "and the first way back still works")
+
+  ok(Machines.nameFor(fake, nil) == nil, "no def, no name")
+  ok(Machines.nameFor(fake, { name = "POTION" }) == nil, "no machine, no name")
+  ok(Machines.apply(nil) ~= nil, "apply survives a data handle with no items")
+  eq(Machines.restore(nil, saved), 0, "and restore does too")
+
+  -- ...then against the real table, which is where a wrong field shows up.
+  -- Required HERE: the gyms block's okD/Data are locals inside that block,
+  -- so reading them from this one silently skips everything below and the
+  -- suite passes having checked nothing.
+  local okD, Data = pcall(require, "src.core.Data")
+  ok(okD and Data ~= nil, "the real data module loaded, so the rest is real")
+  if okD and Data and Data.load then
+    pcall(function() Data:load() end)
+    if Data.items and Data.moves then
+      local realSaved = Machines.apply(Data)
+      local machines, longest = 0, 0
+      for id, def in pairs(Data.items) do
+        if def.machine then
+          machines = machines + 1
+          ok(type(def.name) == "string" and not def.name:match("^[TH]M%d"),
+             id .. " no longer reads as a number")
+          if #def.name > longest then longest = #def.name end
+        end
+      end
+      eq(machines, 55, "fifty TMs and five HMs")
+      ok(longest <= 12,
+         "the longest machine name is " .. longest .. ", which the bag box fits")
+      eq(Data.items.TM_SEISMIC_TOSS and Data.items.TM_SEISMIC_TOSS.name,
+         "SEISMIC TOSS", "TM19 reads SEISMIC TOSS")
+      eq(Data.items.HM_CUT and Data.items.HM_CUT.name, "CUT", "HM01 reads CUT")
+      eq(Data.items.POTION and Data.items.POTION.name, "POTION",
+         "and a POTION is still a POTION")
+
+      Machines.restore(Data, realSaved)
+      eq(Data.items.TM_SEISMIC_TOSS and Data.items.TM_SEISMIC_TOSS.name, "TM19",
+         "and every one of them goes back, so a real save never sees this")
+      eq(Data.items.HM_CUT and Data.items.HM_CUT.name, "HM01", "HMs included")
+    end
+  end
+end
+
 -- ------- the rival's ambushes never fire in a match (POK-67)
 
 do

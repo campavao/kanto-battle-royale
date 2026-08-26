@@ -366,8 +366,57 @@ return function(game)
     end
   end
 
+  -- ------------------------------------------------------------------
+  -- POK-110: a TM in the bag says what it teaches
+  --
+  -- The rename rides on game.data, which is the ENGINE's table and shared
+  -- with the player's real save -- so the assertion that matters is not
+  -- that it happened but that it comes BACK when the match ends.  Checked
+  -- against the live table rather than against pixels; the screenshot is
+  -- for the eye only.
+  -- ------------------------------------------------------------------
+  local items = game.data.items
+  check(items.TM_SEISMIC_TOSS and items.TM_SEISMIC_TOSS.name == "SEISMIC TOSS",
+        "in a match TM19 reads SEISMIC TOSS (got "
+        .. tostring(items.TM_SEISMIC_TOSS and items.TM_SEISMIC_TOSS.name) .. ")")
+  check(items.HM_CUT and items.HM_CUT.name == "CUT",
+        "and HM01 reads CUT (got "
+        .. tostring(items.HM_CUT and items.HM_CUT.name) .. ")")
+  check(items.POTION and items.POTION.name == "POTION",
+        "while a POTION is still a POTION")
+
+  -- A short bag for the shot, so the machines are on the first page rather
+  -- than below the fold -- and a POTION kept beside them as an in-frame
+  -- control that an ordinary item is untouched.  Safe to replace the bag
+  -- outright: the match is over two lines below this.
+  save.inventory = { TM_SEISMIC_TOSS = 1, TM_ICE_BEAM = 1,
+                     HM_CUT = 1, POTION = 2 }
+  save.bagOrder = nil
+  quiet(60)
+  local BagMenu = require("src.ui.BagMenu")
+  game.stack:push(BagMenu.new(game, {}))
+  U.wait(45)
+  if SHOTS then U.shot(game, SHOTS .. "/bag_tms.png") end
+  quiet(120)
+
   local err = E.tickError and E.tickError()
   check(err == nil, "no tick error was logged (" .. tostring(err) .. ")")
+
+  -- ...and the names go home with the match.  A rename left behind would
+  -- follow the player into an ordinary game, which is the one way this
+  -- feature could do real harm.
+  E.leave()
+  for _ = 1, 200 do
+    if E.phase() == "off" then break end
+    U.tap(game, "b")
+    U.wait(12)
+  end
+  check(E.phase() == "off", "left the match (phase " .. tostring(E.phase()) .. ")")
+  check(items.TM_SEISMIC_TOSS and items.TM_SEISMIC_TOSS.name == "TM19",
+        "and TM19 is TM19 again (got "
+        .. tostring(items.TM_SEISMIC_TOSS and items.TM_SEISMIC_TOSS.name) .. ")")
+  check(items.HM_CUT and items.HM_CUT.name == "HM01",
+        "HM01 too (got " .. tostring(items.HM_CUT and items.HM_CUT.name) .. ")")
 
   if fails == 0 then
     U.log("GIFT OK")
