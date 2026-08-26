@@ -2919,5 +2919,128 @@ do
   ok(Lockstep.CELLS.LORELEIS_ROOM == nil, "the E4 rooms are out of scope for now")
 end
 
+-- ------- standing another mod down, and putting it back (POK-134)
+--
+-- The suspend is the easy half.  Every test here is really about the way
+-- back: this reaches into ANOTHER mod's published API and takes the
+-- player's overworld away, and the only acceptable outcome of anything
+-- going wrong is that we did not take it.
+
+do
+  local Coexist = require("mods.battle_royale.lib.coexist")
+
+  -- a stand-in for the other mod: records what was called on it
+  local function fake(opts)
+    opts = opts or {}
+    local calls = {}
+    local exports = {}
+    for _, name in ipairs({ "removeHooks", "clearAll", "installHooks" }) do
+      if not (opts.missing and opts.missing[name]) then
+        exports[name] = function()
+          calls[#calls + 1] = name
+          if opts.throws and opts.throws[name] then
+            error("boom: " .. name, 0)
+          end
+        end
+      end
+    end
+    return { id = "overworld_wild_spawns", version = "2.2.0",
+             exports = exports }, calls
+  end
+
+  local WILDS = Coexist.MODS[1] and Coexist.MODS[1].id
+  eq(WILDS, "overworld_wild_spawns", "the Wilds of Kanto id is on the list")
+
+  -- ------- nobody else installed: silent no-op, and still a token
+  do
+    local token = Coexist.suspend(function() return nil end)
+    ok(type(token) == "table", "an absent mod still returns a token")
+    eq(#Coexist.suspended(token), 0, "...naming nothing")
+    Coexist.restore(token)   -- must not throw
+    ok(true, "restoring an empty token is safe")
+  end
+
+  -- ------- the ordinary path
+  do
+    local handle, calls = fake()
+    local token = Coexist.suspend(function() return handle end)
+    eq(table.concat(calls, ","), "removeHooks,clearAll",
+       "suspend removes the hooks and clears the overworld, in that order")
+    eq(table.concat(Coexist.suspended(token), ","), "overworld_wild_spawns",
+       "the token names who is stood down")
+    Coexist.restore(token)
+    eq(table.concat(calls, ","), "removeHooks,clearAll,installHooks",
+       "restore puts the hooks back")
+    eq(#Coexist.suspended(token), 0, "a spent token names nobody")
+  end
+
+  -- ------- restore twice: every exit path runs through resetMatch and some
+  -- arrive twice, so this must not double-install
+  do
+    local handle, calls = fake()
+    local token = Coexist.suspend(function() return handle end)
+    Coexist.restore(token)
+    Coexist.restore(token)
+    local n = 0
+    for _, c in ipairs(calls) do if c == "installHooks" then n = n + 1 end end
+    eq(n, 1, "restoring twice installs the hooks once")
+  end
+
+  -- ------- THE ONE THAT MATTERS: if we never removed the hooks, we must
+  -- not install them.  Reinstalling hooks nobody took out is its own bug.
+  do
+    local handle, calls = fake({ missing = { removeHooks = true } })
+    local token = Coexist.suspend(function() return handle end)
+    Coexist.restore(token)
+    for _, c in ipairs(calls) do
+      ok(c ~= "installHooks",
+         "no removeHooks means no installHooks (called " .. c .. ")")
+    end
+  end
+
+  do
+    local handle, calls = fake({ throws = { removeHooks = true } })
+    local token = Coexist.suspend(function() return handle end)
+    Coexist.restore(token)
+    local n = 0
+    for _, c in ipairs(calls) do if c == "installHooks" then n = n + 1 end end
+    eq(n, 0, "a removeHooks that THREW is not restored either")
+  end
+
+  -- ------- a throwing clearAll still leaves the hooks restorable: the
+  -- overworld may be in a strange state, but the player gets their mod back
+  do
+    local handle, calls = fake({ throws = { clearAll = true } })
+    local token = Coexist.suspend(function() return handle end)
+    Coexist.restore(token)
+    local n = 0
+    for _, c in ipairs(calls) do if c == "installHooks" then n = n + 1 end end
+    eq(n, 1, "clearAll failing does not cost us the way back")
+  end
+
+  -- ------- a find() that throws is somebody else's bug, not a crash here
+  do
+    local token = Coexist.suspend(function() error("nope", 0) end)
+    eq(#Coexist.suspended(token), 0, "a throwing find suspends nothing")
+    Coexist.restore(token)
+    ok(true, "...and restores cleanly")
+  end
+
+  -- ------- the documented trap, asserted so it stays documented: a SECOND
+  -- suspend hands back an empty token.  main.lua must guard on the token it
+  -- already holds -- exactly as it guards Machines.apply, and for the same
+  -- reason written there: "a double call is how the way back gets lost".
+  do
+    local handle = fake()
+    local first = Coexist.suspend(function() return handle end)
+    local second = Coexist.suspend(function() return handle end)
+    eq(#Coexist.suspended(first), 1, "the first token holds the way back")
+    ok(#Coexist.suspended(second) >= 0, "the second token is not the way back")
+    Coexist.restore(second)
+    Coexist.restore(first)
+    ok(true, "restoring both is safe")
+  end
+end
+
 io.write(("\nbattle royale: %d passed, %d failed\n"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

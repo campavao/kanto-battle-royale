@@ -47,6 +47,7 @@ local Peek = require("mods.battle_royale.lib.peek")
 local BRMenu = require("mods.battle_royale.lib.menu")
 local Machines = require("mods.battle_royale.lib.machines")
 local Career = require("mods.battle_royale.lib.career")
+local Coexist = require("mods.battle_royale.lib.coexist")
 local Lockstep = require("mods.battle_royale.lib.lockstep")
 local Stats = require("mods.battle_royale.lib.stats")
 local Log = require("mods.battle_royale.lib.log")
@@ -687,6 +688,24 @@ return function(mod)
   -- relay goodbye.
   -- Everything one match owns, cleared for the next: a leave (reset) or
   -- PLAY AGAIN (onAgain), which keeps the room.
+  -- Give another mod its overworld back (POK-134).  Idempotent, and called
+  -- from more than one place ON PURPOSE.  resetMatch is the one path every
+  -- deliberate exit goes through, and it is the primary route -- but it is
+  -- reached by this mod's own code, so a fault in this mod between the
+  -- suspend and the exit would strand somebody else's game for the rest of
+  -- the session.  The save events are the second net: they already mean
+  -- "the player is in a real playthrough again" (they clear matchWorld for
+  -- the same reason), and they are raised by the ENGINE, so they still
+  -- arrive when this mod is the thing that went wrong.
+  --
+  -- A hard close needs no net at all: these mods install their hooks at
+  -- module init, so the next launch puts them back regardless.
+  function BR:unsuspendMods()
+    if not self.suspendedMods then return end
+    Coexist.restore(self.suspendedMods, log)
+    self.suspendedMods = nil
+  end
+
   function BR:resetMatch()
     self:restoreSpeed()
     self.ghosts:despawnAll()
@@ -708,6 +727,11 @@ return function(mod)
     -- one path every exit goes through -- a deliberate LEAVE, a teardown,
     -- a host drop, PLAY AGAIN -- which is why it lives here and not in
     -- teardown beside restoreSkinWalk.
+    -- ...and whatever was asked to stand down gets its overworld back
+    -- (POK-134).  Before the TM restore rather than after it: this one
+    -- reaches into ANOTHER mod, so it goes first while the least has
+    -- already been undone, and it is safe to run twice.
+    self:unsuspendMods()
     if self.machineNames then
       Machines.restore(self.game and self.game.data, self.machineNames)
       self.machineNames = nil
@@ -991,6 +1015,15 @@ return function(mod)
     -- double call is how the way back gets lost.
     if self.game and not self.machineNames then
       self.machineNames = Machines.apply(self.game.data)
+    end
+    -- Other mods that act on the overworld stand down for the match
+    -- (POK-134).  Same guard as the TMs above and for the same reason: a
+    -- second suspend hands back an empty token, and that is how the way
+    -- back gets lost.  restore lives in resetMatch, the one path every
+    -- exit goes through.
+    if not self.suspendedMods then
+      self.suspendedMods = Coexist.suspend(function(id) return mod.find(id) end,
+                                           log)
     end
     self.stats = { catches = 0, beats = 0, steps = 0,
                    startedAt = (love.timer and love.timer.getTime
@@ -3782,6 +3815,34 @@ return function(mod)
       end
     end
     BR.fleeing = nil
+    -- A battle that never ran is not a defeat (POK-134).  The engine
+    -- refuses a wild battle against an empty party -- BattleState.newWild
+    -- marks it dead and reports it as `lose` with `skipped` set -- and the
+    -- SAFARI opening is played with an empty party by design, so anything
+    -- that keeps the ghost lead from being lent used to eliminate the
+    -- player on the spot, every time they touched a wild mon.
+    --
+    -- The second clause is the one that does not depend on knowing why.  A
+    -- SAFARI battle has no player turn at all: the menu is BALL/BAIT/ROCK/
+    -- RUN and no mon of yours ever acts (BattleState makeSafari), so a
+    -- `lose` arriving from one is the engine's empty-party blackout
+    -- (BattleState "battle finished with no healthy party; forcing
+    -- blackout") and never something the player did.
+    --
+    -- Keyed on the BATTLE being a Safari one rather than on the phase.
+    -- Engagement is gated to phase "match" today, so a bot cannot beat
+    -- anyone during the SAFARI and a phase test would be equivalent -- but
+    -- it would be equivalent by an invariant held somewhere else, and a
+    -- bot defeat quietly not counting is exactly the bug this would become
+    -- if that ever moved.  `battle.safari` is the state makeSafari hangs
+    -- on the battle itself, which is the thing actually being claimed.
+    if ev.skipped or (ev.battle and ev.battle.safari and ev.result == "lose") then
+      log:warn("a battle was refused (skipped=%s, safari=%s) -- not a loss",
+               tostring(ev.skipped),
+               tostring(ev.battle and ev.battle.safari ~= nil))
+      BR.status = "alive"
+      return
+    end
     if ev.result == "lose" then
       -- one elimination path for every way of losing, so a PvP defeat
       -- spills the team -- and the bag, on the ground beside the victor
@@ -4654,12 +4715,16 @@ return function(mod)
   mod.events:on("save.created", function()
     local saved = mod.save:get("relay")
     if saved then BR:setRelayAddress(saved) end
-    if not BR.arming then BR.matchWorld = false end
+    if not BR.arming then
+      BR.matchWorld = false
+      BR:unsuspendMods()
+    end
   end)
 
   -- CONTINUE loads a real save; SAVE is theirs again.
   mod.events:on("save.loaded", function()
     BR.matchWorld = false
+    BR:unsuspendMods()
   end)
 
   -- Pick up the game handle early, and rescue a career written before
