@@ -89,6 +89,17 @@ function Fog.isFinalPhase(phase) return (phase or 1) >= #Fog.PHASES end
 -- Has the ring closed completely -- is there nowhere left to stand?
 function Fog.coversAll(radius) return (tonumber(radius) or 0) < 0 end
 
+-- Is there fog ANYWHERE on the board?  Phase 1's radius is NOWHERE, which
+-- clears the grid's true diagonal, so every square is inside it and nothing
+-- is fogged: the grace period is the one stretch of a match with no fog in
+-- it at all.  Every later phase has some.  Expressed against the radius
+-- rather than the phase number so it reads the same value isSafe does --
+-- a schedule edit cannot leave the two disagreeing.
+function Fog.isUp(radius)
+  local r = tonumber(radius)
+  return r ~= nil and r < Fog.NOWHERE
+end
+
 -- Which phase a match of this age is in (1-based).
 function Fog.phaseAt(elapsedSeconds, phaseSeconds)
   phaseSeconds = phaseSeconds or Fog.DEFAULT_PHASE_SECONDS

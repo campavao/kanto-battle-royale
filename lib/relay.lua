@@ -165,7 +165,26 @@ function Relay:send(toId, m)
   return self:_raw({ type = "to", id = toId, m = m })
 end
 
+-- A room of one has nobody to forward to (POK-102).  The relay fans `all`
+-- out to every OTHER member, so in a solo room -- Quick Play that found no
+-- open room and hosted its own, or a bot match -- every frame is forwarded
+-- to nobody: one session pushed 11,672 of them across 45 minutes, dominated
+-- by the per-tile Wire.step of the player and of every bot.
+--
+-- The guard is local and needs no protocol: the roster the relay sends is
+-- already kept in self.members.  It is deliberately narrow -- suppress only
+-- when the roster is KNOWN, names exactly one member, and that member is us
+-- -- so an empty or not-yet-arrived roster still sends rather than silently
+-- swallowing the room.  Pings are a separate path, so the connection is
+-- carried on its own and this cannot idle it out.
+--
+-- `to` sends are untouched: only the room-wide fan-out is gated.
 function Relay:broadcast(m)
+  if self.id ~= nil and #self.members == 1
+     and self.members[1] and self.members[1].id == self.id then
+    self.suppressed = (self.suppressed or 0) + 1
+    return true
+  end
   return self:_raw({ type = "all", m = m })
 end
 

@@ -47,7 +47,20 @@ do
   ok(Wire.decode({ t = "start", seed = 1, spawns = {} }) == nil, "empty start is refused")
 
   -- the Safari opening (POK-21): start carries the round, beats carry the clock
-  eq(Wire.PROTOCOL, 7, "a ring carrying the match clock is PROTOCOL 7")
+  eq(Wire.PROTOCOL, 8, "a room that can see who is busy is PROTOCOL 8")
+
+  -- POK-113: what a trainer is doing, for the mark over their head
+  local b = Wire.decode(Wire.busy("menu"))
+  eq(b and b.kind, "menu", "busy round-trips a menu")
+  eq(Wire.decode(Wire.busy("battle")).kind, "battle", "...and a battle")
+  eq(Wire.decode(Wire.busy(nil)).kind, nil, "...and back to nothing")
+  ok(Wire.decode(Wire.busy(nil)) ~= nil, "which is a message, not a refusal")
+  -- A kind this build has no mark for reads as "not busy".  Dropping it
+  -- would leave the LAST mark standing over someone who has moved on,
+  -- which is worse than showing nothing.
+  eq(Wire.decode({ t = "busy", k = "dancing" }).kind, nil,
+     "an unknown kind clears the mark rather than keeping a stale one")
+  eq(Wire.decode({ t = "busy", k = 7 }).kind, nil, "and so does a non-string")
   eq(Wire.decode(Wire.peek()).t, "peek", "peek round-trips")
   local st6 = Wire.decode(Wire.state({
     party = { { species = "PIDGEY", level = 12, hp = 23, maxHp = 40, status = "PSN",
@@ -355,6 +368,18 @@ do
   ok(Fog.coversAll(Fog.EVERYWHERE), "EVERYWHERE is the absence of one")
   ok(Fog.radius(Fog.phaseCount() + 50) == Fog.EVERYWHERE,
      "past the schedule the fog stays everywhere -- no clamp back to a ring")
+
+  -- POK-117: is there fog anywhere yet?  The grace phase is the one stretch
+  -- of a match with none, and it is what keeps the Pokemon Centre open.
+  ok(not Fog.isUp(Fog.radius(1)),
+     "the grace phase has no fog on the board at all")
+  for p = 2, Fog.phaseCount() do
+    ok(Fog.isUp(Fog.radius(p)),
+       "phase " .. p .. " has fog somewhere -- the counter is shut")
+  end
+  ok(Fog.isUp(Fog.EVERYWHERE), "the endgame is certainly fog")
+  ok(not Fog.isUp(Fog.NOWHERE), "and NOWHERE is certainly not")
+  ok(not Fog.isUp(nil), "no ring yet is not fog -- the match has not started")
 
   -- geometry on a town-map grid
   local locations = {
@@ -1901,6 +1926,71 @@ do
   guest:leave()
   host:update()
   eq(hostRoster and #hostRoster, 1, "host roster shrinks when the guest leaves")
+end
+
+-- ------------------------------------------------------------------
+-- POK-102: a room of one says nothing
+--
+-- The relay fans `all` out to every OTHER member, so a solo room forwards
+-- every frame to nobody.  Count what actually reaches the transport rather
+-- than what a peer receives -- with no peer there is no other side to look
+-- at, and the whole point is the bytes that never leave.
+-- ------------------------------------------------------------------
+do
+  local hub = Hub.new()
+  local wire = hub:connect()
+  local sent = { all = 0, to = 0 }
+  local rawSend = wire.send
+  wire.send = function(self, msg)
+    local t = type(msg) == "table" and msg.type
+    if t == "all" then sent.all = sent.all + 1
+    elseif t == "to" then sent.to = sent.to + 1 end
+    return rawSend(self, msg)
+  end
+
+  local host = Relay.new({ transport = wire })
+
+  -- Before the room exists there is no roster to trust, so a broadcast goes
+  -- out rather than being swallowed on a guess.
+  host:broadcast(Wire.face("down", "PALLET_TOWN"))
+  eq(sent.all, 1, "with no roster yet, a broadcast still goes out")
+
+  host:host("RED")
+  host:update()
+  eq(#host.members, 1, "a room of one knows it is a room of one")
+
+  for _ = 1, 5 do host:broadcast(Wire.face("down", "PALLET_TOWN")) end
+  eq(sent.all, 1, "a solo room puts no `all` frame on the wire")
+  eq(host.suppressed, 5, "and counts every frame it withheld")
+  ok(host:broadcast(Wire.out()) == true,
+     "a suppressed broadcast still reports success -- nothing failed")
+  eq(host.suppressed, 6, "including that one")
+
+  -- `to` is a different path and is never gated: it names its recipient.
+  host:send(host.id, Wire.challenge(1))
+  eq(sent.to, 1, "a unicast is untouched by the gate")
+
+  -- The moment somebody else is in the room, the fan-out resumes.
+  local guest = Relay.new({ transport = hub:connect() })
+  local guestInbox = {}
+  guest:on("message", function(from, m) guestInbox[#guestInbox + 1] = m end)
+  guest:join("ROOM01", "BLUE")
+  guest:update()
+  host:update()
+  eq(#host.members, 2, "the roster grew")
+  host:broadcast(Wire.place("ROUTE_1", 3, 4, "down", "alive", "SPRITE_RED"))
+  guest:update()
+  eq(sent.all, 2, "with a peer present the frame goes out again")
+  eq(#guestInbox, 1, "and the peer actually receives it")
+  eq(host.suppressed, 6, "nothing further was withheld")
+
+  -- ...and when they leave, the room is quiet again.
+  guest:leave()
+  host:update()
+  eq(#host.members, 1, "the roster shrank back to one")
+  host:broadcast(Wire.out())
+  eq(sent.all, 2, "the last trainer standing talks to nobody")
+  eq(host.suppressed, 7, "which is one more frame withheld")
 end
 
 -- ------------------------------------------------------------------

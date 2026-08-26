@@ -46,6 +46,57 @@ return function(game)
 
   -- the champion: this side is here to win the duel
   L.armParty(C, "MEWTWO", 100, "PSYCHIC_M")
+
+  -- ------- POK-113: this trainer's mark, for the other screen.
+  --
+  -- Deliberately BEFORE the walk to Pewter, and so on a different map from
+  -- the post.  The engage sight-line has no consent step, so probing next
+  -- to a posted trainer opens the duel instead -- which is exactly what the
+  -- first run of this did, reporting "battle" where a menu was expected.
+  -- The mark is wire state, not screen state, so distance costs nothing.
+  --
+  -- watching.txt is the handshake: the host writes it when it is ready to
+  -- read, so each state is held while somebody is actually looking.
+  if not L.waitFor(DIR, "watching.txt", 3600) then
+    return C.fail("the host never said it was watching")
+  end
+
+  local function backOnTheMap(ticks)
+    for _ = 1, ticks or 200 do
+      if game.stack:top() == C.ow() then return true end
+      U.tap(game, "b")
+      U.wait(12)
+    end
+    return game.stack:top() == C.ow()
+  end
+
+  if not backOnTheMap(200) then
+    return C.fail("could not get back to the map to start the mark probe")
+  end
+  if E.busy() ~= nil then
+    return C.fail("walking should carry no mark, got " .. tostring(E.busy()))
+  end
+  L.put(DIR, "busy_map.txt", "1")
+  U.wait(180)
+
+  U.tap(game, "start")
+  U.wait(60)
+  if E.busy() ~= "menu" then
+    return C.fail("the START menu should read as a menu, got " .. tostring(E.busy()))
+  end
+  L.put(DIR, "busy_menu.txt", "1")
+  U.wait(420)             -- hold it open long enough to be seen from there
+
+  if not backOnTheMap(200) then
+    return C.fail("the START menu would not close")
+  end
+  if E.busy() ~= nil then
+    return C.fail("putting it away should clear the mark, got " .. tostring(E.busy()))
+  end
+  L.put(DIR, "busy_clear.txt", "1")
+  U.wait(240)
+  U.log("PVP guest: mark probe done (map / menu / map)")
+
   if not L.flyTo(C, "PEWTER_CITY") then
     return C.fail("FLY did not land in Pewter; at " .. tostring(C.map()))
   end

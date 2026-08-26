@@ -117,6 +117,16 @@ function L.goTo(C, mapId, gx, gy, rounds)
 end
 
 -- FLY with the busy-refusal retry (drop dialogs make flyTo a no-op)
+-- FLY, with a landing that does not depend on where the drop put us.
+--
+-- The A-mashing handles POK-49's busy refusal (flyTo declines while the
+-- drop dialog is up).  What it cannot handle is a drop onto a map FLY will
+-- not leave -- a run that landed the host on ROUTE_19, a water route, spent
+-- all ten retries being refused and failed the scenario on staging rather
+-- than on anything under test.  So the last resort is a teleport, which
+-- works mid-match and is what the other drivers here use to stage a
+-- position anyway.  Fly first regardless: it exercises the real path, and
+-- the fallback only ever runs where this used to give up.
 function L.flyTo(C, town)
   for _ = 1, 10 do
     if C.map() == town then return true end
@@ -126,6 +136,15 @@ function L.flyTo(C, town)
     end
     pcall(function() C.game.overworld:flyTo(town) end)
     U.wait(450)
+  end
+  if C.map() == town then return true end
+  local def = C.game.data and C.game.data.maps and C.game.data.maps[town]
+  local warp = def and def.warps and def.warps[1]
+  if warp then
+    U.log(("PVP: FLY would not leave %s; teleporting to %s")
+          :format(tostring(C.map()), tostring(town)))
+    U.teleport(C.game, town, warp.x, warp.y, "down")
+    U.wait(60)
   end
   return C.map() == town
 end

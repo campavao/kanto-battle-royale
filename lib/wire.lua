@@ -65,10 +65,17 @@ local Wire = {}
 --    to resume and would restart the fog at phase 1, with the ring
 --    springing back open around everyone; and the champion sends their
 --    parade so the whole room watches the same ending (POK-107)
-Wire.PROTOCOL = 7
+-- 8: busy -- a trainer says when they are in a menu or in a fight, so the
+--    room can see it over their head (POK-113); a v7 peer sends nothing
+--    and would stand there looking idle while it read its PACK
+Wire.PROTOCOL = 8
 
 Wire.DIRS = { up = true, down = true, left = true, right = true }
 Wire.STATUS = { lobby = true, alive = true, battle = true, out = true }
+-- What a trainer is doing that is not walking (POK-113).  Absent -- and a
+-- `busy` carrying no kind -- means "back on the map", which is the state
+-- nothing needs to be drawn for.
+Wire.BUSY = { menu = true, battle = true }
 
 local MAX_NAME = 7     -- the Gen 1 player name box
 local MAX_ID = 64
@@ -185,6 +192,12 @@ function Wire.fame(party, stats)
 end
 -- PLAY AGAIN (POK-20): host only, back to the lobby with the roster kept
 function Wire.again() return { t = "again" } end
+
+-- What this trainer is doing (POK-113).  Edge-triggered: sent when the
+-- answer CHANGES rather than every tick, and re-sent on the position
+-- resync so a peer that missed the edge is not left holding a stale mark.
+-- nil is the common case (walking around) and costs one field.
+function Wire.busy(kind) return { t = "busy", k = kind } end
 
 -- a spectator asks the trainer they watch what they carry (POK-18)...
 function Wire.peek() return { t = "peek" } end
@@ -419,6 +432,16 @@ decoders.winner = function(m)
 end
 
 decoders.again = function() return { t = "again" } end
+
+decoders.busy = function(m)
+  -- an unknown kind is not a protocol error -- it is a peer saying
+  -- something this build has no mark for, and the honest answer is "not
+  -- busy" rather than dropping the message and keeping the old mark up
+  if m.k ~= nil and (type(m.k) ~= "string" or not Wire.BUSY[m.k]) then
+    return { t = "busy", kind = nil }
+  end
+  return { t = "busy", kind = m.k }
+end
 
 decoders.peek = function() return { t = "peek" } end
 

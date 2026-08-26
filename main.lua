@@ -342,6 +342,41 @@ return function(mod)
     if h then BR.sentMap, BR.sentFacing = h.mapId, h.facing end
   end
 
+  -- POK-113: the mark that goes over a trainer's head on everyone else's
+  -- screen.  A fight of any kind -- a duel, a bot, one of Kanto's own
+  -- trainers, a wild encounter -- reads as a battle; anything else above
+  -- the overworld (the PACK, the party screen, a dialog) reads as a menu.
+  -- Both are worth knowing before you walk over: someone in a fight cannot
+  -- answer you, and someone in a menu is not about to run.
+  --
+  -- The battle test is tickLevels' pair, and for the same reason: `status`
+  -- alone says "battle" only for a duel or a bot fight, and a wild
+  -- encounter or a route trainer leaves it "alive".
+  local function myBusy()
+    local game = BR.game
+    if not game then return nil end
+    if BR.status == "battle" or BR.botFight or BR:liveLocalBattle() then
+      return "battle"
+    end
+    local ow = mod.world:overworld()
+    local top = game.stack and game.stack:top()
+    if not (ow and top) or top == ow then return nil end
+    return "menu"
+  end
+
+  -- Edge-triggered: a frame goes out only when the answer CHANGES, so a
+  -- whole match of walking costs nothing.  sentBusy starts (and resyncs)
+  -- at `false` rather than nil, because nil is a real answer -- "back on
+  -- the map" -- and a peer that missed that edge would otherwise be left
+  -- holding a mark over someone who put their PACK away five minutes ago.
+  local function broadcastBusy()
+    if not (BR.relay and BR.relay:isOpen()) then return end
+    local kind = myBusy()
+    if kind == BR.sentBusy then return end
+    BR.sentBusy = kind
+    BR.relay:broadcast(Wire.busy(kind))
+  end
+
   -- ------- trainer skins (POK-79)
   --
   -- The walk sheet every other trainer sees, unlocked by career wins.  The
@@ -471,6 +506,20 @@ return function(mod)
       if BR.autoStartAt and #members > (BR.lastRoster or 0) then
         local floor = love.timer.getTime() + QUICK_START_GRACE
         if BR.autoStartAt < floor then BR.autoStartAt = floor end
+      end
+      -- The room stopped being solo, so the `all` fan-out that was being
+      -- suppressed while nobody could hear it (POK-102) starts flowing
+      -- again -- and whoever just arrived has none of the stream they
+      -- missed.  Today this is insurance rather than a fix: the room is
+      -- locked for the length of a round (no late joiners), so a roster can
+      -- only GROW in the lobby, where there is no positional stream yet and
+      -- Wire.start hands out every spawn anyway.  It is here so that a
+      -- future change which lets someone in mid-round cannot quietly
+      -- reintroduce a ghost that never moves.  Clearing sentFacing
+      -- re-announces the facing; arming resync sends a full place next tick
+      -- instead of waiting out the five-second cadence.
+      if #members > 1 and (BR.lastRoster or 0) <= 1 then
+        BR.sentFacing, BR.resync = nil, RESYNC_TICKS
       end
       BR.lastRoster = #members
       -- forget anyone who left; the host recounts survivors
@@ -621,6 +670,7 @@ return function(mod)
     self.fledFrom, self.fleeGrace, self.fleeLockout, self.fleeing = {}, {}, {}, nil
     self.peeked, self.lastPeekAt = nil, nil
     self.pendingDrop = nil   -- a release that never landed (POK-34)
+    self.pendingGift = nil   -- a gift whose box was never reopened (POK-112)
     self.pendingSays = {}
     self.runnerBusySince, self.lastAutoA = nil, nil
     self.stats = nil
@@ -895,6 +945,7 @@ return function(mod)
     self.game:startNewGame({ intro = false })
     self.arming = nil
     self.sentMap, self.sentFacing, self.resync = nil, nil, 0
+    self.sentBusy = false    -- not nil: nil is "not busy", a real answer
     broadcastPlace()
     if safari > 0 then
       -- a beat and a half after landing: past the held A that started the
@@ -1052,6 +1103,13 @@ return function(mod)
         p.facing = msg.facing
         self.ghosts:face(actor, msg.facing)
       end
+
+    -- POK-113: what they are doing that is not walking.  Only meaningful
+    -- for somebody we already know about -- a busy arriving before their
+    -- first place has nowhere to be drawn, and their next resync carries
+    -- the answer again anyway.
+    elseif msg.t == "busy" then
+      if p then p.busy = msg.kind end
 
     elseif msg.t == "start" then
       -- only the host is a legitimate author; ignore a forged one
@@ -1626,6 +1684,15 @@ return function(mod)
   -- until POK-82's exit runs there is a real window to stand in.
   function BR:inSession()
     return self:inRound() or self.phase == "over"
+  end
+
+  -- Has the ring started closing?  Distinct from mod.exports.inFog, which
+  -- asks whether THIS player is standing in it: this is the match-wide
+  -- clock, true for everyone from the first shrink onwards however safe the
+  -- square they are on.  What closes the Pokemon Centre (POK-117) is the
+  -- match reaching attrition, not the player's own map going dark.
+  function BR:fogIsUp()
+    return self.ring ~= nil and Fog.isUp(self.ring.radius)
   end
 
   function BR:safariLeft()
@@ -2992,6 +3059,74 @@ return function(mod)
     }))
   end
 
+  -- A gift that lands on a full party (POK-112).
+  --
+  -- Kanto hands out Pokemon that are ALREADY in a ball -- the Fighting
+  -- Dojo's HITMONLEE and HITMONCHAN, the Silph LAPRAS, the Celadon EEVEE,
+  -- the revived fossils -- and Commands.give_pokemon puts those in the
+  -- party or, failing that, in the BOX.  In a match the PC answers OUT OF
+  -- ORDER, so "sent to BOX" is a hole in the floor: the prize is gone the
+  -- instant it is won and nobody can ever reach it again.
+  --
+  -- A ball on the ground is a ball on the ground, so a gift gets the same
+  -- rule as a catch and as a spilled ball: the party screen as a picker,
+  -- and whoever you release lands at your feet for somebody else.  The one
+  -- difference from offerDropForBall is that there is no race to re-check
+  -- -- a gift is yours alone, and cannot change hands while the picker is
+  -- up.  Both outcomes route the released mon through pendingDrop rather
+  -- than spilling here, so the ball lands under the tick's guards (on the
+  -- map, not mid-warp) exactly as POK-34's does.
+  function BR:offerDropForGift(mon, giftName)
+    local game = self.game
+    local save = game and game.save
+    if not (game and save and mon) then return end
+    local data = game.data
+    local PartyMenu = require("src.ui.PartyMenu")
+    local Party = require("src.pokemon.Party")
+    game.stack:push(PartyMenu.new(game, {
+      party = save.party,
+      pickOnly = true,
+      onSwitch = function(dropped)
+        local ddef = data and data.pokemon and data.pokemon[dropped.species]
+        local droppedName = (ddef and ddef.name) or tostring(dropped.species)
+        for i, member in ipairs(save.party) do
+          if member == dropped then table.remove(save.party, i) break end
+        end
+        if not Party.add(save.party, mon) then
+          -- cannot happen at 5/6, but a prize is never lost to a table
+          save.party[#save.party + 1] = mon
+        end
+        self.pendingDrop = dropped
+        say(("%s was\nreleased."):format(droppedName))
+      end,
+      -- B keeps your six.  The gift still does not evaporate: "released"
+      -- means "lands as a ball" everywhere else in here, so it means that
+      -- here too and whoever walks past next can have it.
+      onCancel = function()
+        self.pendingDrop = mon
+        say(("%s was\nreleased."):format(giftName))
+      end,
+    }))
+  end
+
+  -- Take back what the box just swallowed.  Boxes are plain arrays and
+  -- Boxes.deposit appends, so the gift is the last row of the box the
+  -- command named.  Nothing else can be writing to storage while this runs
+  -- -- the PC is out of order for the length of a match and a deposit is
+  -- the only other way in -- so the last row is the gift.
+  function BR:rescueBoxedGift(ctx)
+    local game = self.game
+    local save = game and game.save
+    local boxNum = ctx and ctx.boxNum
+    if not (game and save and boxNum and save.boxes) then return end
+    local box = save.boxes[boxNum]
+    local mon = box and box[#box]
+    if not (mon and mon.species) then return end
+    table.remove(box, #box)
+    local def = game.data and game.data.pokemon and game.data.pokemon[mon.species]
+    self:offerDropForGift(mon, (def and def.name) or tostring(mon.species))
+  end
+
   -- The catch picker (POK-34): a 6/6 catch hands you the decision the PC
   -- used to make silently.  Pick a member to release and the catch takes
   -- their slot; B keeps your six and the catch is gone.  The release itself
@@ -3639,6 +3774,7 @@ return function(mod)
     self.winnerId = id
     self.ghosts:despawnAll()
     self.pendingDrop = nil   -- the match ended before the release could land
+    self.pendingGift = nil   -- ...and before the boxed gift could be handed back
     self.buzzed, self.pickingTown = nil, nil
     -- via sayLater: the fog line that ended the match is usually still on
     -- screen, and the runner would refuse -- and silently drop -- the
@@ -3776,6 +3912,10 @@ return function(mod)
     BR:tickAutoResolve(game)
 
     if relay and relay:isOpen() and BR:inRound() then
+      -- The mark goes out ABOVE the position block (POK-113), not inside
+      -- it: everything below is skipped while status is "battle", which is
+      -- precisely the state the room most needs told about.
+      broadcastBusy()
       local h = here()
       if h then
         if BR.status ~= "battle" then
@@ -3788,6 +3928,9 @@ return function(mod)
           if BR.resync >= RESYNC_TICKS then
             BR.resync = 0
             broadcastPlace()
+            -- re-state the mark on the same beat as the position, so a peer
+            -- that missed the edge is not left holding a stale one (POK-113)
+            BR.sentBusy = false
           end
           BR.ghosts:sync(game, h.mapId, BR.players)
           -- Our screen paused; the match did not (POK-98).  While anything
@@ -3846,6 +3989,20 @@ return function(mod)
         BR:spillDropped(mon)
       end
     end
+
+    -- ...and a gift the party had no room for is pulled straight back out
+    -- of the box it was just dropped into (POK-112).  Same guards, and
+    -- waiting for the map also waits out the gift's own "sent to BOX" and
+    -- "PLAYER got X!" boxes, so the picker opens after the announcement
+    -- rather than underneath it.
+    if BR.pendingGift and BR:inRound() then
+      local ow = mod.world:overworld()
+      if ow and game.stack:top() == ow and not ow.transitioning then
+        local ctx = BR.pendingGift.ctx
+        BR.pendingGift = nil
+        BR:rescueBoxedGift(ctx)
+      end
+    end
     BR:tickCamera()
   end
 
@@ -3872,6 +4029,23 @@ return function(mod)
   -- which is why link.battle_ended handles that case separately.)
   mod.events:on("world.blacked_out", function()
     BR:eliminate("You whited out!\nYou are out of\nthe match.", "whiteout")
+  end)
+
+  -- A gift is about to be created (POK-112).  before_give fires ahead of
+  -- Party.add, so a party that is full HERE is one this gift cannot fit
+  -- into and the command is about to send it to the BOX -- which a match
+  -- has locked.  The ctx the command carries is where it records what it
+  -- did (ctx.boxNum), so hold on to that and let the tick read the verdict
+  -- once the announcement is off the screen.
+  --
+  -- Note this is the ONLY seam that reaches every giver.  The dojo prize
+  -- is a native map script calling Commands.give_pokemon directly, with no
+  -- ScriptRunner under it, so script.command never fires for it.
+  mod.events:on("pokemon.before_give", function(gift)
+    if not (inMatch() and gift and gift.ctx) then return end
+    local save = BR.game and BR.game.save
+    if not (save and #(save.party or {}) >= 6) then return end
+    BR.pendingGift = { ctx = gift.ctx }
   end)
 
   -- Leaving a map takes our copy of every ghost with it: they are runtime
@@ -3903,6 +4077,23 @@ return function(mod)
       local entry = data:textEntry(ow.map.def.label, def.text)
       if entry and entry.cableClub then
         say("The CABLE CLUB is\nclosed for\nthe match.")
+        return
+      end
+      -- The nurse closes when the fog rolls in (POK-117).  A free, unlimited,
+      -- full-party heal is fine while everyone is still building a team --
+      -- that is what the grace phase is for, and walking to a Centre costs
+      -- real time.  But once the ring starts closing the match is attrition,
+      -- and a Centre that never runs out undoes it: the fog does a tenth of
+      -- everyone's maximum every four seconds precisely so that damage
+      -- accumulates, and a round trip to the counter erased all of it for
+      -- free.  So the counter shuts at the same moment the ring does.
+      --
+      -- Marked by the map's own TX_SCRIPT `nurse` flag, which is how
+      -- OverworldState picks the nurse out of a Centre's NPCs to begin with
+      -- (OverworldController:_talk) -- so this covers all twelve Centres
+      -- without naming one of them.  The PC beside her is untouched.
+      if entry and entry.nurse and BR:inRound() and BR:fogIsUp() then
+        say("Sorry -- we're\nclosed! The fog\nis coming!")
         return
       end
     end
@@ -4041,6 +4232,59 @@ return function(mod)
   -- corners where no text box ever goes.  Only over the overworld itself:
   -- a battle, a menu or the town map has its own screen.
 
+  -- The engine's emote sheet, baked through OBP0 exactly as
+  -- OverworldController's obpEmoteImage does it: the bubble is OBJ art and
+  -- GBPalNormal holds OBP0 at "3100", so color 1 has to LIFT to white or
+  -- the bubble's interior comes out grey (#505).  Resolved through Assets,
+  -- so a mod's own emotes.png override still wins.
+  --
+  -- Cached on first use and never rebuilt -- this draws every frame a mark
+  -- is up, and a fresh image (or Quad) per frame would churn the GC.  A
+  -- failure caches as `false`: no bubbles rather than a retry every frame.
+  local emoteImg, emoteQuads = nil, {}
+  local function emoteSheet(game)
+    local field = game and game.data and game.data.field
+    local bubbles = field and field.emotionBubbles
+    if not (bubbles and bubbles.path) then return nil end
+    if emoteImg == nil then
+      local ok, img = pcall(function()
+        local Assets = require("src.render.Assets")
+        if not (love.image and love.image.newImageData) then
+          return love.graphics.newImage(Assets.resolve(bubbles.path))
+        end
+        local id = Assets.imageData(bubbles.path)
+        id:mapPixel(function(_, _, r, _, _, a)
+          local v = 0
+          if r > 0.5 then v = 1               -- OBJ colors 0 and 1 -> shade 0
+          elseif r > 0.17 then v = 170 / 255  -- OBJ color 2 -> shade 1
+          end                                 -- OBJ color 3 -> shade 3
+          return v, v, v, a
+        end)
+        return love.graphics.newImage(id)
+      end)
+      emoteImg = (ok and img) or false
+      if not ok then
+        mod.log:warn("emote sheet unavailable; no busy marks (%s)", tostring(img))
+      end
+    end
+    if not emoteImg then return nil end
+    return emoteImg, bubbles
+  end
+
+  -- By NAME rather than by index: the order is the cart's, and a mod (or a
+  -- Gen 2 sheet) may not keep it.
+  local function emoteQuad(bubbles, img, name)
+    if emoteQuads[name] then return emoteQuads[name] end
+    for _, b in ipairs((bubbles and bubbles.bubbles) or {}) do
+      if b.name == name then
+        local q = love.graphics.newQuad(b.x, b.y, b.w, b.h, img:getDimensions())
+        emoteQuads[name] = q
+        return q
+      end
+    end
+    return nil
+  end
+
   local function hudBox(text, tx, ty)
     local Font = require("src.render.Font")
     local w = #text + 2
@@ -4087,6 +4331,54 @@ return function(mod)
       -- blink on the fog's own beat, so the box pulses with the bite
       local t = clock() or 0
       if math.floor(t * 2) % 2 == 0 then hudBox("FOG!", 0, 0) end
+    end
+
+    -- ------- what everyone else is doing, over their heads (POK-113)
+    --
+    -- The cart's own emotion bubbles, not a drawn-on plate: the sheet the
+    -- trainer-sight "!" comes from ships a QUESTION bubble beside it, and
+    -- a mark in the game's own art reads as part of the world instead of
+    -- as a debug overlay.  So a menu is "?" and a fight is "!" -- which is
+    -- already Gen 1's vocabulary for "this trainer is engaged", and closer
+    -- to hand than the X the ticket sketched.
+    --
+    -- Drawn here rather than through the engine's emote slot even so: that
+    -- slot is ONE entity's transient bubble and it HOLDS THE WORLD for its
+    -- frames (fxEmote / the sight pause), which is the opposite of a
+    -- standing mark over several trainers at once.
+    local sheet, bubbles = emoteSheet(game)
+    local cam = ow.camera
+    if cam and sheet then
+      local h = here()
+      for id, p in pairs(BR.players) do
+        -- On OUR map and actually drawn.  Both halves matter: a bot that
+        -- roams away changes p.map on the wire a tick before sync gets
+        -- round to despawning its ghost, and npcOf still resolved the old
+        -- handle in that window -- which put a bubble over bare ground
+        -- where somebody used to be standing.
+        if p.busy and p.status ~= "out" and h and p.map == h.mapId
+           and BR.ghosts:isSpawned(id) then
+          local npc = BR.ghosts:npcOf(id)
+          -- the ghost's px/py is where this screen has DRAWN them, which is
+          -- the cell tryEngage reads too (POK-96); marking the wire
+          -- position would float the bubble off the sprite mid-step
+          if npc and npc.px and npc.py then
+            local quad = emoteQuad(bubbles, sheet,
+                                   p.busy == "battle" and "EXCLAMATION_BUBBLE"
+                                   or "QUESTION_BUBBLE")
+            -- the engine's own bubble slot, so it lands exactly where a
+            -- trainer-sight "!" does (fxEmote: px + 4, py - 14)
+            local mx = math.floor(npc.px - cam.x) + 4
+            local my = math.floor(npc.py - cam.y) - 14
+            -- only when it would land on the screen: a bubble for somebody
+            -- across a big map is a smear at the edge, not information
+            if quad and mx >= -16 and mx <= 160 and my >= -16 and my <= 144 then
+              g.setColor(1, 1, 1, 1)
+              g.draw(sheet, quad, mx, my)
+            end
+          end
+        end
+      end
     end
     g.pop()
     return out
@@ -4414,6 +4706,15 @@ return function(mod)
     BR.relay:broadcast(Wire.place(p.map, p.x, p.y, "down", p.status, p.sprite, id))
     return true
   end
+  -- Put a mark over somebody's head from outside (POK-113).  A bot never
+  -- sends `busy` -- it is simulated, not played -- so this is the only way
+  -- a single-client driver can get the overlay to draw at all.
+  mod.exports.debugBusy = function(id, kind)
+    local p = BR.players[id]
+    if not p then return false end
+    p.busy = kind
+    return true
+  end
   -- ...and one on the walk over (POK-85): a smoke needs to know the
   -- stride began, not just that a battle eventually happened
   mod.exports.walkUp = function()
@@ -4498,8 +4799,16 @@ return function(mod)
     local out = {}
     for id, p in pairs(BR.players) do
       out[#out + 1] = { id = id, name = p.name, map = p.map, x = p.x, y = p.y,
-                        status = p.status }
+                        status = p.status,
+                        -- the mark over their head (POK-113), so a driver
+                        -- can read what a second client is being shown
+                        busy = p.busy }
     end
     return out
   end
+
+  -- What THIS client is telling the room it is doing (POK-113).  The
+  -- derivation, not the last frame sent: in a solo room the frame is
+  -- suppressed (POK-102) and there would be nothing to read otherwise.
+  mod.exports.busy = function() return myBusy() end
 end

@@ -25,7 +25,7 @@ T.check(type(exports.phase) == "function", "exports phase")
 T.check(type(exports.aliveCount) == "function", "exports aliveCount")
 T.eq(exports.phase(), "off", "reports 'off' before any room")
 
--- ------- the launcher can actually offer an update (POK-102)
+-- ------- the launcher can actually offer an update (POK-103)
 --
 -- "Check for updates" in the launcher walks the INSTALLED mods and skips
 -- any without a `github` field outright -- RomImporter:_syncModUpdateInfo

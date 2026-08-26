@@ -50,6 +50,9 @@ Info on each game settings can be seen down in the Game lobby options section do
     - Location is randomized every game
     - You don't know the location until after you drop
     - Fog will hurt all your Pokemon over time
+    - Once the fog starts, the Pokemon Center closes
+        - Heal up early, while you still can
+        - The nurse is open for the whole grace period before the first ring
 4. **Fight to be the last one standing**
     - Last player standing wins!
     - Every win helps you unlock a new Sprite
@@ -64,7 +67,16 @@ Info on each game settings can be seen down in the Game lobby options section do
   - Fight other trainers and they'll drop their Pokemon for you to collect
   - Fighting other players (and bots) will also drop their bag
   - You can only have a max of 6 Pokemon
+  - At 6/6 you pick who to drop, and whoever you drop lands as a ball for
+    someone else to grab
+  - Same goes for Pokemon handed to you in a ball (the Fighting Dojo prize,
+    the Silph Lapras, the Celadon Eevee, revived fossils) - they follow the
+    same rule instead of disappearing into the PC
   - Battle Gym Leaders to get special Pokemon OR go find and catch Legendaries before someone else
+- **Watch for the bubble over someone's head**
+  - A "?" means they're sitting in a menu
+  - A "!" means they're already in a fight, so they can't answer you
+  - Everyone can see them, so yours is showing too
 - **You start with all HMs**
   - Catch a Flying type early to have access to Fly, or a Water type for Surf
   - Meant to help you get around Kanto a bit easier, if you have the right Pokemon

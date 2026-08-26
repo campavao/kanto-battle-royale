@@ -66,10 +66,61 @@ return function(game)
   L.put(DIR, "posted.txt", "1")
   U.log("PVP host: posted at 16,18 facing down; awaiting the challenger")
 
+  -- ------- POK-113: what the room is being shown about the guest.
+  --
+  -- With zero bots the only entry in players() is the other client, so
+  -- this reads their mark exactly as the overlay does.
+  local function guestBusy()
+    local ps = E.players() or {}
+    return ps[1] and ps[1].busy
+  end
+  -- Plain waiting is fine before the duel.  Inside it, waiting in silence
+  -- would let the POK-59 shot clock forfeit this side, so that check mashes
+  -- A -- which is what this side does for the rest of the fight anyway.
+  local function awaitBusy(want, ticks, mash)
+    for _ = 1, ticks or 400 do
+      if guestBusy() == want then return true end
+      if mash then U.tap(game, "a") end
+      U.wait(mash and 15 or 10)
+    end
+    return false
+  end
+
+  L.put(DIR, "watching.txt", "1")
+  if not L.waitFor(DIR, "busy_map.txt", 3600) then
+    return C.fail("the guest never reported standing on the map")
+  end
+  if not awaitBusy(nil, 200) then
+    return C.fail("a walking trainer should carry no mark, got "
+                  .. tostring(guestBusy()))
+  end
+  if not L.waitFor(DIR, "busy_menu.txt", 3600) then
+    return C.fail("the guest never opened its menu")
+  end
+  if not awaitBusy("menu", 600) then
+    return C.fail("the guest's menu never reached this screen, got "
+                  .. tostring(guestBusy()))
+  end
+  U.log("PVP host: the guest is marked as being in a menu")
+  if not L.waitFor(DIR, "busy_clear.txt", 3600) then
+    return C.fail("the guest never closed its menu")
+  end
+  if not awaitBusy(nil, 600) then
+    return C.fail("the guest's mark never cleared, got " .. tostring(guestBusy()))
+  end
+  U.log("PVP host: and the mark cleared when they put it away")
+
   if not L.mashUntil(C, function() return E.status() == "battle" end, 2400) then
     return C.fail("the duel never started on the host side")
   end
   U.log("PVP host: lockstep battle open")
+
+  -- and a trainer in a fight is marked as one (POK-113)
+  if not awaitBusy("battle", 400, true) then
+    return C.fail("the guest is not marked as fighting, got "
+                  .. tostring(guestBusy()))
+  end
+  U.log("PVP host: the guest is marked as fighting")
 
   if not L.mashUntil(C, function() return E.status() == "out" end, 4800) then
     return C.fail("the host never went out (it should have lost)")
