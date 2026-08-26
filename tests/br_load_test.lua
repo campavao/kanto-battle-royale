@@ -25,6 +25,30 @@ T.check(type(exports.phase) == "function", "exports phase")
 T.check(type(exports.aliveCount) == "function", "exports aliveCount")
 T.eq(exports.phase(), "off", "reports 'off' before any room")
 
+-- ------- the launcher can actually offer an update (POK-102)
+--
+-- "Check for updates" in the launcher walks the INSTALLED mods and skips
+-- any without a `github` field outright -- RomImporter:_syncModUpdateInfo
+-- does `if m.github and m.github ~= ""` and otherwise clears the row.  This
+-- manifest never had one, so the mod was invisible to the updater for its
+-- whole life: eleven releases that no player could be offered.
+--
+-- Manifest.parseGithub is what the loader ran it through, so this asserts
+-- the parsed value on the loaded mod rather than the raw JSON.
+
+do
+  local gh = run.mod and run.mod.manifest and run.mod.manifest.github
+  T.check(gh ~= nil and gh ~= "",
+          "the manifest declares a github repo (got " .. tostring(gh) .. ")")
+  T.eq(gh, "campavao/kanto-battle-royale", "and it is the mod's own repo")
+
+  -- the parse is strict; a value the launcher would reject must not ship
+  local Manifest = require("src.mods.Manifest")
+  T.eq(Manifest.parseGithub(gh), gh, "the launcher's own parser accepts it")
+  T.check(Manifest.parseGithub(nil) == nil, "absent means no updates")
+  T.check(Manifest.parseGithub("") == nil, "and so does empty")
+end
+
 -- ------- the START menu rows the mod owns (POK-99 / POK-100)
 --
 -- Driven through the REAL hook chain, which is the only place the anchor
