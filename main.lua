@@ -33,6 +33,8 @@ local LocalRoom = require("mods.battle_royale.lib.localroom")
 local Seams = require("mods.battle_royale.lib.seams")
 local Bots = require("mods.battle_royale.lib.bots")
 local Fog = require("mods.battle_royale.lib.fog")
+local Safari = require("mods.battle_royale.lib.safari")
+local Rods = require("mods.battle_royale.lib.rods")
 local Levels = require("mods.battle_royale.lib.levels")
 local Spills = require("mods.battle_royale.lib.spills")
 local Flee = require("mods.battle_royale.lib.flee")
@@ -100,7 +102,8 @@ local START_LEVEL = 5
 -- SECRET_KEY rides along (POK-69): BLAINE's door is `blocked = not
 -- inventory.SECRET_KEY`, and the mansion crawl for it has no place in a
 -- twenty-minute match when the gym is a POK-26 objective.
-local START_ITEMS = { POKE_BALL = 6, POTION = 1, TOWN_MAP = 1, SECRET_KEY = 1 }
+local START_ITEMS = { POKE_BALL = 6, POTION = 1, TOWN_MAP = 1, SECRET_KEY = 1,
+                      [Rods.FIRST] = 1 }
 local START_MONEY = 3000
 
 -- Every badge and every HM, from the drop.
@@ -239,10 +242,16 @@ return function(mod)
     pendingSays = {},     -- says waiting for a free runner (POK-49/POK-50)
     stats = nil,          -- the run's record: catches, beats, steps (POK-47)
     pendingParade = nil,  -- when the champion's ending should start (POK-47)
+    pendingFame = nil,    -- a parade that belongs to somebody else (POK-107)
+    winnerId = nil,       -- who the host crowned (POK-107)
     arming = nil,         -- { map, x, y } while save.new_game reshapes the skeleton
     started = false,      -- have I dropped into the world yet this match
     myName = nil,         -- chosen on the NAME row; nil falls back to the save
     matchWorld = false,   -- in a BR world: SAVE stays vetoed until a real save
+    tearingDown = false,  -- an exit is already in flight (POK-115)
+    wasHost = false,      -- were we the host as of the last roster (POK-116)
+    matchFog = nil,       -- the starting host's fog phase length (POK-116)
+    safariPool = nil,     -- this match's rotating zone (POK-118)
     -- Who the last battle was against, kept OUTSIDE self.battle on purpose:
     -- the channel (and with it self.battle) is torn down by LinkState before
     -- link.battle_ended reaches us, so reading the opponent off self.battle
@@ -421,6 +430,9 @@ return function(mod)
   local GRANTED = {}
   for _, id in ipairs(START_BADGES) do GRANTED[id] = true end
   for _, id in ipairs(START_HMS) do GRANTED[id] = true end
+  -- a rod is a grant like a badge: everyone has one, and the one you have
+  -- is decided by the ring rather than by who you beat (POK-119)
+  for _, id in ipairs(Rods.ALL) do GRANTED[id] = true end
   local function bagOf(save, name)
     local items = {}
     for id, n in pairs((save and save.inventory) or {}) do
@@ -439,6 +451,12 @@ return function(mod)
       -- line of its own (POK-86)
       log:match(relay.code, nil)
       BR:setPhase("lobby", relay:isHost() and "hosting" or "joined")
+      -- POK-116: tell the relay we can take the room over if the host goes.
+      -- Recorded here rather than inferred, so that a room whose members
+      -- cannot do it still ends the old way instead of being handed to a
+      -- client that would restart the fog.
+      BR.wasHost = relay:isHost()
+      relay:canHost(true)
       log:say("room %s as %s#%s%s", tostring(relay.code), myName(),
               tostring(relay.id), relay:isHost() and " (host)" or "")
       -- a quick-play host is the only one who counts down: whoever opened
@@ -469,12 +487,24 @@ return function(mod)
           BR.players[id] = nil
         end
       end
+      -- The relay hands the room on by naming a new host in the roster, and
+      -- lib/relay.lua has already adopted it by the time we get here -- so a
+      -- promotion is something to notice, not something to negotiate.
+      local amHost = relay:isHost()
+      if amHost and not BR.wasHost then BR:onPromoted() end
+      BR.wasHost = amHost
       if BR:inRound() then BR:checkWinner() end
     end)
     relay:on("message", function(fromId, m) BR:onMessage(fromId, m) end)
     relay:on("closed", function(reason)
-      if reason then say(reason) end
-      BR:reset()
+      -- A room that closes under us is an exit like any other, and it has
+      -- to leave the throwaway world the same way a deliberate LEAVE does.
+      -- reset() alone cleared the match state and left the match Kanto on
+      -- the stack, so the player stood in a world that was no longer a
+      -- match and no longer a save -- with SAVE un-vetoed over their real
+      -- slot, since matchWorld is exactly what the save.write hook reads
+      -- (POK-115).
+      BR:teardown(reason)
     end)
   end
 
@@ -596,8 +626,12 @@ return function(mod)
     self.stats = nil
     self.walkUp = nil
     self.pendingParade = nil
+    self.pendingFame = nil
+    self.winnerId = nil
     self.ringDistOf = nil
     self.ringLocs = nil
+    self.matchFog = nil
+    self.safariPool = nil
     self.dropSeq = nil
     self.safariEndsAt = nil  -- the Safari opening's clock (POK-21)
     self.lastSafariBeat = nil
@@ -631,31 +665,54 @@ return function(mod)
     self.lastRoster = 0
     self.phase = "off"
     self.myId = nil
+    self.wasHost = false
   end
 
   -- Leaving has to actually leave.  A match runs in a throwaway world, so
   -- dropping the relay while standing in it left the player in a Kanto that
   -- was no longer a match and no longer a save -- the menu said "you left"
-  -- and nothing else changed.  If we are in that world, go back to the title.
-  function BR:teardown(message)
-    log:say("teardown (%s)", tostring(message or "left"))
-    local wasMatchWorld = self.matchWorld
-    log:forget()
-    self:restoreSkinWalk()
-    if self.relay then self.relay:leave() end
-    self:reset()
-    if wasMatchWorld and self.game then
-      self.matchWorld = false   -- the throwaway world is gone; SAVE is theirs again
-      local ok, err = pcall(function()
-        while self.game.stack:top() do self.game.stack:pop() end
-        self.game.stack:push(self.game:makeTitleState())
-      end)
-      if not ok then
-        mod.log:warn("could not return to the title: %s", tostring(err))
-      end
-      return
+  -- and nothing else changed.  BOTH exits land here now -- teardown() and a
+  -- room that closed under us (POK-115) -- so neither can be the one that
+  -- forgets.  Takes the flag rather than reading it, because reset() clears
+  -- matchWorld on its way past.
+  function BR:toTitle(wasMatchWorld)
+    if not (wasMatchWorld and self.game) then return false end
+    self.matchWorld = false   -- the throwaway world is gone; SAVE is theirs again
+    local ok, err = pcall(function()
+      while self.game.stack:top() do self.game.stack:pop() end
+      self.game.stack:push(self.game:makeTitleState())
+    end)
+    if not ok then
+      mod.log:warn("could not return to the title: %s", tostring(err))
     end
-    if message then say(message) end
+    return true
+  end
+
+  function BR:teardown(message)
+    -- Re-entrant by construction: teardown drops the relay, and a dropped
+    -- relay fires `closed`, whose handler is itself an exit that tears
+    -- down.  Whoever arrives first owns the exit; the other turns around.
+    -- The flag is cleared through a pcall because a teardown that threw
+    -- with it still set would disable every exit after it.
+    if self.tearingDown then return end
+    self.tearingDown = true
+    local ok, err = pcall(function()
+      log:say("teardown (%s)", tostring(message or "left"))
+      local wasMatchWorld = self.matchWorld
+      log:forget()
+      self:restoreSkinWalk()
+      if self.relay then self.relay:leave() end
+      self:reset()
+      -- A say cannot outlive the stack pop: Menu.say queues a script in the
+      -- world we are leaving, so only an exit that stays put can deliver
+      -- one.  Landing on the title with no reason given is POK-115's
+      -- known gap, not an oversight here.
+      if not self:toTitle(wasMatchWorld) and message then say(message) end
+    end)
+    self.tearingDown = false
+    if not ok then
+      mod.log:warn("battle royale teardown failed: %s", tostring(err))
+    end
   end
 
   -- Leaving the finished world WITHOUT leaving the room: the throwaway
@@ -758,8 +815,9 @@ return function(mod)
       spawns[i] = { id = id, map = drops[i].map, x = drops[i].x, y = drops[i].y }
     end
     relay:lock(true)                       -- no late joiners mid-match
-    relay:broadcast(Wire.start(seed, spawns, safari))
-    self:onStart({ seed = seed, spawns = spawns, safari = safari })
+    relay:broadcast(Wire.start(seed, spawns, safari, self:fogSeconds()))
+    self:onStart({ seed = seed, spawns = spawns, safari = safari,
+                   fog = self:fogSeconds() })
   end
 
   function BR:onStart(msg)
@@ -778,6 +836,13 @@ return function(mod)
     -- A bot's name and party are derived from the shared seed rather than
     -- sent, so every client agrees on the team it is about to fight.
     self.matchSeed = msg.seed
+    -- the starting host's phase length, so an heir runs the ring at the pace
+    -- the match was started at rather than its own option (POK-116)
+    self.matchFog = msg.fog
+    -- ...and this match's zone, drawn from the same seed on every client
+    -- rather than sent, so the draft is the same for everyone (POK-118)
+    self.safariPool = Safari.pool(msg.seed, self.game and self.game.data)
+    log:say("the zone today: %s", Safari.describe(self.safariPool))
     log:match(self.relay and self.relay.code, msg.seed)
     self.players = {}
     for _, s in ipairs(msg.spawns) do
@@ -802,7 +867,7 @@ return function(mod)
       local bots = 0
       for id in pairs(self.players) do if Bots.isBot(id) then bots = bots + 1 end end
       log:say("match starts: %d trainers (%d bots), safari %ss, fog %ss, mine %s at %d,%d",
-              #msg.spawns, bots, tostring(msg.safari or 0), tostring(self:fogSeconds()),
+              #msg.spawns, bots, tostring(msg.safari or 0), tostring(self:roundFog()),
               tostring(mine.map), mine.x or -1, mine.y or -1)
     end
     -- arm the loadout hook, then start a fresh game straight into the world
@@ -812,6 +877,9 @@ return function(mod)
     self:setPhase(safari > 0 and "safari" or "match",
                   safari > 0 and "the SAFARI opens" or "straight to the drop")
     self.status = "alive"
+    -- back in the running for the room: a PLAY AGAIN puts whoever stood
+    -- down last match back on their feet, and on the heir list (POK-116)
+    if self.relay then self.relay:canHost(true) end
     self.started = true
     self.matchWorld = true
     self.stats = { catches = 0, beats = 0, steps = 0,
@@ -1046,11 +1114,25 @@ return function(mod)
     elseif msg.t == "ring" then
       -- the fog is the host's to declare, like the winner
       if fromId == self.relay.hostId then
-        self:applyRing(msg.phase, msg.cx, msg.cy, msg.r, msg.place)
+        self:applyRing(msg.phase, msg.cx, msg.cy, msg.r, msg.place, msg.elapsed)
       end
 
     elseif msg.t == "winner" then
       if fromId == self.relay.hostId then self:onWinner(msg.id) end
+
+    elseif msg.t == "fame" then
+      -- The champion's own team, and nobody else's to send: a parade from
+      -- anyone but the trainer the host just crowned is not a parade.  One
+      -- only, so a second cannot restart an ending already running.
+      if self.phase == "over" and fromId == self.winnerId
+         and not self.pendingFame then
+        self.pendingFame = { party = msg.party, stats = msg.stats }
+        -- love.timer inline: clock() is defined further down and locals
+        -- capture lexically, so reaching for it here would read nil
+        -- (the POK-24 lesson, and br_test guards it)
+        local nowF = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
+        self.pendingParade = nowF + 2.5
+      end
 
     elseif msg.t == "again" then
       if fromId == self.relay.hostId then self:onAgain() end
@@ -1840,8 +1922,19 @@ return function(mod)
     end
   end
 
+  -- The FOG option: what a match started from here would run at.  The
+  -- lobby row and the option cyclers all mean this one.
   function BR:fogSeconds()
     return tonumber(mod.options:get("fog")) or Fog.DEFAULT_PHASE_SECONDS
+  end
+
+  -- The phase length of the match actually being played, which is whatever
+  -- the host who STARTED it had set.  It rides the start message so that an
+  -- heir carries the ring on at the pace the round began with rather than
+  -- its own (POK-116); before a match, and for a client old enough not to
+  -- have been told, it is just the option.
+  function BR:roundFog()
+    return self.matchFog or self:fogSeconds()
   end
 
   function BR:safariSeconds()
@@ -1851,10 +1944,18 @@ return function(mod)
   end
 
 
-  function BR:applyRing(phase, cx, cy, radius, place)
+  function BR:applyRing(phase, cx, cy, radius, place, elapsed)
     local was = self.ring and self.ring.phase
     self.ring = { phase = phase, center = { x = cx, y = cy, name = place },
                   radius = radius }
+    -- The fog clock is the only thing the host owns that nobody else can
+    -- work out for themselves, so it rides every shrink and everyone keeps
+    -- it against the day they inherit the room (POK-116).  The host's own
+    -- applyRing passes nothing and keeps the clock it already has.
+    if elapsed then
+      local now = clock()
+      if now then self.matchStartedAt = now - elapsed end
+    end
     -- every placed map's squared distance to the eye, for the bots'
     -- homeward roams (POK-42); cached here because roamBot is defined
     -- above townLocations
@@ -1886,6 +1987,66 @@ return function(mod)
         sayLater(("The fog closes in\non %s!"):format(place or "KANTO"))
       end
     end
+    -- after the announcement, so the news lands before the gift
+    self:upgradeRod()
+  end
+
+  -- The fog's other gift (POK-119): the rung that makes everyone stronger
+  -- makes the sea better to fish, on the same beat.  A swap rather than a
+  -- stack -- three rods in the bag is three ways to do one thing -- and
+  -- only ever upward, so a re-applied ring cannot take a SUPER ROD back.
+  function BR:upgradeRod()
+    if not self:inRound() then return end
+    local save = self.game and self.game.save
+    local items = self.game and self.game.data and self.game.data.items
+    if not (save and save.inventory and items) then return end
+    local want = Rods.at(self.ring and self.ring.phase or 1)
+    if not (want and items[want]) then return end
+    local have = nil
+    for _, id in ipairs(Rods.ALL) do
+      if (tonumber(save.inventory[id]) or 0) > 0 and Rods.isBetter(id, have) then
+        have = id
+      end
+    end
+    if have == want or not Rods.isBetter(want, have) then return end
+    for _, id in ipairs(Rods.ALL) do save.inventory[id] = nil end
+    save.inventory[want] = 1
+    local line = Rods.upgradeLine(want)
+    if line and have then sayLater(line, 1.0) end
+    log:say("rod: %s -> %s", tostring(have or "none"), tostring(want))
+  end
+
+  -- The room has been handed to us (POK-116).  Almost nothing needs moving:
+  -- everything the old host was authoritative over, every guest was already
+  -- mirroring -- where each trainer stands, what has spilled, which of
+  -- Kanto's own the fog took, where the ring is -- and the rest (bot names,
+  -- teams, faces, walk streams, the ring's eye) falls out of the shared seed
+  -- at its use site.  The fog clock is the exception, which is why it rides
+  -- every shrink.
+  --
+  -- What does NOT come across is accumulated grace: the bots' fogTicks and
+  -- the per-map npcFog clocks start again here, so a sweep already counting
+  -- down gets its forty seconds back.  That is one wobble, in the players'
+  -- favour, and cheaper than shipping a state transfer to avoid it.
+  function BR:onPromoted()
+    log:say("the room is ours now: %s is the host", myName())
+    -- the say needs a world to land in; a promotion in the lobby is
+    -- the screen's own news, and the log has it either way
+    if not self:inRound() then return end
+    sayLater("The host left.\fYou are the host\nnow.")
+    -- the eye as it was announced, rather than re-derived from the seed
+    if self.ring and self.ring.center then self.ringCenter = self.ring.center end
+    -- applyRing has been keeping the clock from the host's own `e`.  A
+    -- promotion before the first shrink ever landed has none to keep, so
+    -- fall back to the phase we can see: starting its clock at the phase
+    -- boundary is the closest guess that cannot walk the ring backwards.
+    if not self.matchStartedAt then
+      local now = clock()
+      if now then
+        local phase = (self.ring and self.ring.phase) or 1
+        self.matchStartedAt = now - (phase - 1) * self:roundFog()
+      end
+    end
   end
 
   -- host only: advance the shared clock and tell the room
@@ -1894,14 +2055,15 @@ return function(mod)
     local now = clock()
     if not now then return end
     self.matchStartedAt = self.matchStartedAt or now
-    local phase = Fog.phaseAt(now - self.matchStartedAt, self:fogSeconds())
+    local phase = Fog.phaseAt(now - self.matchStartedAt, self:roundFog())
     if self.ring and self.ring.phase == phase then return end
 
     local center = self.ringCenter or Fog.center(self.matchSeed, townList())
     self.ringCenter = center
     if not center then return end
     local radius = Fog.radius(phase)
-    self.relay:broadcast(Wire.ring(phase, center.x, center.y, radius, center.name))
+    self.relay:broadcast(Wire.ring(phase, center.x, center.y, radius,
+                                   center.name, now - self.matchStartedAt))
     self:applyRing(phase, center.x, center.y, radius, center.name)
   end
 
@@ -2565,6 +2727,12 @@ return function(mod)
   function BR:eliminate(message, cause)
     if self.status == "out" or not self:inRound() then return end
     self.status = "out"
+    -- Out of the match is out of the running for the room: a spectator can
+    -- still run the fog and the bots perfectly well, but handing it to
+    -- somebody still playing keeps the authority with somebody who has a
+    -- reason to stay (POK-116).  If nobody else can, the relay closes the
+    -- room exactly as it used to.
+    if self.relay then self.relay:canHost(false) end
     log:say("OUT: you (%s), %d left", tostring(cause or "unknown"),
             self:aliveCount())
     -- Where the match ended for us, captured here rather than in any one
@@ -3073,6 +3241,18 @@ return function(mod)
   mod.hooks:wrap("encounter.species", function(next, enc, ctx)
     local rolled = next(enc, ctx)
     if rolled and inMatch() then
+      -- The Safari opening drafts from THIS match's zone (POK-118).  The
+      -- roll still decides WHETHER something is in the grass -- the zone's
+      -- own rate, untouched -- and this decides which of today's species it
+      -- turns out to be.  Rolled live rather than from the match seed: what
+      -- is in the zone is everyone's business, what walks into your grass
+      -- is nobody's, and seeding it would deal every player the same
+      -- catches in the same order.
+      if BR.phase == "safari" and BR.safariPool then
+        rolled.species = Safari.pick(BR.safariPool, function(a, b)
+          return love.math.random(a, b)
+        end) or rolled.species
+      end
       rolled.level = BR:level()
       BR:lendGhostLead()
     end
@@ -3083,6 +3263,12 @@ return function(mod)
   -- the catch ({ species, level }) from the candidate list; the list itself
   -- is not touched, so Old Rod still hooks its MAGIKARP, just at the rung.
   mod.hooks:wrap("encounter.fishing", function(next, rod, mapId, candidates)
+    -- Not in the zone (POK-119).  The Safari's whole economy is the step
+    -- budget -- 502 steps to find what you can -- and a cast costs none of
+    -- them, so a rod at the water's edge would be an unlimited draft that
+    -- beat walking every time.  The zone's ponds are scenery for two
+    -- minutes; the rod starts working when the match does.
+    if BR.phase == "safari" then return nil end
     local catch = next(rod, mapId, candidates)
     if catch and inMatch() then
       catch.level = BR:level()
@@ -3450,6 +3636,7 @@ return function(mod)
   function BR:onWinner(id)
     if self.phase == "over" then return end
     self:setPhase("over", "a winner")
+    self.winnerId = id
     self.ghosts:despawnAll()
     self.pendingDrop = nil   -- the match ended before the release could land
     self.buzzed, self.pickingTown = nil, nil
@@ -3463,6 +3650,13 @@ return function(mod)
       self:recordWin()
       -- and the Champion gets the Champion's ending (POK-47)
       self.pendingParade = (clock() or 0) + 2.5
+      -- ...which the rest of the room watches too (POK-107).  An ending
+      -- only the winner sees is the one moment in the match that has
+      -- nothing to say to the people it just happened to.
+      if self.relay then
+        local party = (self.game and self.game.save and self.game.save.party) or {}
+        self.relay:broadcast(Wire.fame(party, self:matchStats()))
+      end
     elseif id then
       -- prefer the roster name: the relay has never heard of a bot (POK-41)
       local p = self.players and self.players[id]
@@ -3567,7 +3761,13 @@ return function(mod)
       if nowP and nowP >= BR.pendingParade and owP and game.stack:top() == owP
          and not (owP.runner and owP.runner.isRunning and owP.runner:isRunning()) then
         BR.pendingParade = nil
-        game.stack:push(Fame.new(game, game.save.party or {}, BR:matchStats(),
+        -- the winner parades their own save; everyone else parades what
+        -- the winner sent, so the room watches one ending (POK-107)
+        local fame = BR.pendingFame
+        BR.pendingFame = nil
+        game.stack:push(Fame.new(game,
+                                 (fame and fame.party) or game.save.party or {},
+                                 (fame and fame.stats) or BR:matchStats(),
                                  function() BR:endRun() end))
       end
     end

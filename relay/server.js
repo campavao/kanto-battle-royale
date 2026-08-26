@@ -17,13 +17,16 @@
 //   {type:"lock_room", locked}         host only: refuse new joiners (a match
 //                                      in progress)
 //   {type:"leave_room"}
+//   {type:"can_host", ok}             may this client be promoted to host
+//                                     if the current one drops (POK-116)
 //   {type:"to", id, m}                 unicast m to one member
 //   {type:"all", m}                    m to every other member
 //   {type:"ping"}                      -> pong
 // Server -> client
 //   {type:"roster", code, host, members:[{id,name}]}   on every change
 //   {type:"recv", from, m}
-//   {type:"room_closed", reason}       the host left
+//   {type:"room_closed", reason}       the host left and nobody could take
+//                                      the room over
 //
 // Ids are small integers handed out per room, never reused within it; the
 // host is whoever created the room.  Codes use the same 0/O/1/I/L-free
@@ -158,6 +161,12 @@ class Conn {
     // that "froze" had stopped sending or stopped being heard.
     this.seen = new Map();
     this.bytesIn = 0;
+    // POK-116: whether this client has said it can take the room over.
+    // Opt-in rather than assumed, because a client that does not understand
+    // migration would be promoted into owning a fog clock it never received
+    // and restart the ring at phase 1.  Silence means "close the room", the
+    // behaviour every client already expects.
+    this.canHost = false;
   }
 
   note(type, bytes) {
@@ -208,19 +217,51 @@ export function createRelay(options = {}) {
   const conns = new Set();
   const perIp = new Map();
 
+  // Who inherits a room whose host just went.  The longest-standing member
+  // that said it could take it: ids are handed out in join order and never
+  // reused, so the lowest is the one that has been here longest and has seen
+  // the most of the match.  The relay knows nothing about who is still alive
+  // -- that is the client's business, and a client that has been eliminated
+  // withdraws by sending can_host false.
+  function heirOf(room) {
+    let heir = null;
+    for (const m of room.members.values()) {
+      if (m.canHost && (!heir || m.id < heir.id)) heir = m;
+    }
+    return heir;
+  }
+
   function leaveRoom(conn, reason) {
     const room = conn.room;
     if (!room) return;
     room.remove(conn);
     if (room.host === conn) {
-      // no host migration in v0: the host's client is the match authority,
-      // so a match without it is over anyway
+      // Host migration (POK-116).  The host's client is the match authority,
+      // but every guest already mirrors the world it is authoritative over --
+      // where each trainer stands, what has spilled, which trainers the fog
+      // took, where the ring is -- and the rest (bot names, teams, walks, the
+      // ring's eye) derives from the shared seed.  So the room can outlive
+      // the machine that opened it.
+      //
+      // No new message is needed to say so: the roster already carries
+      // `host`, and lib/relay.lua already adopts it, so isHost() flips on the
+      // client the moment this broadcast lands.
+      const heir = heirOf(room);
+      if (heir) {
+        room.host = heir;
+        room.broadcast(room.roster());
+        log(`room ${room.code}: host ${conn.name}#${conn.id} left,`
+            + ` ${heir.name}#${heir.id} promoted`);
+        return;
+      }
+      // Nobody could take it: the old ending, for a room of old clients or
+      // one whose last eligible member has been eliminated.
       room.broadcast({ type: "room_closed", reason: reason || "host_left" });
       for (const m of [...room.members.values()]) {
         room.remove(m);
       }
       rooms.delete(room.code);
-      log(`room ${room.code} closed (${reason || "host_left"})`);
+      log(`room ${room.code} closed (${reason || "host_left"}, no heir)`);
     } else {
       room.broadcast(room.roster());
       log(`room ${room.code}: ${conn.name}#${conn.id} left`);
@@ -306,6 +347,13 @@ export function createRelay(options = {}) {
         room.locked = msg.locked !== false;
         return;
       }
+
+      // A client says whether it is willing and able to inherit the room.
+      // Sent once on arrival by anything that understands migration, and
+      // again with ok:false when its player goes out (POK-116).
+      case "can_host":
+        conn.canHost = msg.ok !== false;
+        return;
 
       case "leave_room":
         leaveRoom(conn, "left");

@@ -69,6 +69,8 @@ function Transport:send(msg)
     self:_leave("left")
   elseif t == "lock_room" then
     if self.room and self.room.host == self then self.room.locked = msg.locked ~= false end
+  elseif t == "can_host" then
+    self.canHost = msg.ok ~= false
   elseif t == "to" then
     local room = self.room
     if not room then return end
@@ -109,6 +111,18 @@ function Transport:_leave(reason)
   end
   self.room = nil
   if room.host == self then
+    -- host migration (POK-116), the same election server.js runs: the
+    -- longest-standing member that said it could take the room over
+    local heir
+    for _, id in ipairs(room.order) do
+      local m = room.members[id]
+      if m and m.canHost and (not heir or m.id < heir.id) then heir = m end
+    end
+    if heir then
+      room.host = heir
+      room_roster(room)
+      return
+    end
     for _, m in pairs(room.members) do
       m:_deliver({ type = "room_closed", reason = reason })
       m.room = nil

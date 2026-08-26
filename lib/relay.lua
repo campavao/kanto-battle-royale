@@ -173,6 +173,14 @@ function Relay:lock(locked)
   return self:_raw({ type = "lock_room", locked = locked ~= false })
 end
 
+-- Offer (or withdraw) this client as the room's next host (POK-116).  The
+-- relay hands the room to the longest-standing member that has said yes, so
+-- saying nothing is how an older client keeps the old ending -- the room
+-- closing when its host goes.
+function Relay:canHost(ok)
+  return self:_raw({ type = "can_host", ok = ok ~= false })
+end
+
 -- ------- the pump
 
 function Relay:update()

@@ -222,6 +222,88 @@ test("a guest leaving updates the roster; the host leaving closes the room", asy
   });
 });
 
+test("the room outlives its host when somebody can take it over", async () => {
+  await withRelay(async (port, relay) => {
+    const a = await connect(port);
+    a.send({ type: "host_room", name: "A" });
+    const { code } = await a.next();
+    await a.next();
+    const b = await connect(port);
+    b.send({ type: "can_host", ok: true });
+    b.send({ type: "join_room", code, name: "B" });
+    await b.next(); await b.next(); await a.next();
+    const c = await connect(port);
+    c.send({ type: "can_host", ok: true });
+    c.send({ type: "join_room", code, name: "C" });
+    await c.next(); await c.next(); await a.next(); await b.next();
+
+    // the host goes, and the room does not
+    a.end();
+    const roster = await b.until("roster");
+    assert.equal(roster.host, 2, "the longest-standing eligible member inherits");
+    assert.deepEqual(roster.members.map((m) => m.id), [2, 3]);
+    assert.equal(relay.rooms.size, 1, "the room is still open");
+
+    // and it is a working room: the new host is just a member like any other
+    const rosterC = await c.until("roster");
+    assert.equal(rosterC.host, 2);
+    b.send({ type: "all", m: { t: "ring", phase: 2 } });
+    const relayed = await c.until("recv");
+    assert.equal(relayed.from, 2);
+    assert.deepEqual(relayed.m, { t: "ring", phase: 2 });
+    b.end(); c.end();
+  });
+});
+
+test("a room of clients that cannot host still closes, as it always did", async () => {
+  await withRelay(async (port, relay) => {
+    const a = await connect(port);
+    a.send({ type: "host_room", name: "A" });
+    const { code } = await a.next();
+    await a.next();
+    // b never says it can host -- an older client, or one that never learned
+    const b = await connect(port);
+    b.send({ type: "join_room", code, name: "B" });
+    await b.next(); await b.next(); await a.next();
+
+    a.send({ type: "leave_room" });
+    const closed = await b.until("room_closed");
+    assert.equal(closed.reason, "left");
+    assert.equal(relay.rooms.size, 0);
+    a.end(); b.end();
+  });
+});
+
+test("an eliminated player withdraws, and the room passes over them", async () => {
+  await withRelay(async (port, relay) => {
+    const a = await connect(port);
+    a.send({ type: "host_room", name: "A" });
+    const { code } = await a.next();
+    await a.next();
+    const b = await connect(port);
+    b.send({ type: "can_host", ok: true });
+    b.send({ type: "join_room", code, name: "B" });
+    await b.next(); await b.next(); await a.next();
+    const c = await connect(port);
+    c.send({ type: "can_host", ok: true });
+    c.send({ type: "join_room", code, name: "C" });
+    await c.next(); await c.next(); await a.next(); await b.next();
+
+    // B is knocked out and stands down; C is next in line despite joining later
+    // A withdrawal is broadcast to nobody, so wait on a round-trip down B's
+    // own socket instead: lines from one connection are handled in order, so
+    // a pong proves the can_host ahead of it has already landed.
+    b.send({ type: "can_host", ok: false });
+    b.send({ type: "ping" });
+    await b.until("pong");
+    a.end();
+    const roster = await c.until("roster");
+    assert.equal(roster.host, 3, "the room skips the member that stood down");
+    assert.equal(relay.rooms.size, 1);
+    b.end(); c.end();
+  });
+});
+
 test("quick_join finds an open room, and says so when there is none", async () => {
   await withRelay(async (port) => {
     // nobody is hosting: the answer is an answer, not an error, so the

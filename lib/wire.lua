@@ -28,9 +28,15 @@
 --   {t="took", key=}                              that ball is mine
 --   {t="npcout", map=, obj=}                     a map's own trainer fell:
 --                                                 hide the sprite everywhere
---   {t="ring", phase=, cx=, cy=, r=, place=}      host: the fog closed in
+--   {t="ring", phase=, cx=, cy=, r=, place=, e=}  host: the fog closed in
+--                                                 (e: seconds since the
+--                                                 match began -- the one
+--                                                 piece of host state a
+--                                                 guest cannot derive)
 --                                                 (r < 0: over everything)
 --   {t="winner", id=}                             host: the match is over
+--   {t="fame", party=, stats=}                    the champion's parade,
+--                                                 for the whole room to watch
 --
 -- Statuses: "lobby" (not in the world yet), "alive", "battle" (locked in
 -- a fight -- do not engage), "out" (eliminated, spectating on foot).
@@ -53,7 +59,13 @@ local Wire = {}
 --    peer would wait for a loot message that never comes
 -- 6: peek / state -- a spectator asks the trainer they watch for a party
 --    and bag summary, and gets one; a v5 peer would never answer
-Wire.PROTOCOL = 6
+-- 7: a ring carries the host's elapsed match clock and a start carries the
+--    round's fog length, so the room can be handed to somebody else when
+--    the host drops (POK-116) -- a v6 peer promoted mid-match has no clock
+--    to resume and would restart the fog at phase 1, with the ring
+--    springing back open around everyone; and the champion sends their
+--    parade so the whole room watches the same ending (POK-107)
+Wire.PROTOCOL = 7
 
 Wire.DIRS = { up = true, down = true, left = true, right = true }
 Wire.STATUS = { lobby = true, alive = true, battle = true, out = true }
@@ -101,9 +113,14 @@ function Wire.face(facing, map, as)
   return { t = "face", f = facing, map = map, as = as }
 end
 
--- spawns: array of { id=, map=, x=, y= }, one per player in the match
-function Wire.start(seed, spawns, safari)
-  return { t = "start", seed = seed, spawns = spawns, safari = safari }
+-- spawns: array of { id=, map=, x=, y= }, one per player in the match.
+-- `fog` is the round's phase length: a mod option, so it belongs to the
+-- host who started the match rather than to whoever is reading -- otherwise
+-- an heir with a different setting would carry the ring on at its own pace
+-- (POK-116).
+function Wire.start(seed, spawns, safari, fog)
+  return { t = "start", seed = seed, spawns = spawns, safari = safari,
+           fog = fog }
 end
 
 function Wire.challenge(nonce) return { t = "challenge", n = nonce } end
@@ -140,12 +157,32 @@ function Wire.npcout(map, obj) return { t = "npcout", map = map, obj = obj } end
 
 -- the host's word on where the fog is now; `place` is the centre's name,
 -- carried so every client can announce it without a location table lookup
-function Wire.ring(phase, cx, cy, r, place)
-  return { t = "ring", phase = phase, cx = cx, cy = cy, r = r, place = place }
+-- `elapsed` is the host's own match clock.  It rides every shrink so that
+-- whoever inherits the room can carry the fog on from where it was rather
+-- than starting it again (POK-116).
+function Wire.ring(phase, cx, cy, r, place, elapsed)
+  return { t = "ring", phase = phase, cx = cx, cy = cy, r = r, place = place,
+           e = elapsed }
 end
 -- the host's Safari clock (POK-21): seconds left, zero being the buzzer
 function Wire.safari(left) return { t = "safari", left = left } end
 function Wire.winner(id) return { t = "winner", id = id } end
+
+-- The champion's parade, so the ending is the room's rather than one
+-- screen's (POK-107).  Only the winner can author it -- it is their team --
+-- and it carries what the Hall of Fame draws and nothing else: a species,
+-- what it was called, and how far it got.
+function Wire.fame(party, stats)
+  local rows = {}
+  for _, mon in ipairs(party or {}) do
+    if mon.species then
+      rows[#rows + 1] = { sp = mon.species,
+                          nm = mon.nickname or mon.species,
+                          lv = mon.level or 1 }
+    end
+  end
+  return { t = "fame", party = rows, stats = stats }
+end
 -- PLAY AGAIN (POK-20): host only, back to the lobby with the roster kept
 function Wire.again() return { t = "again" } end
 
@@ -224,8 +261,15 @@ decoders.start = function(m)
                             and safari >= 0 and safari <= 3600) then
     return nil, "bad safari"
   end
+  -- an absent or nonsense fog length falls back to the reader's own option,
+  -- which is what every client did before the field existed
+  local fog = m.fog
+  if fog ~= nil and not (type(fog) == "number" and fog == fog
+                         and fog > 0 and fog <= 86400) then
+    fog = nil
+  end
   return { t = "start", seed = math.floor(m.seed), spawns = spawns,
-           safari = math.floor(safari or 0) }
+           safari = math.floor(safari or 0), fog = fog }
 end
 
 local function nonce(m)
@@ -351,8 +395,14 @@ decoders.ring = function(m)
   if type(m.r) ~= "number" or m.r ~= m.r or m.r < -1 or m.r > 64 then
     return nil, "bad radius"
   end
+  -- a clock that is absent, negative or not finite is simply not a clock;
+  -- the heir falls back to the phase it can see
+  local elapsed = nil
+  if type(m.e) == "number" and m.e == m.e and m.e >= 0 and m.e < 1e7 then
+    elapsed = m.e
+  end
   return { t = "ring", phase = math.floor(m.phase), cx = m.cx, cy = m.cy,
-           r = m.r,
+           r = m.r, elapsed = elapsed,
            place = type(m.place) == "string" and m.place:sub(1, MAX_ID) or nil }
 end
 
@@ -401,6 +451,35 @@ decoders.state = function(m)
   if not items then return nil, "bad items" end
   return { t = "state", party = party, items = items,
            money = clampInt(m.money, 0, 999999, 0) }
+end
+
+-- The parade is drawn, never trusted: every field is clamped to what the
+-- Hall of Fame can put on a screen, so a peer cannot stretch the card or
+-- march a party of two hundred past everyone (POK-107).
+decoders.fame = function(m)
+  if type(m.party) ~= "table" then return nil, "bad party" end
+  local party = {}
+  for i, r in ipairs(m.party) do
+    if i > 6 then break end
+    if type(r) ~= "table" or type(r.sp) ~= "string" or r.sp == "" or #r.sp > MAX_ID then
+      return nil, "bad party row"
+    end
+    party[#party + 1] = {
+      species = r.sp,
+      nickname = type(r.nm) == "string" and r.nm ~= "" and r.nm:sub(1, MAX_ID)
+                 or r.sp,
+      level = clampInt(r.lv, 1, 100, 1),
+    }
+  end
+  local st = type(m.stats) == "table" and m.stats or {}
+  return { t = "fame", party = party, stats = {
+    catches = clampInt(st.catches, 0, 99999, 0),
+    beats   = clampInt(st.beats,   0, 99999, 0),
+    steps   = clampInt(st.steps,   0, 9999999, 0),
+    rings   = clampInt(st.rings,   1, 64, 1),
+    seconds = clampInt(st.seconds, 0, 999999, 0),
+    money   = clampInt(st.money,   0, 999999, 0),
+  } }
 end
 
 function Wire.decode(m)

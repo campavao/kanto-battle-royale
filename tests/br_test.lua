@@ -47,7 +47,7 @@ do
   ok(Wire.decode({ t = "start", seed = 1, spawns = {} }) == nil, "empty start is refused")
 
   -- the Safari opening (POK-21): start carries the round, beats carry the clock
-  eq(Wire.PROTOCOL, 6, "peeking at the watched trainer is PROTOCOL 6")
+  eq(Wire.PROTOCOL, 7, "a ring carrying the match clock is PROTOCOL 7")
   eq(Wire.decode(Wire.peek()).t, "peek", "peek round-trips")
   local st6 = Wire.decode(Wire.state({
     party = { { species = "PIDGEY", level = 12, hp = 23, maxHp = 40, status = "PSN",
@@ -65,6 +65,15 @@ do
   eq(Wire.decode({ t = "state", party = { { sp = "MEW", lv = 900, hp = -5 } }, money = -1 }).party[1].level,
      100, "levels clamp")
   eq(Wire.decode(Wire.again()).t, "again", "again round-trips")
+  local fogged = Wire.decode(Wire.start(9, { { id = 1, map = "ROUTE_1", x = 1, y = 1 } },
+                                       0, 180))
+  eq(fogged and fogged.fog, 180, "start carries the round's fog length (POK-116)")
+  eq(Wire.decode(Wire.start(9, { { id = 1, map = "ROUTE_1", x = 1, y = 1 } })).fog, nil,
+     "an older start has none, and the reader falls back to its own option")
+  eq(Wire.decode({ t = "start", seed = 9, fog = 0,
+                   spawns = { { id = 1, map = "ROUTE_1", x = 1, y = 1 } } }).fog, nil,
+     "a zero-length round would divide the match by nothing, so it is dropped")
+
   local safariStart = Wire.decode(Wire.start(7,
     { { id = 1, map = "SAFARI_ZONE_CENTER", x = 2, y = 3 } }, 120))
   ok(safariStart ~= nil, "a start with a Safari round decodes")
@@ -83,6 +92,34 @@ do
   eq(Wire.decode(Wire.challenge(7)).nonce, 7, "challenge nonce")
   eq(Wire.decode(Wire.accept(7)).nonce, 7, "accept nonce")
   eq(Wire.decode(Wire.winner(3)).id, 3, "winner id")
+
+  -- POK-107: the champion's parade, for the whole room to watch
+  local fame = Wire.decode(Wire.fame(
+    { { species = "PIKACHU", nickname = "SPARKY", level = 42 },
+      { species = "ONIX" },
+      { level = 9 } },                       -- no species: not a Pokemon
+    { catches = 4, beats = 2, steps = 812, rings = 5, seconds = 754, money = 3000 }))
+  ok(fame ~= nil, "a parade round-trips")
+  eq(fame and #fame.party, 2, "a row with no species never makes the parade")
+  eq(fame and fame.party[1].species, "PIKACHU", "the species carries")
+  eq(fame and fame.party[1].nickname, "SPARKY", "so does what it was called")
+  eq(fame and fame.party[1].level, 42, "and how far it got")
+  eq(fame and fame.party[2].nickname, "ONIX", "an unnicknamed mon goes by species")
+  eq(fame and fame.stats.seconds, 754, "the record card carries the run")
+  eq(fame and fame.stats.rings, 5, "rings and all")
+
+  -- it is drawn, never trusted
+  local big = {}
+  for i = 1, 40 do big[i] = { sp = "RATTATA", lv = 5 } end
+  eq(#Wire.decode({ t = "fame", party = big }).party, 6,
+     "a parade is capped at a party, however many were sent")
+  eq(Wire.decode({ t = "fame", party = { { sp = "PIKACHU", lv = 9999 } } }).party[1].level,
+     100, "an impossible level is clamped rather than drawn")
+  ok(Wire.decode({ t = "fame", party = { { lv = 5 } } }) == nil,
+     "a party row with no species is refused outright")
+  ok(Wire.decode({ t = "fame" }) == nil, "and a parade with no party at all")
+  eq(Wire.decode({ t = "fame", party = {} }).stats.catches, 0,
+     "a parade with no record card still draws a card")
 
   -- the bag on the ground (POK-25): a spill carries it as one more thing
   local bagged = Wire.decode(Wire.spill("ROUTE_1",
@@ -134,6 +171,15 @@ do
      "npcout without an object is refused")
   ok(Wire.decode({ t = "npcout", map = "ROUTE_1", obj = ("X"):rep(65) }) == nil,
      "and an oversized object name is refused")
+
+  -- POK-116: the clock that lets an heir carry the fog on
+  local timed = Wire.decode(Wire.ring(3, 8, 9, 5.5, "CELADON CITY", 481.5))
+  eq(timed and timed.elapsed, 481.5, "a ring carries the host's match clock")
+  eq(ring and ring.elapsed, nil, "and is fine without one")
+  ok(Wire.decode({ t = "ring", phase = 1, cx = 1, cy = 1, r = 2, e = -3 })
+     .elapsed == nil, "a negative clock is dropped, not fatal")
+  ok(Wire.decode({ t = "ring", phase = 1, cx = 1, cy = 1, r = 2, e = "soon" })
+     .elapsed == nil, "and so is one that is not a number")
 
   local everywhere = Wire.decode(Wire.ring(8, 8, 9, -1, "CELADON CITY"))
   eq(everywhere and everywhere.r, -1,
@@ -1855,6 +1901,175 @@ do
   guest:leave()
   host:update()
   eq(hostRoster and #hostRoster, 1, "host roster shrinks when the guest leaves")
+end
+
+-- ------------------------------------------------------------------
+-- POK-119: the rod grows with the ring
+-- ------------------------------------------------------------------
+do
+  local Rods = require("mods.battle_royale.lib.rods")
+  local Levels = require("mods.battle_royale.lib.levels")
+
+  eq(#Rods.LADDER, #Levels.LADDER,
+     "one rod per rung: the rod and the level ride the same clock")
+  eq(Rods.FIRST, "OLD_ROD", "everyone drops with the OLD ROD")
+  eq(Rods.at(1), "OLD_ROD", "the opening is an OLD ROD")
+  eq(Rods.at(3), "GOOD_ROD", "the middle rings hand up a GOOD ROD")
+  eq(Rods.at(6), "SUPER_ROD", "and the endgame a SUPER ROD")
+
+  -- the ladder only ever climbs
+  local worst = 0
+  for _, id in ipairs(Rods.LADDER) do
+    ok(Rods.rank(id) >= worst, "the ladder never hands back a worse rod")
+    worst = Rods.rank(id)
+  end
+
+  -- out-of-range phases clamp rather than reading nil into the bag
+  eq(Rods.at(0), "OLD_ROD", "a phase below the ladder is the first rung")
+  eq(Rods.at(99), "SUPER_ROD", "and one past the end is the last")
+  eq(Rods.at(nil), "OLD_ROD", "no phase at all is the first rung")
+
+  ok(Rods.isBetter("SUPER_ROD", "GOOD_ROD"), "SUPER beats GOOD")
+  ok(Rods.isBetter("OLD_ROD", nil), "any rod beats no rod")
+  ok(not Rods.isBetter("OLD_ROD", "SUPER_ROD"), "and OLD never beats SUPER")
+  ok(not Rods.isBetter("SUPER_ROD", "SUPER_ROD"), "a rod does not beat itself")
+
+  -- the swap is announced only when something is actually replaced
+  ok(Rods.upgradeLine("GOOD_ROD"), "an upgrade to GOOD has a line")
+  ok(Rods.upgradeLine("SUPER_ROD"), "and so does one to SUPER")
+  ok(Rods.upgradeLine("OLD_ROD") == nil,
+     "the rod you started with is not news")
+end
+
+-- ------------------------------------------------------------------
+-- POK-118: the Safari zone rotates
+-- ------------------------------------------------------------------
+do
+  local Safari = require("mods.battle_royale.lib.safari")
+
+  local a1 = Safari.pool(12345, nil)
+  local a2 = Safari.pool(12345, nil)
+  eq(#a1, Safari.POOL_SIZE, "a match's zone holds POOL_SIZE species")
+  eq(table.concat(a1, ","), table.concat(a2, ","),
+     "the same seed draws the same zone -- everyone drafts from one list")
+
+  local b = Safari.pool(54321, nil)
+  ok(table.concat(a1, ",") ~= table.concat(b, ","),
+     "a different match is a different zone, which is the whole point")
+
+  local seen = {}
+  for _, sp in ipairs(a1) do
+    ok(not seen[sp], "no species is in the zone twice: " .. tostring(sp))
+    seen[sp] = true
+  end
+
+  -- every draw is a real candidate
+  local cand = {}
+  for _, sp in ipairs(Safari.CANDIDATES) do cand[sp] = true end
+  local allKnown = true
+  for _, sp in ipairs(a1) do allKnown = allKnown and cand[sp] end
+  ok(allKnown, "a zone is drawn from the candidate list and nowhere else")
+
+  -- a build missing most of the list degrades instead of asserting
+  local thin = Safari.pool(7, { pokemon = { RATTATA = true, ONIX = true } })
+  eq(#thin, 2, "a zone can only hold species this build actually has")
+  local poor = Safari.pool(7, { pokemon = {} })
+  eq(#poor, 1, "and a build with none of them still yields something catchable")
+  eq(poor[1], "RATTATA", "namely a RATTATA, which Kanto can always find")
+
+  -- picking within a zone
+  local rolled = Safari.pick(a1, function(lo, hi) return lo end)
+  eq(rolled, a1[1], "pick draws through the caller's own roll")
+  ok(Safari.pick({}, function() return 1 end) == nil, "an empty zone yields nobody")
+  ok(Safari.pick(nil, nil) == nil, "and neither does no zone at all")
+
+  -- the pool is a set, so the order it is written in cannot leak through
+  local sorted = true
+  for i = 2, #a1 do sorted = sorted and (a1[i - 1] <= a1[i]) end
+  ok(sorted, "a zone comes back in a stable order")
+end
+
+-- ------------------------------------------------------------------
+-- POK-108: a trainer in a doorway is not a door plug
+-- ------------------------------------------------------------------
+do
+  local Ghosts = require("mods.battle_royale.lib.ghosts")
+  -- one map, one door: the mart's, at 29,19 on the real VIRIDIAN_CITY
+  local maps = { VIRIDIAN_CITY = { warps = { { x = 29, y = 19,
+                                               destMap = "VIRIDIAN_MART" } } } }
+
+  ok(not Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 10, y = 10, status = "alive" }),
+     "a living trainer in the open is solid -- you cannot walk through somebody")
+  ok(Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 10, y = 10, status = "out" }),
+     "an eliminated one is walk-through, so a corpse cannot wall a survivor in")
+  ok(Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 29, y = 19, status = "alive" }),
+     "and one standing IN the mart's door is too, or the shop shuts for good (POK-94)")
+  ok(Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 29, y = 19, status = "battle" }),
+     "mid-battle in a doorway seals it just as thoroughly")
+  ok(not Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 29, y = 20, status = "alive" }),
+     "the cell beside the door is not the door")
+  ok(not Ghosts.passableFor(maps, "PALLET_TOWN", { x = 29, y = 19, status = "alive" }),
+     "and the door is this map's, not that coordinate on every map")
+  ok(not Ghosts.passableFor(maps, "VIRIDIAN_CITY", nil),
+     "no peer at all is not a hole in the world")
+end
+
+-- ------------------------------------------------------------------
+-- POK-116: the room outlives its host
+-- ------------------------------------------------------------------
+do
+  local hub = Hub.new()
+  local host = Relay.new({ transport = hub:connect() })
+  local a = Relay.new({ transport = hub:connect() })
+  local b = Relay.new({ transport = hub:connect() })
+  local aClosed, bClosed = nil, nil
+  a:on("closed", function(r) aClosed = r or "nil" end)
+  b:on("closed", function(r) bClosed = r or "nil" end)
+
+  host:host("RED")
+  host:update()
+  a:join(host.code, "BLUE")
+  b:join(host.code, "GREEN")
+  a:update(); b:update(); host:update()
+  -- both guests offer to take the room over, as wireRelay does on joining
+  a:canHost(true)
+  b:canHost(true)
+  ok(not a:isHost(), "a guest is not the host to begin with")
+
+  host:leave()
+  a:update(); b:update()
+  ok(aClosed == nil and bClosed == nil, "the room did not close under them")
+  ok(a:isHost(), "the longest-standing eligible guest inherits the room")
+  ok(not b:isHost(), "and the other one does not")
+  eq(b.hostId, a.id, "everybody agrees who the host is now")
+
+  -- and it is a working room: the new host's broadcasts still reach the rest
+  local got = nil
+  b:on("message", function(from, m) got = { from = from, m = m } end)
+  a:broadcast(Wire.ring(2, 8, 9, 9, "CELADON CITY", 240))
+  b:update()
+  eq(got and got.from, a.id, "the new host's word carries the new host's id")
+  eq(got and Wire.decode(got.m).elapsed, 240, "clock and all")
+end
+
+-- ------------------------------------------------------------------
+-- POK-116: a room nobody can inherit still closes
+-- ------------------------------------------------------------------
+do
+  local hub = Hub.new()
+  local host = Relay.new({ transport = hub:connect() })
+  local guest = Relay.new({ transport = hub:connect() })
+  local closed = nil
+  guest:on("closed", function(r) closed = r or "nil" end)
+
+  host:host("RED")
+  host:update()
+  guest:join(host.code, "BLUE")
+  guest:update(); host:update()
+  -- the guest never offers: an older client, or one already eliminated
+  host:leave()
+  guest:update()
+  ok(closed ~= nil, "the room closes when nobody can take it over")
 end
 
 -- ------------------------------------------------------------------

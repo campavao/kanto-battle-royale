@@ -21,8 +21,30 @@
 -- with no trainer is how you read that somebody else got there first --
 -- the world is a record of the match, not a field of corpses.
 
+local Spawn = require("mods.battle_royale.lib.spawn")
+
 local Ghosts = {}
 Ghosts.__index = Ghosts
+
+-- May this ghost be walked through?
+--
+-- Solid is the point of them -- you cannot walk through another trainer,
+-- which is what makes a corridor a real place to meet somebody.  Two
+-- exceptions, and both are about not sealing somebody in:
+--
+--   * an eliminated trainer, so a corpse cannot wall a survivor in;
+--   * ANY trainer standing on a warp.  A door is walkable in order to be
+--     stepped on, and a solid thing parked there closes the building for
+--     everyone -- POK-94 is the same bug with a spilled Poke Ball on the
+--     VIRIDIAN mart's door.  A ghost is worse than a ball, because it
+--     seals the door from the INSIDE too: a peer idling in a one-exit
+--     house leaves whoever is in there with no way out at all.  Bots never
+--     hit this (canWalk excludes warps); a human stands wherever they like.
+function Ghosts.passableFor(maps, mapId, peer)
+  if not peer then return false end
+  if peer.status == "out" then return true end
+  return Spawn.isWarp(maps, mapId, peer.x, peer.y)
+end
 
 -- Un-replayed steps we will walk out before snapping.  Past this a backlog
 -- would put the ghost visibly behind the truth, so we teleport instead of
@@ -158,8 +180,8 @@ function Ghosts:_spawn(game, id, mapId, x, y, facing, peer)
   self.ghosts[id] = g
   local handle = self:_handle(g)
   if handle then
-    -- eliminated players are walk-through so a corpse can't wall a survivor in
-    handle:setPassable(peer.status == "out")
+    handle:setPassable(Ghosts.passableFor(
+      game and game.data and game.data.maps, mapId, peer))
     -- and they walk like players, not like scenery (POK-97)
     if handle.npc then handle.npc.stepFrames = stepFramesOf(self.mod) end
   end
@@ -219,8 +241,9 @@ function Ghosts:_syncOne(game, id, myMapId, p)
     return
   end
 
-  -- keep solidity in step with the peer's status (alive: solid, out: pass)
-  handle:setPassable(p.status == "out")
+  -- keep solidity in step with where the peer is and how they are doing
+  handle:setPassable(Ghosts.passableFor(
+    game and game.data and game.data.maps, myMapId, p))
 
   if handle:isMoving() then return end
 
