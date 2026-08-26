@@ -1,19 +1,8 @@
 # Kanto Battle Royale
 
-**Last trainer standing.** Everyone starts together in the SAFARI ZONE with
-thirty SAFARI BALLs and two minutes to build a team out of nothing; when the
-PA calls time you pick the town you drop into, on the Town Map. You see the
-other trainers walking the same world you are; walk into one face-to-face and
-the battle starts on its own -- no menu, no consent, like a trainer's line of
-sight. Your party is your health, so when your last Pokemon faints you are
-out. A Weezing fog closes in on the Town Map until whoever is left is
-standing in the same few squares.
+Prove you're the very best, like no one ever was, in the Kanto Battle Royale!
 
-The fog shrinks the world on a shared clock, everyone's level rides the
-same clock, and a fallen team spills onto the ground as Poké Balls anyone
-can claim. See "What's here / what's next" below.
-
-A mod for [gen1recomp](https://github.com/bryanthaboi/gen1recomp).
+Play with up to 30 other players at one time, dropping all over Kanto, to be the last one standing. Build up a strong team, avoid Weezing's Fog, and play it cool in ways Satoshi couldn't have imagined in this easy to install [gen1recomp](https://github.com/bryanthaboi/gen1recomp) mod! 
 
 ## Install
 
@@ -22,217 +11,100 @@ A mod for [gen1recomp](https://github.com/bryanthaboi/gen1recomp).
    `mods/battle_royale/main.lua`
 3. Launch the game. `BATTLE ROYALE` is on the title menu.
 
-> **Use the release zip, not the green "Code -> Download ZIP" button.** GitHub
-> names that folder after the repo, and the mod loads itself by path -- the
-> folder has to be called exactly `battle_royale`.
+> **This mod needs gen1recomp v0.2.26 or newer.**
 
-Nothing else to install and **no server to run** -- the mod ships pointed at
-a hosted relay, so `QUICK PLAY` works immediately.
+## Getting started
 
-> **This mod needs gen1recomp v0.2.26 or newer.** The engine seams it is
-> built on (RFCs 0014, 0015 and 0018) are merged and released upstream, so
-> the mod no longer carries its own copy of them. On an older build the
-> loader refuses to start it and says why, rather than half-working.
+Here are the available options:
+1. **Quick Play**
+    - Creates a game if none are available, or joins an open game
+    - Picks the fullest room available to join
+    - Game auto-starts after a while
+2. **Solo VS Bots**
+    - Solo game which fills the game with bots, up to 30
+3. **Host Game**
+    - Creates a game with a code that you can invite others to
+    - If you enable the option "OPEN" to "YES" then players will be able to join via Quick Play
+4. **Join By Code**
+    - Allows you to join a game if you know the code
+5. **Name**
+    - This is your name! It's what shows up in game
+6. **Skin**
+    - This is your Sprite. Default is RED. You can unlock more as you keep winning.
+7. **Server...**
+    - I have a dedicated host right now, but you can load up your own server and direct your client via updating this setting.
 
-## Playing it
+Info on each game settings can be seen down in the Game lobby options section down below.
 
-**On your own, from a cold start:** pick `BATTLE ROYALE` on the title
-screen, then `SOLO VS BOTS`, then `START MATCH`. That is the whole setup.
-No server to run, no save to make, no Oak. A solo room fills itself with
-eight bots if you haven't picked a number, and the `BOTS` row changes it.
+## How the game plays
 
-Solo needs no relay because there is nobody to relay to: `lib/localroom.lua`
-answers the room protocol for a room of one, so the mod hosts, broadcasts
-and runs the same match it always does — the messages just have nowhere to
-go. Everything below is the same code path with other people in it.
+1. **Everyone starts in the Safari**
+    - You get a set amount of time to try and catch as many Pokemon as you can
+    - Pokemon in the Safari are on a randomized pool
+    - If you don't catch any Pokemon before the time runs out, you're out!
+2. **Pick where you're dropping**
+    - Choose any of the towns to go to after the Safari
+    - One town will be at the center of the **Weezing Fog**
+3. **Weezing Fog**
+    - Over time fog will cover Kanto, circling on one city/town
+    - Location is randomized every game
+    - You don't know the location until after you drop
+    - Fog will hurt all your Pokemon over time
+4. **Fight to be the last one standing**
+    - Last player standing wins!
+    - Every win helps you unlock a new Sprite
+    - If you white out, you lose
+5. **Spectating**
+    - After whiting out, you go into Spectator mode
+    - Use Left and Right buttons to swap between Players (or bots)
+  
+## Tips
 
-**With other people, the short way:** `QUICK PLAY`. It joins whatever open
-game is running, and if there isn't one it opens yours and counts down from
-thirty while it waits for company — bots fill whatever seats are still empty
-when the clock runs out. Nobody types a code and nobody has to press start,
-so a newcomer with the mod installed is in a real match inside a minute.
+- **Catch em all**
+  - Fight other trainers and they'll drop their Pokemon for you to collect
+  - Fighting other players (and bots) will also drop their bag
+  - You can only have a max of 6 Pokemon
+  - Battle Gym Leaders to get special Pokemon OR go find and catch Legendaries before someone else
+- **You start with all HMs**
+  - Catch a Flying type early to have access to Fly, or a Water type for Surf
+  - Meant to help you get around Kanto a bit easier, if you have the right Pokemon
+- **Apply Moves from the Pokemon screen**
+  - Only available outside of battle
+  - Swap your Pokemon's moves at any time to be any they can learn
+  - Can learn better moves as the game goes on
+  - Will automatically include applicable HMs and TMs you have in your bag
+  
 
-The relay picks the *fullest* joinable room rather than the first, so a
-handful of strangers arriving at once becomes one match instead of three
-lonely lobbies.
+### Game lobby options
 
-**With other people, by invitation:** everyone needs this mod enabled and
-the same game version. Play runs over a small relay server (see
-[`relay/`](relay/)) so it works over the internet, through NAT, with no
-port-forwarding.
+- Code
+  - This is the code you'd share out with others for them to join your game
+- Player list
+  - Represented by a "-" and their name
+  - Example "- Red"
+- Open
+  - Two options: OFF (default) or ON
+  - If ON, allows players to join from Quick Play option
+- Bots
+  - Create a set amount of Bots
+- Fog
+  - Control how long it takes before the Fog rolls in
+- Safari
+  - Control how long the Safari intro is
+- Debug Log (for nerds)
+  - Enables debugging logs locally 
+- Fill To
+  - Set amount to fill with Bots (if players aren't available)
+- Trainers
+  - Non-interactive
+  - Shows the total count of Trainers that will be in the battle
+- Start Match
+  - Starts the match!
+  - When starting a game via "Quick Play" this kicks off automatically
+- Leave
+  - Back out of the menu
 
-1. `START` → `ROYALE` (or `BATTLE ROYALE` on the title screen)
-2. `NAME` to pick the trainer name everyone else sees (7 letters, the
-   Gen 1 naming grid). `SERVER...` once, to point at your relay as
-   `host:port` (default is `127.0.0.1:7790` for a relay on your own
-   machine). Both are remembered.
-3. One player picks **HOST GAME** and reads out the six-character room code.
-4. Everyone else picks **JOIN BY CODE** and enters it.
-5. The host can add **BOTS** (the row steps 0, 1, 2, 3, 5, 8, 12, 16, 20,
-   25, 30 and wraps) to fill the match out, or set **FILL TO** a number of
-   trainers and let bots make up whatever the humans don't. The two compose
-   by taking whichever wants more, and `TRAINERS:` shows the total the drop
-   will actually hold. Fill is the one you want when you can't know how many
-   people turn up.
-6. **OPEN: YES** lists the room for `QUICK PLAY`, so strangers can find it
-   without a code. Rooms are private until you say otherwise.
-6. The host sees the roster fill in and picks **START MATCH**. Everyone
-   lands in the SAFARI ZONE at once.
-
-You can run a match entirely on your own: host, set some bots, start.
-
-**The Safari opening.** A match begins with every trainer together in the
-SAFARI ZONE centre, on the gate's own admission — thirty SAFARI BALLs and
-the 500-step budget — and no Pokémon at all. You have `SAFARI SECONDS`
-(a mod option, default 120) to catch what you can; the clock sits top-left,
-and nobody can fight anybody until it runs out. Run out of balls or steps
-and the PA sends you to the gate early, exactly as it always did, to wait
-for the buzzer. When it sounds — "PA: Ding-dong! Time's up!" — everyone
-walks to the gate and **picks the town they drop into on the TOWN MAP** —
-a cursor over Kanto, the way FLY asks, rather than a list of names, because
-where you drop is a geography decision — landing on a random cell of it so
-a popular choice doesn't stack everyone on one square. **Still in a battle
-when the buzzer goes? It closes itself.** A ball already in the air gets a
-couple of seconds to land and then the PA is done waiting; the zone is not
-somewhere you can hide to keep catching.
-**Caught nothing? You're out** at the buzzer: you brought no team to a mode
-where the team is your health. The Safari is closed for the rest of the
-match. `SAFARI SECONDS: 0` skips the opening for the old random drop with a
-RATTATA.
-
-You start with **all eight badges and all five HMs**, because a match is
-twenty minutes and Kanto is gated for a campaign. The badges are what Gen 1
-checks before a field move will run at all, and they open the Route 22 gate
-and Victory Road. The HMs are still items you have to *teach* to something
-compatible — so catch a water type and you can Surf, catch a Machop and you
-can move boulders. Where you travel is still what team you can build; the
-gyms are just no longer in the way.
-
-Meanwhile the **fog** closes in. See below.
-
-Walk into another trainer — be on the tile facing them — and the battle
-begins. **You only ever fight somebody you can see**: the eyeline is capped
-by what is actually on screen, and a trainer is engaged on the cell your
-screen has *drawn* them on rather than the cell the wire says they reached,
-so a fight never opens against a sprite that was never there. Win, lose or
-run; a lost battle only ends your match if it was your last Pokémon. **Knock someone out and their BAG hits the ground where they
-fell** — items and money, one bag with its own sprite, walk over and take
-it — and their team lands around it as Poké Balls. **Opening a ball is a gift, not a fight**: it
-shows the prompt Oak's lab uses —
-
-> This contains a NIDORINO.
-> Do you want it?
-
-— take or leave. The Pokémon joins your party at 1 HP, exactly as it fell;
-leaving puts the ball back for the next trainer, and a full party leaves it
-too. Reopen `ROYALE` any time to leave the match.
-
-**Beaten means gone.** When anything falls — a player, a bot, or one of
-Kanto's own route trainers — its sprite disappears for every client and
-only the Poké Balls stay. Walking into an area and finding balls with no
-trainer is how you read that somebody else got there first: the world is a
-record of the match. Kanto's trainers drop their teams too (at the rung
-they fought at), which gives PvE a point beyond levels — and means a route
-can be *picked over*.
-
-**The HUD.** Two small boxes in the top corners of the overworld, drawn in
-the game's own font: `7 LEFT` on the right is how many trainers are still
-in it, and `FOG!` pulses on the left while you are standing outside the
-ring. Each bite of the fog is the overworld-poison beat you already know —
-the screen flickers dark and the poison chime plays — so you can feel it
-without opening a menu.
-
-**Once you are out, you watch — as a camera, not a body.** Your own
-trainer disappears (other players stopped seeing you when you fell; now
-you do too), and the view is glued to whoever you are watching, walking
-when they walk. `LEFT` / `RIGHT` hop between the trainers still in the
-match; the box on the left names who it is, and the first living trainer
-is picked for you the moment you're out. When they leave the map you are
-carried to theirs. You cannot walk, catch, or fight, and nothing you do
-reaches the match — but START → POKéMON and ITEM show what the trainer
-you're watching carries: their team with levels, HP and moves, their bag
-and their money, read-only, refreshed every few seconds (a bot's is
-derived from the seed, like its team).
-
-A match plays in a throwaway world: **SAVE is disabled from the drop until
-you return to the title** and start or continue a real game, so a match can
-never overwrite your actual playthrough.
-
-**The rules of a match**, from the drop until it ends and nowhere else:
-
-- **The Safari comes first, and nobody fights in it.** Every battle there
-  is a catch; the eyeline and the A press don't engage until you've
-  dropped. Caught nothing by the buzzer and you're out.
-- Every battle is at the current rung — trainers, bots, wild grass and
-  water, the Safari, a bite on a rod. A Lv5 drop never meets a Lv22 Safari
-  mon, and a route's PIDGEY is worth catching in the last ring.
-- **The rung you start a fight at is the rung you fight at.** A shrink
-  during a battle still moves the ring and still bites, but your team does
-  not grow mid-turn — the level-up waits for the battle to close and lands
-  on the overworld. Levelling into a fight you had already committed to
-  rewrote the stats of the Pokémon standing on the field.
-- Battles are **SET** style whatever your OPTION row says: no "will you
-  change POKéMON?" when the foe faints. SHIFT is free information and a free
-  swap, and party-as-health is meant to bite.
-- **No nickname prompt** on a catch. The team is disposable and you may
-  catch a dozen under fog pressure.
-- **Running from another trainer is hard.** RUN in a PvP battle is a
-  roll — one in four at equal speed, half at twice their speed, never
-  better than five in eight, a little better each retry — and a failed
-  attempt means you fight this turn. Every earlier escape from the *same*
-  pursuer halves your odds: a determined pursuer wears down prey. A POKé
-  DOLL is a guaranteed bail, and it is spent. After a flee neither of you
-  engages the other for four seconds (the head start), and the runner
-  cannot start that fight again for thirty.
-- **Moves are free.** From the party menu, MOVES swaps any of a Pokémon's
-  four moves for any move it could ever learn — level-up moves at any
-  level, every compatible TM and HM — no tutor, no item, no ceremony.
-  Catch a water type, teach it SURF, cross the water.
-- **A full party means choosing who to release.** At 6/6, a catch or a
-  loot-ball take opens the party screen as a picker: drop one to make room,
-  or keep the team you have. The released Pokémon lands as a ball at your
-  feet, claimable by anyone — trading up leaves a trace. Nothing ever
-  reaches a box.
-- **Game speed is 1X.** A match has a shared clock and other people in it;
-  fast-forward through the fog or slow-motion in a fight is cheating. The
-  hotkey and the OPTION rows are ignored until the match ends.
-- **LINK is off the START menu.** The mod owns the transport for PvP.
-- **SAVE is off the START menu too.** The veto above already made saving
-  impossible, but the row still ran the whole vanilla ceremony — the
-  confirmation, the jingle, "...saved the game!" — and wrote nothing. A
-  menu row that lies gets removed; the veto stays as the guarantee.
-- **OPTION and MODS are off it as well.** Both are doors out of a live
-  match: the manager can disable this very mod with a room open, and the
-  options screen can flip BATTLE STYLE or TEXT SPEED underneath a lockstep
-  duel. Neither is worth surfacing for twenty minutes, and both come back
-  with the throwaway world.
-- **MAP is ON it.** The fog ring draws on the TOWN MAP, which makes the map
-  match information rather than a keepsake — and reaching it through the
-  bag meant *owning* a TOWN MAP. A spectator reads the watched trainer's
-  bag, so watching somebody who never picked one up left you with no way to
-  see the fog at all. It is a row of its own now, alive, out or watching.
-- **Every PC is OUT OF ORDER.** Boxes are a second health bar in a mode
-  where the party IS your health — deposit fresh Pokémon, fight with one,
-  withdraw and repeat — so storage, Pokémon and items both, is unreachable
-  until the match ends.
-
-None of these write to your saved options — they hold while a match is live
-and your own settings are back the moment it is over.
-
-The start-menu row reads `ROYALE.` while you're in a lobby and `ROYALE*`
-once a match is live. The same screen is on the title menu, so a match is
-reachable before a save exists — which matters because a match throws its
-world away anyway. It is one screen: picking SOLO VS BOTS, QUICK PLAY,
-HOST GAME or JOIN BY CODE turns it into the lobby in place — the code, the
-roster filling in, BOTS / FILL TO, OPEN, the countdown — and you leave it
-by starting the match or backing out. During a match the same row is the
-report: who's left, the Safari clock, the level, where the fog is. When a
-match ends the host's report gains **PLAY AGAIN**: the room goes back to
-the lobby with everyone in it — same code, roster kept, unlocked again for
-anyone else who wants in — and START MATCH rolls a fresh drop. Nobody
-exchanges a code twice.
-
-## Running the relay
+## Running the relay (for the nerds)
 
 Only for playing with other people — `SOLO VS BOTS` never touches it, and
 `QUICK PLAY` needs one only because the strangers are on the other side of
@@ -343,33 +215,6 @@ a sprite drawn over the world — so the tile renderer sorts them, collision
 treats them as solid, and `A` finds them, all the engine's own code.
 Eliminated players stay visible but walk-through.
 
-**Forced battles.** Walking into someone face-to-face fires a
-challenge/accept over the room; the lower room id hosts the lockstep. The
-battle itself rides a **channel** (`lib/channel.lua`) tunnelled through the
-room and handed to `LinkState` (`LinkState.newFromSession`), which owns
-every link mode the game already has. Reimplementing a lockstep battle here
-would be a second, worse copy of it. Because the channel is separate from
-the room socket, a battle no longer ends your session — the old co-op
-limitation is gone.
-
-**The fog** (`lib/fog.lua`) is what turns this from a deathmatch into a
-battle royale: a ring that tightens on a shared clock until everyone left is
-in the same few squares — and then keeps tightening. The last phase is fog
-over the whole of Kanto, so a match with survivors who refuse to fight each
-other still ends: whoever lasts longest inside it wins, and that is a
-tiebreak, not the plan.
-
-Drawing it took one decision worth knowing about. Kanto here is not a single
-canvas the way Hoenn was in the sibling project — it is 222 separate maps
-stitched by warps, with no global coordinate space to put a circle in. But
-the game already ships Kanto's real geography: `field.townMap.locations`
-gives **every** map a cell on the 16×16 Town Map grid, interiors included (a
-building sits on its town's square). So the ring is a circle in *Town Map
-space*, and a map is safe when its square falls inside it. The fog therefore
-follows the Kanto you know — it closes on a named place, the routes around
-it go first, and hiding in a building doesn't help because the building is
-on the same square as the town.
-
 Outside the ring, every Pokémon in your party loses **a tenth of its maximum
 HP every four seconds** — about forty seconds from full to fainted. It is a
 fraction rather than Gen 1's flat 1-HP-per-4-steps because a flat point does
@@ -474,77 +319,6 @@ Bot steps are paced in **real seconds**, not ticks. A bot's step is ambience
 that happens to be network traffic, and tying its rate to the host's logic
 clock means a fast-forwarding player floods the relay off its own connection.
 
-## Engine additions
-
-Like the co-op mod, this needs a few small, generic engine seams rather than
-a fork. They live outside `mods/` and are documented in the repo's engine
-diff:
-
-| Where | What | Why |
-| --- | --- | --- |
-| `src/world/WorldAPI.lua` | `Handle:stepNow / canStep / placeAt / isMoving / setPassable` | drive a networked actor without the scripted-move queue freezing your controls |
-| `src/world/OverworldController.lua` | the `world.talk` hook around the NPC talk path | a runtime object has no `TEXT_*` id, so the mod claims the `A` press |
-| `src/link/LinkState.lua` | `LinkState.newFromSession` + the `adopted` stage, and the `link.battle_ended` event | adopt an already-paired transport and skip the connect UI; report the battle's outcome + party so a mode above it can react |
-| `src/core/Game.lua` | `Game:startNewGame(opts)` (with `intro=false`) | start a fresh game straight into the world, so a match can drop you in without Oak's speech |
-| `src/battle/BattleState.lua` | the `battle.style` and `catch.nickname` hooks | force SET and skip the nickname prompt for a match without writing the player's OPTION row |
-| `src/battle/BattleState.lua` | the `catch.party_full` hook (`partyFullDestination`) | hand a full-party catch to the mod's own picker instead of laundering it through a PC the mode has locked |
-
-All of them are generic — any mod with a self-driven actor, an adopted link
-transport, its own new-game flow, or a rule it wants to hold for a while
-wants them. **All three RFCs are upstream and shipped:** the first four as
-RFC 0014 ([#1746](https://github.com/bryanthaboi/gen1recomp/pull/1746)), the
-two battle-rule hooks as RFC 0015
-([#1798](https://github.com/bryanthaboi/gen1recomp/pull/1798)), and the
-full-party catch hook as RFC 0018
-([#1799](https://github.com/bryanthaboi/gen1recomp/pull/1799)) — all of them
-in **gen1recomp v0.2.26**, which is what this mod now requires.
-
-### There is no fallback any more
-
-There used to be one. `lib/shim.lua` installed all seven seams from
-*outside* — 562 lines of patching engine modules from a mod — so the folder
-would run on a stock build. It was a fallback, never a design: two mods
-patching one function clobber each other instead of chaining, and there is
-no version contract to reason about.
-
-Now there is one. `manifest.json` requires `>=0.2.26`, the release that has
-every seam, and the loader refuses anything older rather than limping.
-
-What remains is `lib/seams.lua`, which installs nothing and only looks: one
-line at boot naming anything absent, because a version string is a promise
-and a fork or a local build can still be missing a piece —
-
-```
-battle royale: engine has every seam natively
-battle royale: MISSING ENGINE SEAMS: battle.style (RFC 0015) — this build …
-```
-
-Two of the seven cannot be probed: `world.talk` is a `Runtime.call` in the
-middle of `OverworldState:interact`, and the WorldAPI handle's `stepNow`
-lives on a class a mod is never handed. Neither is a value to test, so both
-ride on the RFC 0014 trio they shipped with — an engine that took those
-three without the call site would look complete and would not be.
-`tests/seams_test.lua` asserts the whole contract against the engine in your
-checkout.
-
-## What's here / what's next
-
-**Here (v0):** rooms + lobby over a relay with name entry, bots (up to 30,
-so a match is playable solo), the Safari opening (everyone together, two
-minutes, no starter, caught nothing = out) and a choose-your-town drop, the
-shared loadout plus all
-badges and HMs, real-time presence, forced face-to-face battles, the
-shrinking fog on a shared clock that closes all the way, party-as-health
-elimination from any whiteout, bag-and-balls loot on the ground, a save-slot guard
-(matches can't overwrite a real save), last-trainer-standing. Route
-trainers are PvE that pays out: beat one and its team spills, its sprite
-goes, for everyone.
-
-**Next** (from the design in the sibling `pokemon-battle-royale` project's
-`docs/DESIGN.md`): the rest of D9 — Teleport /
-Roar as escape moves, and Repel shrinking your own eyeline; type-based
-overworld abilities (D18/D20); a public relay deployment; and bots that pick
-a fight with a *player* on sight rather than only closing distance.
 
 ## Tests
 
