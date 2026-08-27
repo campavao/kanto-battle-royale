@@ -125,8 +125,13 @@ const stats = {
 
 // Counters are in-process and reset on every deploy, so peak is always "since
 // deployedAt", never all-time. The page says so rather than implying otherwise.
+// Compare the counters only. `at` is the heartbeat's own timestamp and moves
+// every five minutes whether or not anything happened -- including it here
+// would commit on every run and bury the repo in noise. So the stored `at` is
+// the last time these numbers were actually true, which is the more useful
+// reading anyway, and the page labels it that way.
 const previous = existsSync(OUT) ? JSON.parse(readFileSync(OUT, "utf8")) : {};
-const same = ["at", "rooms", "conns", "peakRooms", "peakConns", "statSeen", "statSolo", "lines"]
+const same = ["rooms", "conns", "peakRooms", "peakConns", "statSeen", "statSolo", "lines"]
   .every(k => previous[k] === stats[k]);
 
 if (same) {
