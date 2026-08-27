@@ -350,7 +350,7 @@ async function relay() {
         ? "No solo telemetry in this deployment yet. "
         : solo + " solo match" + (solo === 1 ? "" : "es") + " reported by " +
           (s.statSeen || 0) + " check-in" + (s.statSeen === 1 ? "" : "s") + ". ") +
-      "Heartbeat " + clock(s.at) + ", " + day(s.at) + " · " +
+      "Last changed " + clock(s.at) + ", " + day(s.at) + " · " +
       (s.sent || "0B") + " out.";
   } catch (e) {}
 }
