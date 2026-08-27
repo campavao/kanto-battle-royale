@@ -17,6 +17,19 @@ package.path = "./?.lua;./?/init.lua;" .. package.path
 local T = require("tests.modkit")
 local Seams = require("mods.battle_royale.lib.seams")
 
+-- Which engine release this is, for the room door (POK-142).  In a
+-- checkout this is always the "0.0.0-dev" placeholder -- src/core/
+-- Version.lua says CI stamps the real X.Y.Z into the packed game.love and
+-- never into the working tree -- which is exactly why a local checkout can
+-- never link-battle a packed build, and exactly what the door reports.
+do
+  local v = Seams.engineVersion()
+  T.check(type(v) == "string" and v ~= "",
+          "the engine names a release: " .. tostring(v))
+  T.eq(v, require("src.core.Version").engine,
+       "and it is the engine's own number, not a copy")
+end
+
 local report = Seams.check()
 
 -- the headline, and each miss named so a failure says WHICH

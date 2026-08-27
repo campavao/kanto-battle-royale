@@ -141,6 +141,28 @@ function Fog.isSafe(locations, mapId, center, radius)
   return (dx * dx + dy * dy) <= (radius * radius)
 end
 
+-- Which map the ring should be asked about, for somebody who may be
+-- standing INDOORS (POK-140).
+--
+-- isSafe answers against the town-map grid, and an interior has no square
+-- on it -- `locations[mapId]` is nil and the honest answer for an
+-- unplaceable map is "safe".  That is right for the fog itself (a building
+-- is not a square the ring can close on) and wrong for anything asking
+-- "which town am I in", which is what a POKeMON CENTER's counter needs.
+--
+-- The engine already keeps the answer: save.lastOutdoor is pokered's
+-- wLastMap, written by OverworldState:rememberOutdoor whenever the player
+-- warps OFF an outdoor map -- so walking into VIRIDIAN's CENTER leaves it
+-- pointing at VIRIDIAN_CITY.
+--
+-- nil when there is nothing to go on, and every caller must read that as
+-- "cannot say" rather than "in the fog": a counter that refuses for a
+-- reason nobody can see is worse than one that serves when it should not.
+function Fog.outdoorFor(locations, mapId, lastOutdoorId)
+  if locations and mapId and locations[mapId] then return mapId end
+  return lastOutdoorId
+end
+
 -- Distance from the ring's edge in squares: negative inside, positive out.
 -- Used to warn a player who is close to the edge.
 function Fog.distanceOutside(locations, mapId, center, radius)

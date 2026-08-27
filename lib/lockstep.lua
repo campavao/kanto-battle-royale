@@ -23,6 +23,18 @@
 
 local Lockstep = {}
 
+-- The three cells-per-room below are the SHOVE, and only the shove.  Note
+-- the condition in data/scripts/story4.lua e4ExitSeal reads
+-- `if y < 10 or x < 4 or x > 5 then return false end` -- so it fires at
+-- y >= 10, x in 4..5, which is the opposite of how POK-128 described it.
+-- The rooms are 10x12 cells, so that is the four-cell mouth of the south
+-- entrance: exactly the tiles a trainer backing out of the room stands on.
+local function e4Mouth()
+  return {
+    ["4,10"] = true, ["5,10"] = true, ["4,11"] = true, ["5,11"] = true,
+  }
+end
+
 Lockstep.CELLS = {
   -- POK-122.  Pewter's youngster stops a trainer heading east and walks
   -- them to the gym (data/scripts/story5.lua M.PEWTER_CITY), gated on
@@ -35,6 +47,31 @@ Lockstep.CELLS = {
   PEWTER_CITY = {
     ["35,17"] = true, ["36,17"] = true, ["37,18"] = true, ["37,19"] = true,
   },
+
+  -- POK-128.  The Elite Four rooms (data/scripts/story4.lua e4ExitSeal),
+  -- deferred when the POK-126/127 sweep found them and picked up here.
+  --
+  -- Two locks per room, and they need different answers:
+  --
+  --   the SHOVE     backing toward the entrance prints "Don't run away!"
+  --                 and walks the player one cell north with collide set.
+  --                 A scripted walk the player cannot refuse -- these
+  --                 cells.
+  --   the WALK-IN   entering from the south runs scriptMove(player, "up",
+  --                 6) once, gated on EVENT_AUTOWALKED_INTO_<ROOM>.  That
+  --                 one is an onEnter, and map_scripts composes onEnter
+  --                 ALL-RUN (src/script/MapScripts.lua) -- a mod cannot
+  --                 consume it the way it can consume a step.  So it is
+  --                 headed off by the flag instead, in main.lua's
+  --                 STORY_FLAGS: the match save says the walk already
+  --                 happened.
+  --
+  -- The E4 members themselves stay exactly where they are.  A forced
+  -- BATTLE is fine in a match, which is the rule this whole table is
+  -- narrower than it looks because of.
+  LORELEIS_ROOM = e4Mouth(),
+  BRUNOS_ROOM   = e4Mouth(),
+  AGATHAS_ROOM  = e4Mouth(),
 
   -- POK-126.  Cerulean's Rocket thief (data/scripts/story5.lua
   -- M.CERULEAN_CITY) runs the longest of these: it turns the player,
@@ -79,6 +116,36 @@ Lockstep.CELLS = {
   POKEMON_TOWER_7F   = { ["10,12"] = true, ["11,12"] = true },
   SILPH_CO_11F       = {
     ["0,3"] = true, ["1,3"] = true, ["2,3"] = true, ["3,3"] = true,
+  },
+}
+
+-- ------- what a suppressed scene was ALSO doing
+--
+-- Heading a scene off means inheriting its side effects, and POK-126
+-- shipped without noticing one.  CERULEAN's thief does not only fight you:
+-- the fade at the end of rocketRows swaps a pair of guards, and that swap
+-- is load-bearing.  data/scripts/story.lua spells it out where BILL's
+-- ticket does the identical swap:
+--
+--   "(27,12) is the ONLY walkable neighbour of the trashed house's south
+--    door at (27,11), and that house is one of the two ways through the
+--    fence that splits Cerulean in half (the badge house is the other).
+--    Leaving GUARD2 up forever severs the city -- the gym/mart half can
+--    never reach the Route 5 exit."
+--
+-- The first read of this called it "one blocked tile beside a house door,
+-- not a route", which was wrong, and a player was stuck against the pair
+-- with "The people here were robbed." within a day of the release.
+--
+-- Vanilla opens the path two ways -- the thief, or BILL's ticket -- and
+-- both do the SAME swap, so applying it on entry is not an invention.  It
+-- is the state every real playthrough reaches, reached without the
+-- cutscene.  Written to save.objectToggles, which in a match is the
+-- throwaway save, so nothing here follows anybody home.
+Lockstep.REPAIRS = {
+  CERULEAN_CITY = {
+    show = { "CERULEANCITY_GUARD1" },   -- (28,12), the post-swap guard
+    hide = { "CERULEANCITY_GUARD2" },   -- (27,12), the one severing the city
   },
 }
 

@@ -19,6 +19,7 @@ local function eq(got, want, label)
 end
 
 local Wire = require("mods.battle_royale.lib.wire")
+local Door = require("mods.battle_royale.lib.door")
 local Engage = require("mods.battle_royale.lib.engage")
 local Relay = require("mods.battle_royale.lib.relay")
 local Hub = require("mods.battle_royale.tests.fake_relay")
@@ -47,11 +48,180 @@ do
   ok(Wire.decode({ t = "start", seed = 1, spawns = {} }) == nil, "empty start is refused")
 
   -- the Safari opening (POK-21): start carries the round, beats carry the clock
-  eq(Wire.PROTOCOL, 8, "a room that can see who is busy is PROTOCOL 8")
+  eq(Wire.PROTOCOL, 9, "a room that can name a build mismatch is PROTOCOL 9")
+
+  -- ------- the room door (POK-142)
+  --
+  -- A place says which build it came from, so the room can name the two
+  -- numbers that decide whether anyone here can actually fight.
+  do
+    local mine = { engine = "0.2.31", mod = "0.34.1" }
+    local p = Wire.decode(Wire.place("PALLET_TOWN", 1, 2, "down", "alive",
+                                     nil, nil, mine))
+    ok(p ~= nil, "a place carrying a build still decodes")
+    eq(p and p.build and p.build.engine, "0.2.31", "place carries the engine release")
+    eq(p and p.build and p.build.mod, "0.34.1", "place carries the mod version")
+
+    -- a bot's place has no build, and that is not the same as a mismatch
+    local bot = Wire.decode(Wire.place("PALLET_TOWN", 1, 2, "down", "alive",
+                                       nil, 7, nil))
+    ok(bot ~= nil, "a place with no build decodes")
+    eq(bot and bot.build, nil, "and reports no build at all")
+    ok(not Wire.buildDiffers(mine, bot and bot.build),
+       "an unknown build is not a mismatch")
+    ok(not Wire.buildDiffers(nil, mine), "and neither is an unknown side")
+
+    -- the two mismatches, separately: they are chased in different places
+    ok(Wire.buildDiffers(mine, { engine = "0.2.29", mod = "0.34.1" }),
+       "a different engine release is a mismatch")
+    ok(Wire.buildDiffers(mine, { engine = "0.2.31", mod = "0.34.0" }),
+       "a different mod version is a mismatch")
+    ok(not Wire.buildDiffers(mine, { engine = "0.2.31", mod = "0.34.1" }),
+       "the same build is not")
+    -- half-known: compare what both sides actually said and nothing else
+    ok(Wire.buildDiffers(mine, { mod = "0.34.0" }),
+       "a peer that named only its mod is still compared on it")
+    ok(not Wire.buildDiffers(mine, { mod = "0.34.1" }),
+       "...and agrees when it matches")
+
+    -- a version off the wire is a stranger's string that lands in a text box
+    eq(Wire.cleanVersion("0.34.1"), "0.34.1", "a plain version survives")
+    eq(Wire.cleanVersion("0.0.0-dev"), "0.0.0-dev", "so does the dev placeholder")
+    eq(Wire.cleanVersion("1.0\n\240RUN"), "1.0RUN", "control bytes are stripped")
+    eq(Wire.cleanVersion(string.rep("9", 400)), string.rep("9", 16),
+       "and a long one is capped")
+    eq(Wire.cleanVersion(""), nil, "an empty version is unknown")
+    eq(Wire.cleanVersion("!!!"), nil, "so is one with nothing left after cleaning")
+    eq(Wire.cleanVersion(7), nil, "and so is a non-string")
+
+    -- the case that will happen on every wire bump: their BATTLE ROYALE
+    -- speaks another PROTOCOL, so the place never decodes at all and the
+    -- caller gets a CODE it can branch on rather than a formatted string
+    local none, why, code = Wire.decode({ t = "place", v = 8, st = "alive" })
+    eq(none, nil, "a place from another protocol is refused")
+    ok(why and why:find("protocol"), "and says so")
+    eq(code, "protocol", "with a code the caller can act on")
+  end
+
+  -- ------- what the door SAYS (lib/door.lua)
+  --
+  -- The two numbers are chased in two different places -- the GAME wherever
+  -- it was installed, the mod from the launcher's Check for updates -- so
+  -- telling them apart is the point, not a nicety.
+  do
+    local mine = { engine = "0.2.31", mod = "0.34.1" }
+
+    local engineOnly = Door.diffs(mine, { engine = "0.2.29", mod = "0.34.1" })
+    eq(#engineOnly, 1, "an engine-only mismatch is one diff")
+    eq(engineOnly[1].label, "GAME", "and it is the GAME that differs")
+    eq(engineOnly[1].theirs, "0.2.29", "carrying their release")
+    eq(engineOnly[1].mine, "0.2.31", "and ours")
+
+    local modOnly = Door.diffs(mine, { engine = "0.2.31", mod = "0.34.0" })
+    eq(#modOnly, 1, "a mod-only mismatch is one diff")
+    eq(modOnly[1].label, "ROYALE", "and it is ROYALE that differs")
+
+    eq(#Door.diffs(mine, { engine = "0.2.29", mod = "0.34.0" }), 2,
+       "both wrong is both diffs")
+    eq(#Door.diffs(mine, mine), 0, "a matching build has nothing to say")
+    eq(Door.sentence("RED", mine, mine), nil, "...and so no sentence")
+    eq(#Door.diffs(mine, nil), 0, "an absent build is not a disagreement")
+
+    -- the log's flat form: one grep-able clause per mismatch
+    eq(Door.parts(mine, { engine = "0.2.29", mod = "0.34.1" })[1],
+       "GAME v0.2.29 (you v0.2.31)", "the log clause names both releases")
+
+    local said = Door.sentence("RED", mine, { engine = "0.2.29", mod = "0.34.1" })
+    ok(said and said:find("RED"), "the sentence names the trainer")
+    ok(said and said:find("0.2.29", 1, true), "and their release")
+    ok(said and said:find("0.2.31", 1, true), "and ours")
+    ok(said and said:find("BATTLE"), "and says what it costs them")
+
+    -- EVERY authored line fits the 18-column Gen 1 box, with the longest
+    -- name the wire allows (MAX_NAME = 7) and both mismatches at once.
+    -- Real version strings, not the 16-char cap: a peer that pads its
+    -- version out to the cap only makes the box soft-wrap on a space,
+    -- which is untidy rather than wrong.  What this pins is that the
+    -- ORDINARY case never wraps, because a version number split across
+    -- two lines is the one thing a player has to read exactly.
+    local worst = Door.sentence("ABCDEFG", { engine = "0.2.31", mod = "0.34.1" },
+                                { engine = "0.2.29", mod = "0.34.0" })
+    for line in (worst .. "\n"):gmatch("([^\n]*)\n") do
+      ok(#line <= 18, ("door line fits 18 cols (%d): %s"):format(#line, line))
+    end
+    for line in (Door.oldSentence("ABCDEFG") .. "\n"):gmatch("([^\n]*)\n") do
+      ok(#line <= 18, ("old-peer line fits 18 cols (%d): %s"):format(#line, line))
+    end
+    ok(Door.oldSentence("BLUE"):find("BLUE"), "the old-peer sentence names them too")
+
+    -- ------- the lobby's summary row
+    --
+    -- STATES A FACT.  Only the host ever reads it -- a mismatched guest is
+    -- refused the room outright -- and a host whose guest is the one on
+    -- something old must not be told to change their own install.  The
+    -- reader-addressed wording belongs to the refusal screen, which is the
+    -- one place we know who is behind.
+    eq(Door.label(mine, {}), nil, "an empty room needs no warning")
+    eq(Door.label(mine, { { build = mine } }), nil, "nor does a matching one")
+    eq(Door.label(mine, { { build = { engine = "0.2.29", mod = "0.34.1" } } }),
+       "! GAME MISMATCH", "an engine mismatch names the game")
+    eq(Door.label(mine, { { build = { engine = "0.2.31", mod = "0.34.0" } } }),
+       "! ROYALE MISMATCH", "a mod mismatch names the mod")
+    eq(Door.label(mine, { { build = { engine = "0.2.29", mod = "0.34.0" } } }),
+       "! BUILD MISMATCH", "one peer can be wrong about both")
+    eq(Door.label(mine, { { build = { engine = "0.2.29", mod = "0.34.1" } },
+                          { build = { engine = "0.2.31", mod = "0.34.0" } } }),
+       "! BUILD MISMATCH", "and so can two peers between them")
+    -- a peer we could not decode told us nothing except that their copy of
+    -- THIS mod is not ours -- the PROTOCOL that refused them is ours
+    eq(Door.label(mine, { { old = true } }), "! ROYALE MISMATCH",
+       "an undecodable peer is a mod mismatch")
+    eq(Door.label(mine, { { old = true },
+                          { build = { engine = "0.2.29", mod = "0.34.1" } } }),
+       "! BUILD MISMATCH", "...and stacks with an engine one")
+    -- a bot, or anyone who has not said yet: nothing known is not a fault
+    eq(Door.label(mine, { { build = nil } }), nil,
+       "a peer with no build at all is not a mismatch")
+
+    -- ------- the refusal screen, which IS reader-addressed
+    eq(Door.action(Door.diffs(mine, { engine = "0.2.29", mod = "0.34.1" })),
+       "UPDATE THE GAME", "an engine mismatch tells the reader to update it")
+    eq(Door.action(Door.diffs(mine, { engine = "0.2.31", mod = "0.34.0" })),
+       "UPDATE ROYALE", "and a mod mismatch points at the mod")
+    eq(Door.action(Door.diffs(mine, { engine = "0.2.29", mod = "0.34.0" })),
+       "UPDATE BOTH", "and both at both")
+    eq(Door.action({}), nil, "with nothing to say when nothing differs")
+
+    eq(Door.refusalRows(mine, mine), nil, "a matching room is not refused")
+    local ref = Door.refusalRows(mine, { engine = "0.2.29", mod = "0.34.1" })
+    eq(table.concat(ref, "|"),
+       "CANNOT JOIN|UPDATE THE GAME|ROOM HAS|GAME v0.2.29|YOU HAVE|GAME v0.2.31",
+       "the refusal names both builds, theirs above ours")
+    local both = Door.refusalRows(mine, { engine = "0.2.29", mod = "0.34.0" })
+    eq(#both, 8, "both mismatches is eight rows before the OK")
+    for _, list in ipairs({ ref, both }) do
+      for _, l in ipairs(list) do
+        ok(#l <= 17, ("refusal row fits the box (%d): %s"):format(#l, l))
+      end
+    end
+  end
 
   -- POK-113: what a trainer is doing, for the mark over their head
   local b = Wire.decode(Wire.busy("menu"))
   eq(b and b.kind, "menu", "busy round-trips a menu")
+
+  -- ...and POK-121: the host puts a mark over a BOT's head too, for the
+  -- seconds it stands in the grass.  Everything else about a bot is
+  -- derived from the seed; this is a decision only the host made, so it
+  -- rides the wire the way its steps do.
+  local bb = Wire.decode(Wire.busy("battle", 1004))
+  eq(bb and bb.kind, "battle", "a bot's mark round-trips")
+  eq(bb and bb.as, 1004, "carrying the bot it belongs to")
+  eq(Wire.decode(Wire.busy("menu")).as, nil, "a trainer's own mark names nobody")
+  eq(Wire.decode(Wire.busy(nil, 1004)).as, 1004,
+     "and clearing a bot's mark still says whose")
+  eq(Wire.decode({ t = "busy", k = "nonsense", as = 1004 }).as, 1004,
+     "an unknown kind still names the actor, so the mark can be cleared")
   eq(Wire.decode(Wire.busy("battle")).kind, "battle", "...and a battle")
   eq(Wire.decode(Wire.busy(nil)).kind, nil, "...and back to nothing")
   ok(Wire.decode(Wire.busy(nil)) ~= nil, "which is a message, not a refusal")
@@ -381,6 +551,201 @@ do
   ok(not Fog.isUp(Fog.NOWHERE), "and NOWHERE is certainly not")
   ok(not Fog.isUp(nil), "no ring yet is not fog -- the match has not started")
 
+  -- ------- bot goals and pathing (POK-121)
+  --
+  -- The complaint these answer is a SPECTATOR's: a dead player follows a
+  -- bot for minutes, and a random walk over a fifty-cell route reads as
+  -- pacing back and forth -- the one behaviour that cannot be mistaken for
+  -- a person.  A goal, a real path to it, and a beat spent there is what a
+  -- player looks like from outside.
+  do
+    local Bots = require("mods.battle_royale.lib.bots")
+
+    -- --- the path itself
+    local function open6(x, y) return x >= 0 and y >= 0 and x < 6 and y < 6 end
+    local p = Bots.path(open6, { x = 0, y = 0 }, { x = 3, y = 2 })
+    eq(p and #p, 5, "an open room is walked in Manhattan distance")
+    eq(#Bots.path(open6, { x = 1, y = 1 }, { x = 1, y = 1 }), 0,
+       "standing on the goal is a path of no steps")
+    eq(Bots.path(function() return false end, { x = 0, y = 0 }, { x = 2, y = 2 }),
+       nil, "nowhere to walk is nil, not an empty path")
+    eq(Bots.path(open6, { x = 0, y = 0 }, { x = 5, y = 5 }, 3), nil,
+       "and the node cap gives up rather than stalling the host")
+
+    -- a wall with one gap: the BFS has to go the long way round, which a
+    -- greedy step-toward (Bots.approach) cannot
+    local function walled(x, y)
+      if not open6(x, y) then return false end
+      return not (x == 3 and y ~= 5)
+    end
+    local round = Bots.path(walled, { x = 0, y = 0 }, { x = 5, y = 0 })
+    ok(round and #round == 15, "a wall is walked around, not into ("
+       .. tostring(round and #round) .. " steps)")
+    ok(Bots.approach({ x = 0, y = 0, map = "M" }, function(_, x, y) return walled(x, y) end,
+                     { x = 5, y = 0 }) ~= nil,
+       "...whereas the stride only ever tries the greedy step")
+
+    -- --- goals
+    local function fixedRng(seq)
+      local i = 0
+      return function(a, b)
+        i = i + 1
+        local v = seq[i] or 0.5
+        if a and b then return math.max(a, math.min(b, math.floor(v))) end
+        return v
+      end
+    end
+    local bot = { x = 5, y = 5, map = "ROUTE_X" }
+
+    -- the fog outranks everything a map has to offer
+    local g = Bots.chooseGoal(bot, { inFog = true, items = { { x = 1, y = 1 } },
+                                     grass = { { x = 2, y = 2 } } }, fixedRng({}))
+    eq(g.kind, "seam", "standing in the fog, a bot leaves")
+    eq(g.why, "ring", "and it is the ring that moved it")
+    eq(Bots.chooseGoal(bot, { ringSoon = true }, fixedRng({})).kind, "seam",
+       "a ring about to arrive is reason enough")
+
+    -- loot beats grass: it is already a team, and somebody else paid for it
+    local loot = Bots.chooseGoal(bot, { items = { { x = 9, y = 9 } },
+                                        grass = { { x = 6, y = 5 } } }, fixedRng({}))
+    eq(loot.kind, "item", "a spill on the map is worth more than grass")
+    eq(loot.x, 9, "and it walks to the spill")
+
+    -- grass most of the time, but not always, or a bot with grass on its
+    -- map would never leave it and the roster would never mix
+    local grassGoal = Bots.chooseGoal(bot, { grass = { { x = 12, y = 5 } } },
+                                      fixedRng({ 0.1, 0.1 }))
+    eq(grassGoal.kind, "grass", "grass is the default errand")
+    local left = Bots.chooseGoal(bot, { grass = { { x = 12, y = 5 } } },
+                                 fixedRng({ 0.9 }))
+    eq(left.kind, "seam", "...but not every time")
+
+    -- ...and grass UNDERFOOT is not an errand.  A bot in a dense patch that
+    -- keeps targeting the nearest tuft walks one cell, dwells six seconds,
+    -- and does it again -- measured at three cells in a minute, which is
+    -- the pacing this whole system exists to remove.
+    eq(#Bots.farEnough({ x = 5, y = 5 }, { { x = 6, y = 5 }, { x = 5, y = 4 } }), 0,
+       "cells you are standing beside are not somewhere to go")
+    eq(#Bots.farEnough({ x = 5, y = 5 }, { { x = 20, y = 5 } }), 1,
+       "...and a patch across the route is")
+    local underfoot = Bots.chooseGoal(bot, { grass = { { x = 6, y = 5 } },
+                                             cells = { { x = 40, y = 40 } } },
+                                      fixedRng({ 0.1, 0.1 }))
+    ok(underfoot.kind ~= "grass",
+       "so a bot already in the grass finds something else to do")
+    -- ...and a map with NO errand still has to move the bot.  Returning
+    -- "seam" here froze five of six bots solid in the first measured run:
+    -- towns have no grass, and homeward will not move a bot already
+    -- nearest the eye, so nothing was left to step them.
+    local strollCells = {}
+    for i = 1, 20 do strollCells[i] = { x = i, y = 20 } end
+    local stroll = Bots.chooseGoal(bot, { cells = strollCells }, fixedRng({ 0.9 }))
+    eq(stroll.kind, "stroll", "a map with no errand is still walked")
+    ok(math.abs(stroll.x - bot.x) + math.abs(stroll.y - bot.y) >= 8,
+       "and the stroll aims FAR, not at the next cell over")
+    eq(Bots.chooseGoal(bot, {}, fixedRng({ 0.9 })).kind, "seam",
+       "only a map with nowhere to walk at all is a map to leave")
+
+    -- nearest, which is what makes a walk look aimed
+    eq(Bots.nearest({ x = 0, y = 0 },
+                    { { x = 9, y = 9 }, { x = 2, y = 1 }, { x = 5, y = 5 } }).x, 2,
+       "the nearest cell is the one picked")
+    eq(Bots.nearest({ x = 0, y = 0 }, {}), nil, "and nothing is nil")
+
+    -- a dwell for every kind chooseGoal can return, or a bot arrives
+    -- somewhere and stands there forever on a nil comparison
+    for _, kind in ipairs({ "grass", "item", "ring", "seam" }) do
+      ok(type(Bots.DWELL[kind]) == "number",
+         "every goal kind has a dwell: " .. kind)
+    end
+    ok(Bots.DWELL.grass > Bots.DWELL.item,
+       "grass is the long beat -- it has to read as a battle")
+
+    -- ------- tiers (POK-121)
+    --
+    -- Rolled from (seed, id) like the name and the face, because whoever
+    -- walks into a bot fights it LOCALLY: a disagreement about its team is
+    -- a disagreement about who won.
+    local t1 = Bots.tier(4242, Bots.idFor(3))
+    eq(Bots.tier(4242, Bots.idFor(3)).id, t1.id, "a tier is stable for a bot")
+    ok(Bots.tier(4243, Bots.idFor(3)).id ~= nil, "and another seed still gives one")
+    local spread = {}
+    for i = 1, 40 do
+      local t = Bots.tier(99, Bots.idFor(i))
+      spread[t.id] = (spread[t.id] or 0) + 1
+    end
+    ok((spread.ROOKIE or 0) > 0 and (spread.REGULAR or 0) > 0
+       and (spread.ACE or 0) > 0, "a full roster draws all three tiers")
+    ok((spread.ROOKIE or 0) > (spread.ACE or 0),
+       "weighted toward ROOKIE -- an ACE you meet every match is not an ACE")
+
+    -- THE non-negotiable: one mon at the drop, whatever the tier.  Two made
+    -- a bot the favourite in every opening fight and broke the
+    -- build-a-team arc, which is the whole reason this is a curve.
+    for _, tier in ipairs(Bots.TIERS) do
+      eq(Bots.partySize(tier, 5), 1, tier.id .. " drops with one mon")
+      eq(Bots.partySize(tier, 100), tier.maxParty,
+         tier.id .. " is at full strength by the last rung")
+      -- monotonic: a bot never sheds a Pokemon as the match runs
+      local last = 0
+      for _, lv in ipairs({ 5, 15, 30, 50, 75, 100 }) do
+        local n = Bots.partySize(tier, lv)
+        ok(n >= last, tier.id .. " never shrinks its party (" .. lv .. ")")
+        last = n
+      end
+    end
+    ok(Bots.partySize(Bots.TIERS[3], 75) > Bots.partySize(Bots.TIERS[1], 75),
+       "an ACE has built more team by the late ring than a ROOKIE")
+    eq(Bots.partySize(nil, 100), 1, "no tier at all is still a legal party")
+
+    -- the pools differ, and every species in them is real (checked against
+    -- the live dataset in the party block further down)
+    ok(Bots.pool(Bots.TIERS[1]) ~= Bots.pool(Bots.TIERS[3]),
+       "a ROOKIE and an ACE do not draw from the same pool")
+
+    -- aggression: the one thing a bot can express by walking
+    local aceRoam = Bots.roamSeconds(20, Bots.TIERS[3])
+    local rookieRoam = Bots.roamSeconds(20, Bots.TIERS[1])
+    ok(aceRoam < rookieRoam, "an ACE crosses a seam sooner than a ROOKIE")
+    ok(Bots.roamSeconds(20) == rookieRoam,
+       "and no tier at all is the old behaviour exactly")
+    ok(Bots.roamSeconds(2, Bots.TIERS[3]) >= 4,
+       "no tier turns the endgame into a blur")
+  end
+
+  -- a bot's party is its tier's, at the rung, and every species is real
+  do
+    local Bots = require("mods.battle_royale.lib.bots")
+    local data = { pokemon = {} }
+    for _, tier in ipairs(Bots.TIERS) do
+      for _, s in ipairs(Bots.pool(tier)) do data.pokemon[s] = true end
+    end
+    for _, tier in ipairs(Bots.TIERS) do
+      local pool = {}
+      for _, s in ipairs(Bots.pool(tier)) do pool[s] = true end
+      -- find a bot of this tier and check what it brings
+      for i = 1, 60 do
+        local id = Bots.idFor(i)
+        if Bots.tier(7, id).id == tier.id then
+          local party = Bots.party(7, id, data, 100)
+          eq(#party, tier.maxParty, tier.id .. " brings a full party at rung 100")
+          for _, slot in ipairs(party) do
+            eq(slot.level, 100, "every slot rides the rung")
+            ok(pool[slot.species],
+               tier.id .. " draws only from its own pool: " .. slot.species)
+          end
+          eq(#Bots.party(7, id, data, 5), 1, tier.id .. " drops with one")
+          break
+        end
+      end
+    end
+    -- a build missing the tier's species degrades rather than asserting
+    local thin = { pokemon = { RATTATA = true } }
+    local fallback = Bots.party(7, Bots.idFor(1), thin, 100)
+    ok(#fallback >= 1, "a thin dataset still yields a party")
+    eq(fallback[1].species, "RATTATA", "...falling back to what exists")
+  end
+
   -- geometry on a town-map grid
   local locations = {
     HOME      = { x = 8, y = 8, name = "HOME" },
@@ -399,6 +764,40 @@ do
      "everything is in at phase 1")
   ok(Fog.isSafe(locations, "NOWHERE", center, 1.5),
      "a map with no square is never punished")
+
+  -- ------- which map the ring is asked about, indoors (POK-140)
+  --
+  -- The counter in a POKeMON CENTER shuts when the fog reaches THAT town,
+  -- not when it reaches any town.  An interior has no square on this grid,
+  -- so the question has to be re-pointed at the town the door opens onto.
+  do
+    eq(Fog.outdoorFor(locations, "HOME", "FARAWAY"), "HOME",
+       "a placeable map answers for itself, whatever was remembered")
+    eq(Fog.outdoorFor(locations, "POKECENTER", "FARAWAY"), "FARAWAY",
+       "an interior defers to the outdoor map it was entered from")
+    eq(Fog.outdoorFor(locations, "POKECENTER", nil), nil,
+       "and says nothing when there is nothing to defer to")
+    eq(Fog.outdoorFor(nil, "HOME", "FARAWAY"), "FARAWAY",
+       "no grid at all is the same as unplaceable")
+
+    -- the bug this fixes, stated as the two answers that used to be one:
+    -- with the ring closed on HOME, the CENTER in HOME stays open and the
+    -- one out in FARAWAY does not
+    local inHome = Fog.outdoorFor(locations, "POKECENTER", "HOME")
+    local inFar = Fog.outdoorFor(locations, "POKECENTER", "FARAWAY")
+    ok(Fog.isSafe(locations, inHome, center, 1.5),
+       "the CENTER in the safe town is still open")
+    ok(not Fog.isSafe(locations, inFar, center, 1.5),
+       "...and the one the ring has reached is not")
+    -- ...and during the grace phase neither of them shuts, on the same
+    -- rule rather than on a separate isUp() guard
+    ok(Fog.isSafe(locations, inHome, center, Fog.radius(1))
+       and Fog.isSafe(locations, inFar, center, Fog.radius(1)),
+       "at phase 1 every counter is open")
+    -- ...and at the end, none of them is
+    ok(not Fog.isSafe(locations, inHome, center, Fog.EVERYWHERE),
+       "when the fog covers Kanto even the home counter shuts")
+  end
   ok(Fog.isSafe(locations, "HOME", center, 0), "at radius 0 the centre is safe")
   ok(Fog.isSafe(locations, "INDOORS", center, 0),
      "and so are the buildings on its square")
@@ -1808,6 +2207,14 @@ do
         setStatsOn = function(self, on) self.stats = on and true or false return self.stats end,
         setDebug = function(self, on) self.debugOn = on and true or false end,
         cycleSafari = function(self) self.cycledSafari = true end,
+        -- the room door (POK-142): no trouble unless a test says so
+        buildTrouble = function(self, id) return (self.trouble or {})[id] end,
+        buildTroubleLabel = function(self) return self.troubleLabel end,
+        buildOf = function(self) return self.myBuild end,
+        myBuild = { engine = "0.2.31", mod = "0.34.1" },
+        -- trainers the door turned away: none unless a test stages some
+        flaggedAbsent = function(self) return self.absent or {} end,
+        clearRefusal = function(self) self.refused = nil end,
       }
       for k, v in pairs(over or {}) do BR[k] = v end
       return BR
@@ -1874,6 +2281,110 @@ do
           return m
         end)() }) }), {})
       ok(#bigger > #lobby, "a fuller room is a longer list still")
+    end
+
+    -- ------- the door marks the lobby (POK-142)
+    --
+    -- The roster is where somebody waiting is actually looking, and it
+    -- needs no script runner -- which matters, because this screen opens
+    -- from the TITLE as well as from the start menu, and with no overworld
+    -- under it there is nothing to queue a text box onto at all.
+    do
+      local marked = fakeBR({
+        relay = room(true),
+        trouble = { [2] = "build" },
+        troubleLabel = "! UPDATE THE GAME",
+      })
+      local rows = labels(BRMenu.items({ version = "0.0.0" }, marked, {}))
+      ok(rows:find("- RED*|", 1, true),
+         "an agreeing trainer keeps their plain row, host star and all")
+      ok(rows:find("- BLUE!|", 1, true), "and the one the door flagged wears a !")
+
+      -- the mark sits against the NAME, ahead of the host's asterisk: the
+      -- Gen 1 font draws no asterisk, so a "!" after one floats a blank
+      -- cell away from the trainer it accuses
+      local host = labels(BRMenu.items({ version = "0.0.0" }, fakeBR({
+        relay = room(true), trouble = { [1] = "build" },
+        troubleLabel = "! UPDATE ROYALE",
+      }), {}))
+      ok(host:find("- RED!*|", 1, true),
+         "a flagged host wears the ! before the star: " .. host)
+      ok(rows:find("! UPDATE THE GAME", 1, true),
+         "with one row saying which number to chase")
+
+      ok(rows:find("YOU ARE ON:", 1, true), "and our own numbers under it")
+      ok(rows:find("ROYALE v0.34.1", 1, true), "the mod version we are running")
+      ok(rows:find("GAME v0.2.31", 1, true), "and the engine release")
+
+      -- a trainer the door turned away leaves a trace, because on the host
+      -- that trace is the only sign they were ever there
+      local bounced = labels(BRMenu.items({ version = "0.0.0" }, fakeBR({
+        relay = room(true),
+        troubleLabel = "! GAME MISMATCH",
+        absent = { { id = 9, name = "GUESTB",
+                     build = { engine = "9.9.9", mod = "0.34.1" } } },
+      }), {}))
+      ok(bounced:find("! GUESTB|", 1, true),
+         "the turned-away trainer is listed under the roster: " .. bounced)
+      -- ------- the face a refused guest actually lands on
+      --
+      -- Not a text box: this screen opens from the TITLE as well as the
+      -- start menu, so there is not always an overworld to queue a say
+      -- onto, and teardown's own message is documented as lost on the way
+      -- to the title (POK-115).  The explanation has to BE the screen.
+      do
+        local refusedBR = fakeBR({
+          refused = { rows = { "CANNOT JOIN", "UPDATE THE GAME", "ROOM HAS",
+                               "GAME v0.2.31", "YOU HAVE", "GAME v9.9.9" } },
+        })
+        local items, view = BRMenu.items({ version = "0.0.0" }, refusedBR, {})
+        eq(view, "refused", "a refused client gets its own face")
+        local list = labels(items)
+        ok(list:find("CANNOT JOIN|", 1, true), "which says it cannot join")
+        ok(list:find("GAME v0.2.31|", 1, true), "names the room's build")
+        ok(list:find("GAME v9.9.9|", 1, true), "and ours")
+        local okRow = find(items, "OK")
+        ok(okRow ~= nil, "with a way out of it")
+        okRow.onSelect()
+        eq(refusedBR.refused, nil, "which clears the refusal")
+        eq(select(2, BRMenu.items({ version = "0.0.0" }, refusedBR, {})), "menu",
+           "and lands back on the first face")
+
+        -- a refusal outranks the plain menu but never a running match
+        local mid = fakeBR({ refused = { rows = { "CANNOT JOIN" } },
+                             phase = "match" })
+        eq(select(2, BRMenu.items({ version = "0.0.0" }, mid, {})), "match",
+           "a match already running outranks a stale refusal")
+
+        for _, it in ipairs(BRMenu.items({ version = "0.0.0" }, fakeBR({
+          refused = { rows = Door.refusalRows(
+            { engine = "0.2.31", mod = "0.34.1" },
+            { engine = "0.2.29", mod = "0.34.0" }) },
+        }), {})) do
+          ok(#it.label <= 17,
+             ("refusal face row fits (%d): %s"):format(#it.label, it.label))
+        end
+      end
+
+      -- ...and a fightable room says none of it.  The "!" is the whole
+      -- signal, so nothing else in this face may carry one.
+      local clean = labels(BRMenu.items({ version = "0.0.0" },
+                                        fakeBR({ relay = room(true) }), {}))
+      ok(not clean:find("!", 1, true),
+         "a fightable room has no ! anywhere in it: " .. clean)
+      ok(not clean:find("YOU ARE ON:", 1, true),
+         "and does not spend rows on numbers nobody needs")
+
+      -- fit() sizes the box to the widest label + 3 against a 20-tile
+      -- canvas, so a label past 17 characters is clipped off the right
+      -- with nothing to say it happened.  The door added the longest rows
+      -- this face has ever carried, so it brings the check with it.
+      for _, br in ipairs({ marked, fakeBR({ relay = room(true) }) }) do
+        for _, it in ipairs(BRMenu.items({ version = "0.34.1" }, br, {})) do
+          ok(#it.label <= 17,
+             ("lobby row fits the box (%d): %s"):format(#it.label, it.label))
+        end
+      end
     end
 
     -- the first face: every row keeps the screen, because the room it
@@ -2845,6 +3356,13 @@ do
   local Lockstep = require("mods.battle_royale.lib.lockstep")
   local JJ = require("data.scripts.yellow_jessie_james")
   local S5 = require("data.scripts.story5")
+  -- The E4 shove pushes a real TextBox before it moves anybody, and this
+  -- harness has no render stack.  Standing one in for the require the
+  -- handler makes lazily keeps the part under test -- which cells it
+  -- decides to fire on -- entirely real.
+  package.loaded["src.render.TextBox"] = package.loaded["src.render.TextBox"]
+    or { new = function(_, _, done) if done then done() end return {} end }
+  local S4 = require("data.scripts.story4")
 
   -- Just enough overworld for these handlers to reach the point where they
   -- commit: a runner that records instead of running, and an NPC for the
@@ -2855,11 +3373,22 @@ do
       npcs = {},
       scriptMoves = {},
       player = { cellX = 0, cellY = 0 },
+      -- the E4 rooms print before they shove
+      stack = { push = function() end },
       runner = {
         isRunning = function() return false end,
         run = function() ran = true end,
       },
       npcByIndex = function() return { def = {} } end,
+      -- The E4 shove does not go through the runner at all -- it calls
+      -- ow:scriptMove directly from the text box's callback -- so a stub
+      -- that only watched `runner.run` recorded nothing and the row read
+      -- as "the vanilla handler does not fire here", which would have been
+      -- a very convincing wrong answer.
+      scriptMove = function(self, ...)
+        ran = true
+        self.scriptMoves[#self.scriptMoves + 1] = { ... }
+      end,
     }, function() return ran end
   end
 
@@ -2882,6 +3411,12 @@ do
     { "POKEMON_TOWER_7F",   JJ.POKEMON_TOWER_7F.onStep,   { { 9, 12 }, { 10, 11 } } },
     { "SILPH_CO_11F",       JJ.SILPH_CO_11F.onStep,       { { 6, 13 }, { 7, 12 }, { 4, 3 } } },
     { "CERULEAN_CITY",      S5.CERULEAN_CITY.onStep,      { { 30, 8 }, { 29, 7 }, { 20, 6 } } },
+    -- POK-128.  Controls are the cells just outside the entrance mouth --
+    -- a list one cell wider than vanilla's would start eating ordinary
+    -- steps inside a room somebody is trying to cross.
+    { "LORELEIS_ROOM", S4.LORELEIS_ROOM.onStep, { { 3, 10 }, { 6, 11 }, { 4, 9 }, { 5, 2 } } },
+    { "BRUNOS_ROOM",   S4.BRUNOS_ROOM.onStep,   { { 3, 11 }, { 6, 10 }, { 5, 9 } } },
+    { "AGATHAS_ROOM",  S4.AGATHAS_ROOM.onStep,  { { 3, 10 }, { 6, 10 }, { 4, 8 } } },
   }
 
   for _, row in ipairs(under) do
@@ -2895,7 +3430,11 @@ do
       ok(x ~= nil and y ~= nil, mapId .. " cell " .. key .. " parses")
       if x and y then
         local ow, fired = stub()
-        local called, res = pcall(onStep, { save = save() }, ow, x, y)
+        -- `data.text` is for the E4 shove, which looks its line up before
+        -- it moves anybody; the others never touch it
+        local game = { save = save(), data = { text = {} },
+                       stack = { push = function() end } }
+        local called, res = pcall(onStep, game, ow, x, y)
         ok(called, ("%s (%d,%d): the vanilla handler runs"):format(mapId, x, y))
         ok(called and (res == true or fired()),
            ("%s (%d,%d) still starts a scripted walk"):format(mapId, x, y))
@@ -2908,6 +3447,7 @@ do
     for _, c in ipairs(controls) do
       ok(not Lockstep.blocks(mapId, c[1], c[2]),
          ("%s (%d,%d) is not ours to consume"):format(mapId, c[1], c[2]))
+
     end
   end
 
@@ -2916,7 +3456,15 @@ do
   -- SUPER NERD, GIOVANNI and the DOJO master stop being contestable.
   ok(not Lockstep.blocks("FIGHTING_DOJO", 4, 3), "the DOJO master is still fightable")
   ok(Lockstep.CELLS.ROUTE_24 == nil, "Nugget Bridge is text, not a walk -- left alone")
-  ok(Lockstep.CELLS.LORELEIS_ROOM == nil, "the E4 rooms are out of scope for now")
+  -- ...and the E4 members stay fightable: only the entrance mouth is ours
+  ok(not Lockstep.blocks("LORELEIS_ROOM", 4, 2),
+     "LORELEI herself is still reachable")
+  ok(not Lockstep.blocks("AGATHAS_ROOM", 5, 3), "so is AGATHA")
+
+  -- The other half of POK-128 is a FLAG rather than a cell -- the walk-in
+  -- is an onEnter and map_scripts composes those all-run -- so it lives in
+  -- main.lua's STORY_FLAGS and is not assertable from here; br_load_test
+  -- is what proves that list still loads.
 end
 
 -- ------- standing another mod down, and putting it back (POK-134)

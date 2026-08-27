@@ -153,6 +153,21 @@ function Spills:keyAt(mapId, x, y)
   return nil
 end
 
+-- Every spilled cell on a map, for a bot deciding where to walk (POK-121).
+-- A fallen trainer's mons and bag on the floor are the most player-like
+-- errand there is: somebody else paid for them and they are free.
+function Spills:cellsOn(mapId)
+  local out = {}
+  for _, ball in pairs(self.balls) do
+    if ball.map == mapId then out[#out + 1] = { x = ball.x, y = ball.y } end
+  end
+  table.sort(out, function(a, b)
+    if a.y ~= b.y then return a.y < b.y end
+    return a.x < b.x
+  end)
+  return out
+end
+
 function Spills:count()
   local n = 0
   for _ in pairs(self.balls) do n = n + 1 end

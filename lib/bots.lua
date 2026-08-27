@@ -65,6 +65,80 @@ local SPECIES = {
   "MEOWTH", "CATERPIE", "WEEDLE", "NIDORAN_M", "NIDORAN_F",
 }
 
+-- What a bot that has been PLAYING would have caught by the mid game, and
+-- by the end.  Everything scales to the rung anyway (Bots.party), so these
+-- are about what a team LOOKS like across a battle, not about raw numbers:
+-- meeting a GOLEM in the last ring should feel different from meeting a
+-- fourth RATTATA.
+local SPECIES_MIXED = {
+  "GROWLITHE", "VULPIX", "ODDISH", "BELLSPROUT", "POLIWAG", "ABRA",
+  "MACHOP", "GEODUDE", "PONYTA", "DROWZEE", "KRABBY", "VOLTORB",
+  "CUBONE", "HORSEA", "GOLDEEN", "STARYU", "GASTLY", "ONIX",
+}
+local SPECIES_STRONG = {
+  "ARCANINE", "ALAKAZAM", "MACHAMP", "GOLEM", "RAPIDASH", "DODRIO",
+  "HYPNO", "ELECTRODE", "MAROWAK", "WEEZING", "RHYDON", "KANGASKHAN",
+  "PINSIR", "TAUROS", "GYARADOS", "LAPRAS", "SNORLAX", "VICTREEBEL",
+}
+
+-- ---------------------------------------------------------------- TIERS
+--
+-- Not every trainer in a battle royale is the same trainer (POK-121).
+--
+-- A tier is rolled ONCE per bot from (seed, id), like its name and its
+-- face, so every client agrees without a byte crossing the wire -- which
+-- matters more here than anywhere else, because whoever walks into a bot
+-- fights it locally and a disagreement about its team is a disagreement
+-- about who won.
+--
+-- What a tier changes is deliberately NOT raw levels: everything already
+-- rides the rung, so a bot is never over-levelled.  It changes how much
+-- team a bot has BUILT by now, what that team looks like, how hard it
+-- roams -- and which trainer class it fights as, which is the difficulty
+-- dial Gen 1 already has and this mod had been picking for looks alone.
+Bots.TIERS = {
+  { id = "ROOKIE",  maxParty = 2, roamScale = 1.0, ai = false },
+  { id = "REGULAR", maxParty = 4, roamScale = 0.8, ai = true },
+  { id = "ACE",     maxParty = 6, roamScale = 0.6, ai = true },
+}
+
+-- Weighted, and weighted toward ROOKIE on purpose: an ACE is meant to be
+-- the trainer you remember losing to, which it cannot be if half the
+-- roster is one.  Out of ten.
+local TIER_DECK = { 1, 1, 1, 1, 1, 2, 2, 2, 3, 3 }
+
+-- The tier this bot has, for this match.  A stream of its own, so a bot's
+-- difficulty is not tied to its name or its face.
+function Bots.tier(seed, id)
+  local rng = Bots.rng((tonumber(seed) or 1) + 65537, id)
+  return Bots.TIERS[TIER_DECK[rng(1, #TIER_DECK)]]
+end
+
+-- How much team a bot of this tier has by the time the rung is `level`.
+--
+-- ONE at the drop, whatever the tier -- that is not negotiable and it is
+-- why this is a curve rather than a constant.  Two mons at the drop made a
+-- bot the favourite in every opening fight and broke the build-a-team arc,
+-- which is the note Bots.party has carried since that was measured.  What
+-- was wrong was the OTHER end: a player has six by the last ring and a bot
+-- still had one, so bots got easier as a match ran.
+function Bots.partySize(tier, level)
+  local lv = math.max(1, math.min(100, math.floor(tonumber(level) or 5)))
+  local most = (tier and tier.maxParty) or 1
+  local frac = (lv - 5) / 95
+  if frac < 0 then frac = 0 end
+  local n = 1 + math.floor(frac * (most - 1) + 1e-9)
+  return math.max(1, math.min(most, n))
+end
+
+-- The pool a tier draws from.  A ROOKIE never caught anything good; an ACE
+-- has been hunting all match.
+function Bots.pool(tier)
+  if tier and tier.id == "ACE" then return SPECIES_STRONG end
+  if tier and tier.id == "REGULAR" then return SPECIES_MIXED end
+  return SPECIES
+end
+
 -- What a bot LOOKS like (POK-89): an overworld sheet and the trainer class whose
 -- front pic goes with it, derived from the seed exactly as the name and
 -- the party are, so every client draws the same bot without a byte of it
@@ -83,8 +157,9 @@ Bots.LOOKS = {
   { walk = "SPRITE_BIKER",         class = "OPP_BIKER" },
   { walk = "SPRITE_BEAUTY",        class = "OPP_BEAUTY" },
   { walk = "SPRITE_SWIMMER",       class = "OPP_SWIMMER" },
-  { walk = "SPRITE_COOLTRAINER_M", class = "OPP_COOLTRAINER_M" },
-  { walk = "SPRITE_COOLTRAINER_F", class = "OPP_COOLTRAINER_F" },
+  -- the two with real battle AI (X ATTACK; HYPER POTION and a switch)
+  { walk = "SPRITE_COOLTRAINER_M", class = "OPP_COOLTRAINER_M", ai = true },
+  { walk = "SPRITE_COOLTRAINER_F", class = "OPP_COOLTRAINER_F", ai = true },
   { walk = "SPRITE_GAMBLER",       class = "OPP_GAMBLER" },
   { walk = "SPRITE_SCIENTIST",     class = "OPP_SCIENTIST" },
   { walk = "SPRITE_ROCKER",        class = "OPP_ROCKER" },
@@ -94,12 +169,25 @@ Bots.LOOKS = {
 -- with species.  nil means this build has none of them, and the caller
 -- keeps whatever default it had.
 function Bots.look(seed, id, data)
-  local pool = {}
+  local tier = Bots.tier(seed, id)
+  local pool, all = {}, {}
   for _, e in ipairs(Bots.LOOKS) do
     local haveWalk = not (data and data.sprites) or data.sprites[e.walk]
     local haveClass = not (data and data.trainers) or data.trainers[e.class]
-    if haveWalk and haveClass then pool[#pool + 1] = e end
+    if haveWalk and haveClass then
+      all[#all + 1] = e
+      -- The tier picks the CLASS, and the class IS the AI: the pic and the
+      -- AI temperament come together (see BOT_TRAINER_CLASS in main.lua).
+      -- Only COOLTRAINER_M/F have an entry in data/scripts/ai_classes.lua;
+      -- the other eight fall through to GenericAI, which never uses an
+      -- item and never switches.  So a cooltrainer is the dangerous one --
+      -- true in Gen 1, and a signal a player can learn to read on sight.
+      if (e.ai == true) == (tier.ai == true) then pool[#pool + 1] = e end
+    end
   end
+  -- a build with none of the tier's classes falls back to any face rather
+  -- than to no face
+  if #pool == 0 then pool = all end
   if #pool == 0 then return nil end
   -- a stream of its own: sharing the name's or the party's would tie a
   -- bot's face to its team, and every FISHER would lead the same mon
@@ -138,11 +226,16 @@ Bots.HUNT_FROM = 6
 -- twenty-five second seam clock is a pleasant amble with twenty trainers
 -- alive and far too patient with three: the last pair could spend a whole
 -- fog phase two maps apart, each politely waiting out its own timer.
-function Bots.roamSeconds(alive)
+-- `tier` scales it: an ACE crosses a seam sooner than a ROOKIE does, which
+-- is what "plays aggressively" means for something whose only verb is
+-- walking.  Floored at four seconds so no tier turns into a blur.
+function Bots.roamSeconds(alive, tier)
   alive = tonumber(alive) or math.huge
-  if alive <= 3 then return 8 end
-  if alive <= Bots.HUNT_FROM then return 14 end
-  return Bots.ROAM_SECONDS
+  local base = Bots.ROAM_SECONDS
+  if alive <= 3 then base = 8
+  elseif alive <= Bots.HUNT_FROM then base = 14 end
+  local scale = (tier and tier.roamScale) or 1
+  return math.max(4, base * scale)
 end
 
 -- After a fight, both sides get a breather before another one, so a crowded
@@ -211,17 +304,25 @@ end
 -- two level 100 teams and not an ambush by something that never grew.
 function Bots.party(seed, id, data, level)
   local rng = Bots.rng(seed, id)
+  local tier = Bots.tier(seed, id)
   local pool = {}
-  for _, s in ipairs(SPECIES) do
+  for _, s in ipairs(Bots.pool(tier)) do
     if not data or not data.pokemon or data.pokemon[s] then pool[#pool + 1] = s end
   end
+  -- a build without the tier's species degrades to the common pool, and
+  -- then to RATTATA, rather than asserting mid-battle
+  if #pool == 0 then
+    for _, s in ipairs(SPECIES) do
+      if not data or not data.pokemon or data.pokemon[s] then pool[#pool + 1] = s end
+    end
+  end
   if #pool == 0 then pool = { "RATTATA" } end
-  -- ONE mon, because that is what a player has when they drop.  Two mons
-  -- made a bot the favourite in every opening fight, so the first trainer
-  -- you met usually ended your match before you could catch anything --
-  -- the opposite of a battle royale's build-a-team arc.
   local lv = math.max(1, math.min(100, math.floor(tonumber(level) or 5)))
-  return { { species = pool[rng(1, #pool)], level = lv } }
+  local out = {}
+  for _ = 1, Bots.partySize(tier, lv) do
+    out[#out + 1] = { species = pool[rng(1, #pool)], level = lv }
+  end
+  return out
 end
 
 -- Where a bot tries to step next.  Returns a direction, or nil to stand
@@ -270,6 +371,243 @@ function Bots.wander(bot, rng, canWalk, toward)
     if ok(dir) then return dir end
   end
   return nil
+end
+
+-- ---------------------------------------------------------------- GOALS
+--
+-- Why bots have goals at all (POK-121).
+--
+-- Bots.wander below is a random walk with a sticky heading.  On its own
+-- terms it is fine -- it does not beeline, it does not twitch -- but it was
+-- written for a bot nobody was looking at, and the spectator camera means
+-- somebody always is.  A dead player follows a bot for minutes, and a
+-- random walk over a fifty-cell route reads as exactly what it is: pacing
+-- back and forth.  It is the one behaviour that cannot be mistaken for a
+-- person.
+--
+-- A player, watched from outside, is legible: they walk somewhere, they
+-- stop and do something, they walk somewhere else.  So a bot gets a GOAL
+-- -- a cell on this map and a reason -- walks a real path to it, stands
+-- there for a beat doing the thing, and picks another.
+--
+-- Everything here is PURE and derived from the bot's own rng, exactly like
+-- its name and party: whoever walks into a bot fights it locally, so no
+-- client may need to ask another what a bot is up to.
+--
+-- The kinds, in the order chooseGoal prefers them:
+--
+--   ring    the fog is on this map, or close: leave toward the eye.  The
+--           one goal that overrides everything, because a player would.
+--   item    a spill on this map -- a fallen trainer's mons and bag.
+--           Walking over to loot is the most player-like thing there is.
+--   grass   the nearest tall grass, then STAND IN IT for a few seconds.
+--           From outside this is indistinguishable from hunting for a
+--           team, which is what the first two minutes of a match are.
+--   seam    nothing here worth doing: cross to a neighbouring map.
+--
+-- Trainers are deliberately not a kind yet.  A route trainer is identified
+-- through data:textEntry, which is engine data this module cannot reach
+-- and stay pure; when it becomes a goal it arrives the same way `items`
+-- does, as cells in ctx.
+
+-- How long a bot stands at a goal once it arrives, in seconds.  Grass is
+-- the long one on purpose: it is the beat that has to read as a battle,
+-- and it is paired with the busy mark (POK-113) so a spectator sees the
+-- same bubble a player in a fight wears.
+--
+-- `stroll` is the fallback and it is NOT optional.  The first cut of this
+-- had chooseGoal return "seam" when a map offered no errand, on the
+-- reasoning that a bot with nothing to do should leave.  Five of six bots
+-- in the very first measured run then never moved AT ALL for a whole
+-- minute: they had dropped in TOWNS, which have little or no grass, and a
+-- seam goal only asks the roam clock to hurry -- while Bots.homeward
+-- declines to move a bot already standing on the map nearest the ring's
+-- eye.  Nothing else was left to move them.  A bot must always have an
+-- errand it can perform HERE.
+Bots.DWELL = { grass = 6, item = 1.5, stroll = 0, ring = 0, seam = 0 }
+
+-- A bot gives up on a goal it cannot reach rather than grinding at a wall.
+Bots.GOAL_SECONDS = 20
+
+-- How far away an errand has to be to be worth walking to.
+--
+-- Without this a bot standing in a dense patch of grass picks the NEAREST
+-- grass, which is the cell it is already beside: one step, a six-second
+-- dwell, and the same choice again.  Measured, that looked like a bot
+-- moving three cells in a minute -- pacing with extra steps, which is the
+-- exact complaint the errands were written to fix.  A cell you are already
+-- standing in is not somewhere to go.
+Bots.MIN_ERRAND = 6
+
+-- The BFS ceiling.  Kanto's biggest outdoor map is well under this; the
+-- cap is here so a pathological map cannot stall the host, which walks
+-- every bot on the same frame.
+Bots.PATH_NODES = 3000
+
+local Map = require("src.world.Map")
+
+-- Is this cell tall grass?  Off the map DEFINITION, like Spawn.walkable,
+-- so the host can reason about a map nobody is standing on.
+function Bots.isGrass(maps, tilesets, mapId, x, y)
+  local def = maps and maps[mapId]
+  local ts = def and tilesets and tilesets[def.tileset]
+  local grass = ts and ts.grassTile
+  if not grass then return false end
+  if x < 0 or y < 0 or x >= def.width * 2 or y >= def.height * 2 then return false end
+  return Map.defCellTile(def, ts, x, y) == grass
+end
+
+-- Every tall-grass cell on a map.  Walked once per map and cached by the
+-- caller: this is a full sweep, and it cannot change during a match.
+function Bots.grassCells(maps, tilesets, mapId)
+  local def = maps and maps[mapId]
+  local ts = def and tilesets and tilesets[def.tileset]
+  local out = {}
+  if not (def and ts and ts.grassTile) then return out end
+  for y = 0, def.height * 2 - 1 do
+    for x = 0, def.width * 2 - 1 do
+      if Map.defCellTile(def, ts, x, y) == ts.grassTile
+         and Spawn.walkable(maps, tilesets, mapId, x, y) then
+        out[#out + 1] = { x = x, y = y }
+      end
+    end
+  end
+  return out
+end
+
+-- Breadth-first path from `from` to `to`, as a list of directions.
+--
+-- Repathing from scratch every step (what the PvP driver does) is fine for
+-- one client driving one character and wrong for a host walking thirty
+-- bots: the path is computed once, kept on the bot, and only rebuilt when
+-- a step is refused or the goal changes.
+--
+-- Returns nil when there is no route -- which is a real answer, not a
+-- failure: a goal across water or behind a ledge should be abandoned, and
+-- chooseGoal will pick another.
+-- Parent pointers, not a path copied onto every node: the obvious version
+-- carries a growing array through the frontier, which is quadratic in
+-- memory over a map-sized search and allocates on every cell.  One table
+-- per visited cell, walked backwards once at the end, is the same answer
+-- for a fraction of the garbage -- and the host runs this for thirty bots.
+--
+-- (Also: no `unpack`.  It is a global in LuaJIT and `table.unpack` in 5.2+,
+-- and the mod sandbox is not the harness -- the POK-90 lesson.  Nothing
+-- here needs it.)
+function Bots.path(canWalk, from, to, limit)
+  if not (from and to) then return nil end
+  if from.x == to.x and from.y == to.y then return {} end
+  local function key(x, y) return y * 4096 + x end
+  local startKey = key(from.x, from.y)
+  local came = { [startKey] = false }   -- false: the root, not a parent
+  local queue = { { x = from.x, y = from.y, key = startKey } }
+  local head, nodes, cap = 1, 0, limit or Bots.PATH_NODES
+  while queue[head] do
+    local cur = queue[head]
+    head = head + 1
+    nodes = nodes + 1
+    if nodes > cap then return nil end
+    for _, dir in ipairs(DIRS) do
+      local d = DELTA[dir]
+      local nx, ny = cur.x + d[1], cur.y + d[2]
+      local k = key(nx, ny)
+      if came[k] == nil and canWalk(nx, ny) then
+        came[k] = { from = cur, dir = dir }
+        if nx == to.x and ny == to.y then
+          local dirs, node = {}, came[k]
+          while node do
+            dirs[#dirs + 1] = node.dir
+            node = came[node.from.key]
+          end
+          -- collected leaf-first; reverse in place
+          for i = 1, math.floor(#dirs / 2) do
+            dirs[i], dirs[#dirs - i + 1] = dirs[#dirs - i + 1], dirs[i]
+          end
+          return dirs
+        end
+        queue[#queue + 1] = { x = nx, y = ny, key = k }
+      end
+    end
+  end
+  return nil
+end
+
+-- The cells worth crossing a map for: everything at least MIN_ERRAND away.
+-- Empty when they are all underfoot, which is a real answer -- the caller
+-- falls through to a different kind of errand rather than shuffling.
+function Bots.farEnough(from, cells, least)
+  least = least or Bots.MIN_ERRAND
+  local out = {}
+  for _, c in ipairs(cells or {}) do
+    if math.abs(c.x - from.x) + math.abs(c.y - from.y) >= least then
+      out[#out + 1] = c
+    end
+  end
+  return out
+end
+
+-- The nearest cell from a list, by walking distance approximated with
+-- Manhattan -- cheap, and close enough to pick a sensible target before
+-- the BFS confirms it is reachable.
+function Bots.nearest(from, cells)
+  local best, bestD
+  for _, c in ipairs(cells or {}) do
+    local d = math.abs(c.x - from.x) + math.abs(c.y - from.y)
+    if not bestD or d < bestD then best, bestD = c, d end
+  end
+  return best
+end
+
+-- What this bot should be doing.  Pure: ctx carries everything about the
+-- world, so the whole decision is testable without an engine.
+--
+--   ctx.inFog     this map is outside the ring
+--   ctx.ringSoon  the ring is close enough to start moving
+--   ctx.items     spill cells on this map
+--   ctx.grass     tall-grass cells on this map
+--   ctx.exits     connected map ids
+--
+-- Returns { kind =, x =, y = } for a cell on this map, or { kind = "seam" }
+-- to leave.  nil never: a bot always has something to be doing.
+function Bots.chooseGoal(bot, ctx, rng)
+  ctx = ctx or {}
+  -- The fog outranks everything, exactly as it does for a player: nothing
+  -- else on this map matters if standing here is what kills you.
+  if ctx.inFog or ctx.ringSoon then return { kind = "seam", why = "ring" } end
+
+  -- Loot on the floor beats grass: it is already a team, and somebody
+  -- else paid for it.
+  local item = Bots.nearest(bot, ctx.items)
+  if item then return { kind = "item", x = item.x, y = item.y } end
+
+  -- Grass, most of the time -- but not always, or a bot with grass on its
+  -- map would never leave it and the roster would never mix.
+  local grass = Bots.farEnough(bot, ctx.grass)
+  if #grass > 0 and rng() < 0.75 then
+    -- not always the NEAREST patch: every bot on a route beelining to the
+    -- same tuft is its own tell
+    local pick = (rng() < 0.5 and Bots.nearest(bot, grass))
+      or grass[rng(1, #grass)]
+    return { kind = "grass", x = pick.x, y = pick.y }
+  end
+
+  -- Nowhere in particular, but somewhere: a far cell on this map.  Far on
+  -- purpose -- a near one is the orbit-a-cell shuffle this replaced.
+  local cells = ctx.cells
+  if cells and #cells > 0 then
+    local pick
+    for _ = 1, 8 do
+      local c = cells[rng(1, #cells)]
+      pick = pick or c
+      if c and (math.abs(c.x - bot.x) + math.abs(c.y - bot.y)) >= 8 then
+        pick = c
+        break
+      end
+    end
+    if pick then return { kind = "stroll", x = pick.x, y = pick.y } end
+  end
+
+  return { kind = "seam", why = "roam" }
 end
 
 -- The stride (POK-85): ONE step toward `toward`, no pause and no

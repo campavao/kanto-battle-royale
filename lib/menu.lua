@@ -31,6 +31,10 @@ function Menu.view(BR)
   if phase == "safari" or phase == "drop" or phase == "match" or phase == "over" then
     return "match"
   end
+  -- Ahead of every room face and behind the match one: a refusal happens
+  -- in a lobby and leaves the room, so by the time it is read there is no
+  -- relay left to be open -- but a match already running outranks it.
+  if BR.refused then return "refused" end
   if relay and relay:isOpen() then return "lobby" end
   if relay and relay.status == "connecting" then return "connecting" end
   return "menu"
@@ -89,8 +93,48 @@ function Menu.items(mod, BR, game)
     -- actually decide the match and nothing else.
     if not BR.solo then
       row("CODE " .. tostring(relay.code))
+      -- A "!" against anyone the door flagged (POK-142): their engine
+      -- release, or their copy of this mod, is not ours -- so the room
+      -- works, the ghosts walk, and the FIGHT is the one thing that will
+      -- not.  Marked on the roster rather than only said in a text box,
+      -- for two reasons: the lobby is where somebody is actually looking
+      -- while they wait, and this screen opens from the TITLE as well as
+      -- from the start menu -- with no overworld under it there is nothing
+      -- to queue a say onto at all.
+      --
+      -- The "!" goes BEFORE the host's "*", which looks backwards and is
+      -- not: the Gen 1 font has no asterisk, so the host marker draws as a
+      -- blank cell (it always has -- this is not new).  With the "!" last
+      -- a flagged host read "- HOSTA !", the mark floating a space away
+      -- from the name it belongs to.  Caught in a screenshot from the
+      -- two-client `door` run, which is the only place it could be.
       for _, m in ipairs(relay.members) do
-        row("- " .. m.name .. ((m.id == relay.hostId) and "*" or ""))
+        row("- " .. m.name .. (BR:buildTrouble(m.id) and "!" or "")
+            .. ((m.id == relay.hostId) and "*" or ""))
+      end
+      -- ...and, under the live roster, whoever the door turned away.  On
+      -- the host this is the only trace of them: a refused guest is out of
+      -- the room a moment after arriving, so without this a host running
+      -- something nobody else has just watches people fail to appear.
+      for _, f in ipairs(BR:flaggedAbsent()) do
+        row("! " .. tostring(f.name))
+      end
+      -- ...and when it has found something, our own two numbers under it,
+      -- because the next thing that happens is somebody reading them out
+      -- to somebody else.  Only under a warning: a fightable room needs
+      -- none of this, and the lobby grows a row per trainer already.
+      local trouble = BR:buildTroubleLabel()
+      if trouble then
+        row(trouble)
+        local mine = BR.buildOf and BR:buildOf()
+        if mine then
+          -- three short rows rather than two long ones: fit() sizes the
+          -- box to the widest label + 3 and the canvas is 20 tiles, so
+          -- anything past 17 characters is quietly clipped off the right
+          row("YOU ARE ON:")
+          row("ROYALE v" .. tostring(mine.mod or "?"))
+          if mine.engine then row("GAME v" .. tostring(mine.engine)) end
+        end
       end
       if host then
         -- an open room is one strangers can QUICK PLAY into without ever
@@ -139,6 +183,20 @@ function Menu.items(mod, BR, game)
       row("WAIT FOR HOST")
     end
     items[#items + 1] = { label = "LEAVE", onSelect = function() BR:teardown() end }
+
+  elseif view == "refused" then
+    -- The room this client was turned away from, and both builds in full
+    -- (POK-142).  Rows rather than a text box on purpose: this screen
+    -- opens from the TITLE as well as the start menu, so there is not
+    -- always an overworld to queue a say onto -- and teardown's own
+    -- message is documented as lost on the way to the title (POK-115).
+    for _, label in ipairs((BR.refused and BR.refused.rows) or {}) do
+      row(label)
+    end
+    items[#items + 1] = {
+      label = "OK", keepOpen = true,
+      onSelect = function() BR:clearRefusal() end,
+    }
 
   elseif view == "connecting" then
     row("CONNECTING...")
@@ -207,13 +265,17 @@ function Menu.items(mod, BR, game)
       }))
     end)
     -- Which build this actually is.  Everyone in a match has to be on the
-    -- same one -- the wire has a PROTOCOL number and a mismatched pair
-    -- fails at the join rather than at the fault -- and "check your
-    -- version" is a useless thing to say to somebody with no way to read
-    -- it.  The launcher's MODS tab knows, but that is outside the game.
-    -- Read from mod.version (the loader hands each mod its own manifest
-    -- version) rather than written here, so it cannot drift from the
-    -- manifest the way a hand-kept copy would.
+    -- same one, and "check your version" is a useless thing to say to
+    -- somebody with no way to read it -- the launcher's MODS tab knows,
+    -- but that is outside the game.  Read from mod.version (the loader
+    -- hands each mod its own manifest version) rather than written here,
+    -- so it cannot drift from the manifest the way a hand-kept copy would.
+    --
+    -- The ENGINE release is the other half of the answer (POK-142), and it
+    -- is NOT here: this face has to fit one screen without scrolling
+    -- (POK-104) and it is already full.  It shows up in the lobby, where
+    -- the question is actually asked -- and only when the door has found
+    -- something, which is the only time anyone needs to read it out.
     row("v" .. tostring(mod.version or "?"))
   end
 

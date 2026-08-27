@@ -68,7 +68,21 @@ local Wire = {}
 -- 8: busy -- a trainer says when they are in a menu or in a fight, so the
 --    room can see it over their head (POK-113); a v7 peer sends nothing
 --    and would stand there looking idle while it read its PACK
-Wire.PROTOCOL = 8
+-- 9: a place says which BUILD it came from -- the engine release and this
+--    mod's version.  Neither was on the wire and neither is negotiable:
+--    the engine refuses a link battle between two different engine
+--    RELEASES (src/link/Handshake.lua checkCompat -> engine_skew) and a
+--    different mod version changes the link fingerprint (Fingerprint's
+--    modKey folds id@version for every mod that has not declared
+--    affects_link = false, and this one has not).  So a mismatched pair
+--    shares the overworld perfectly happily -- room, roster, ghosts,
+--    walking, all of it on this wire -- and then cannot fight, which is
+--    the whole game.  A v8 peer sends neither field and is refused at
+--    `place` anyway; what these buy is a room that can NAME the
+--    difference at the door, instead of leaving it to be discovered at
+--    the first engage where the only message is the engine's "Link
+--    battle needs the same version and mods" -- which names no number.
+Wire.PROTOCOL = 9
 
 Wire.DIRS = { up = true, down = true, left = true, right = true }
 Wire.STATUS = { lobby = true, alive = true, battle = true, out = true }
@@ -79,6 +93,10 @@ Wire.BUSY = { menu = true, battle = true }
 
 local MAX_NAME = 7     -- the Gen 1 player name box
 local MAX_ID = 64
+local MAX_VER = 16     -- "0.34.0", "0.0.0-dev", and room for a suffix.
+                       -- Short on purpose: these land in an 18-column Gen
+                       -- 1 text box (lib/door.lua), so a stranger does not
+                       -- get to decide how many lines we spend on them.
 local MAX_CELL = 1000
 local MAX_PLAYERS = 32
 
@@ -105,11 +123,39 @@ function Wire.cleanName(name)
   return out
 end
 
+-- A version off the wire is a stranger's string that ends up in one of our
+-- text boxes, so it keeps the semver alphabet and nothing else.  nil means
+-- UNKNOWN -- a peer that sent none, or sent rubbish -- which is not the
+-- same thing as "different"; see Wire.buildDiffers.
+function Wire.cleanVersion(v)
+  if type(v) ~= "string" then return nil end
+  local out = v:gsub("[^%w%.%-+]", ""):sub(1, MAX_VER)
+  if out == "" then return nil end
+  return out
+end
+
+-- Can these two builds fight each other?  Either half being unknown is NOT
+-- a mismatch: a bot's place carries no build of its own, and an old peer
+-- carries none at all.  Saying nothing is better than accusing somebody of
+-- a difference the room cannot actually see.
+function Wire.buildDiffers(mine, theirs)
+  if type(mine) ~= "table" or type(theirs) ~= "table" then return false end
+  if mine.engine and theirs.engine and mine.engine ~= theirs.engine then
+    return true
+  end
+  if mine.mod and theirs.mod and mine.mod ~= theirs.mod then return true end
+  return false
+end
+
 -- ------- constructors
 
-function Wire.place(map, x, y, facing, status, sprite, as)
+-- `build` is { engine =, mod = } and is the sender's OWN (PROTOCOL 9).
+-- Bot places pass none: a bot is the host's puppet with no install of its
+-- own, and it never fights over the link, so it has no build to compare.
+function Wire.place(map, x, y, facing, status, sprite, as, build)
   return { t = "place", v = Wire.PROTOCOL, map = map, x = x, y = y, f = facing,
-           st = status, sprite = sprite, as = as }
+           st = status, sprite = sprite, as = as,
+           ev = build and build.engine, mv = build and build.mod }
 end
 
 function Wire.step(dir, x, y, map, as)
@@ -197,7 +243,13 @@ function Wire.again() return { t = "again" } end
 -- answer CHANGES rather than every tick, and re-sent on the position
 -- resync so a peer that missed the edge is not left holding a stale mark.
 -- nil is the common case (walking around) and costs one field.
-function Wire.busy(kind) return { t = "busy", k = kind } end
+-- `as` lets the host put a mark over a BOT's head (POK-121).  Everything
+-- else about a bot is derived, but this is a broadcast of a decision the
+-- host alone made -- how long that bot stands in the grass -- so it has to
+-- ride the wire like its steps do.  Without it a bot's six-second errand
+-- dwell reads as a trainer who stopped for no reason, which is worse than
+-- the pacing it replaced.
+function Wire.busy(kind, as) return { t = "busy", k = kind, as = as } end
 
 -- a spectator asks the trainer they watch what they carry (POK-18)...
 function Wire.peek() return { t = "peek" } end
@@ -228,18 +280,26 @@ local function actorOf(m)
   return m.as
 end
 
+-- The third return is a CODE for the caller to branch on.  A protocol
+-- mismatch is the one drop worth telling a player about rather than only
+-- the log: it is another BATTLE ROYALE, it will happen on every wire bump,
+-- and from this side it is indistinguishable from a peer who simply never
+-- moves.  Matching on a formatted string would be the alternative.
 decoders.place = function(m)
   if m.v ~= Wire.PROTOCOL then
-    return nil, ("protocol %s, expected %d"):format(tostring(m.v), Wire.PROTOCOL)
+    return nil, ("protocol %s, expected %d"):format(tostring(m.v), Wire.PROTOCOL),
+           "protocol"
   end
   if m.map ~= nil and not isMapId(m.map) then return nil, "bad map" end
   if m.map ~= nil and not (isCell(m.x) and isCell(m.y)) then return nil, "bad cell" end
   if m.f ~= nil and not Wire.DIRS[m.f] then return nil, "bad facing" end
   if not Wire.STATUS[m.st] then return nil, "bad status" end
+  local engine, modv = Wire.cleanVersion(m.ev), Wire.cleanVersion(m.mv)
   return { t = "place", map = m.map, x = m.x, y = m.y, facing = m.f or "down",
            status = m.st, as = actorOf(m),
            sprite = type(m.sprite) == "string" and #m.sprite <= MAX_ID
-                    and m.sprite or nil }
+                    and m.sprite or nil,
+           build = (engine or modv) and { engine = engine, mod = modv } or nil }
 end
 
 decoders.step = function(m)
@@ -438,9 +498,9 @@ decoders.busy = function(m)
   -- something this build has no mark for, and the honest answer is "not
   -- busy" rather than dropping the message and keeping the old mark up
   if m.k ~= nil and (type(m.k) ~= "string" or not Wire.BUSY[m.k]) then
-    return { t = "busy", kind = nil }
+    return { t = "busy", kind = nil, as = actorOf(m) }
   end
-  return { t = "busy", kind = m.k }
+  return { t = "busy", kind = m.k, as = actorOf(m) }
 end
 
 decoders.peek = function() return { t = "peek" } end

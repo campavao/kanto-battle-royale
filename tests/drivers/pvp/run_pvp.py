@@ -32,6 +32,13 @@ SCENARIOS = {
     "duel": ("host_duel.lua", "guest_duel.lua"),
     "stall": ("host_stall.lua", "guest_stall.lua"),
     "freeze": ("host_freeze.lua", "guest_stall.lua"),
+    # two clients the handshake refuses to lockstep: forces
+    # engine_skew and photographs whatever the refusal produces
+    "skew": ("host_skew.lua", "guest_skew.lua"),
+    # the same mismatch, caught HOURS earlier: the guest reports a
+    # different engine release and the room's door must name it in the
+    # lobby, before anyone drops (POK-142)
+    "door": ("host_door.lua", "guest_door.lua"),
 }
 
 
@@ -64,7 +71,8 @@ def main():
     scenario = args.pop(0) if args and args[0] in SCENARIOS else "duel"
     workdir = args.pop(0) if args else tempfile.mkdtemp(prefix="br-pvp-")
     os.makedirs(workdir, exist_ok=True)
-    for name in ("code.txt", "posted.txt", "host.plog", "guest.plog"):
+    for name in ("code.txt", "posted.txt", "joined.txt", "hostdone.txt",
+                 "guestdone.txt", "inplace.txt", "host.plog", "guest.plog"):
         p = os.path.join(workdir, name)
         if os.path.exists(p):
             os.remove(p)

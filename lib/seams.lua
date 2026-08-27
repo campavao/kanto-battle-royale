@@ -68,6 +68,25 @@ function Seams.ok()
   return #Seams.check().missing == 0
 end
 
+-- Which engine RELEASE this is, for the room door.  pcall'd through the
+-- same tryRequire as every probe above: a missing Version module is
+-- "unknown", never a crash.
+--
+-- Worth knowing what this returns and when.  src/core/Version.lua ships
+-- the placeholder "0.0.0-dev" in the working tree and says CI stamps the
+-- real X.Y.Z "into the packed game.love only, never the working tree".
+-- So two checkouts always agree with each other and never with a released
+-- build -- which is exactly what the engine's own handshake does with the
+-- same value, and exactly why a local checkout can never link-battle a
+-- packed build.  The door reports what it reads; it does not try to be
+-- cleverer than the gate it is explaining.
+function Seams.engineVersion()
+  local Version = tryRequire("src.core.Version")
+  local v = Version and Version.engine
+  if type(v) ~= "string" or v == "" then return nil end
+  return v
+end
+
 -- One line for the boot log, so an engine that cannot run this mod says so
 -- in a bug report rather than in a stack trace.
 function Seams.summary()

@@ -12,6 +12,7 @@ Play with up to 30 other players at one time, dropping all over Kanto, to be the
 4. Launch the game. `BATTLE ROYALE` is on the title menu.
 
 > **This mod needs gen1recomp v0.2.26 or newer.**
+> Everyone in a match needs the same game and mod version — [why that is](COMPATIBILITY.md).
 
 ## Screenshots
 

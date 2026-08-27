@@ -50,6 +50,7 @@ local Career = require("mods.battle_royale.lib.career")
 local Coexist = require("mods.battle_royale.lib.coexist")
 local Lockstep = require("mods.battle_royale.lib.lockstep")
 local Stats = require("mods.battle_royale.lib.stats")
+local Door = require("mods.battle_royale.lib.door")
 local Log = require("mods.battle_royale.lib.log")
 
 local SCREEN = "BattleRoyaleMenu"
@@ -75,7 +76,6 @@ local RESYNC_TICKS = 300
 -- rightly drops the connection as a flood.  Seconds keep bots walking at a
 -- human pace and the traffic bounded, whatever the host's clock is doing.
 local BOT_STEP_SECONDS = 0.45
-local GOAL_SECONDS = 30           -- a bot's in-map destination goes stale (POK-71)
 local FOG_SHELTER_SECONDS = 30    -- a bot fight blocks the fog this long (POK-63)
 -- what SOLO VS BOTS fills an empty roster with: enough that the match has a
 -- shape to it, few enough that the first fight is not immediate
@@ -180,6 +180,15 @@ local STORY_FLAGS = {
   -- SILPH SCOPE) stay vanilla: going and getting one is fair play.
   "EVENT_BEAT_ROUTE12_SNORLAX", "EVENT_BEAT_ROUTE16_SNORLAX",
   "EVENT_GAVE_GUARDS_DRINK", "EVENT_BEAT_GHOST_MAROWAK",
+  -- POK-128.  The Elite Four rooms walk a first-time visitor six cells
+  -- north (data/scripts/story4.lua e4ExitSeal).  That half is an onEnter,
+  -- and map_scripts composes onEnter ALL-RUN, so unlike the shove beside
+  -- it (lib/lockstep.lua) a mod cannot consume it -- the flag is the only
+  -- lever.  Saying the walk already happened costs a match nothing: it
+  -- gates one cutscene and nothing else reads it.
+  "EVENT_AUTOWALKED_INTO_LORELEIS_ROOM",
+  "EVENT_AUTOWALKED_INTO_BRUNOS_ROOM",
+  "EVENT_AUTOWALKED_INTO_AGATHAS_ROOM",
 }
 
 return function(mod)
@@ -350,11 +359,26 @@ return function(mod)
     return BR.game and mod.world:current()
   end
 
+  -- Which build this client is, for the room door.  Computed once: neither
+  -- half can change while the process is running -- the engine release is
+  -- baked into the binary and the loader hands a mod its manifest version
+  -- at load -- and this is read on every place broadcast.
+  local myBuild
+  local function build()
+    if not myBuild then
+      myBuild = { engine = Seams.engineVersion(),
+                  mod = tostring(mod.version or "?") }
+    end
+    return myBuild
+  end
+  BR.buildOf = build
+
   local function broadcastPlace()
     if not (BR.relay and BR.relay:isOpen()) then return end
     local h = here()
     BR.relay:broadcast(Wire.place(h and h.mapId, h and h.x, h and h.y,
-                                  h and h.facing, BR.status, mySprite()))
+                                  h and h.facing, BR.status, mySprite(),
+                                  nil, build()))
     if h then BR.sentMap, BR.sentFacing = h.mapId, h.facing end
   end
 
@@ -536,6 +560,19 @@ return function(mod)
       -- counter is only cleared once the send is actually accepted.
       local m = Stats.message(stats, mod.version)
       if m and relay:stat(m) then Stats.flushed(mod, stats, log) end
+      -- Say who we are AT THE JOIN (POK-142).  Until the door there was no
+      -- reason to: the first place used to go out at the drop (onStart),
+      -- and the tick's is gated on inRound(), so nothing at all travelled
+      -- while a room sat in the lobby.  That is exactly the window the
+      -- door has to work in -- a mismatch found after START is a mismatch
+      -- found too late to do anything about.
+      --
+      -- There is no overworld yet (this screen opens from the TITLE), so
+      -- `here()` is nil and the place carries no map.  That is a shape the
+      -- decoder already allows and the ghost layer already ignores: a
+      -- trainer with no map is on no map, so nobody is drawn anywhere.
+      -- What rides it is the build.
+      broadcastPlace()
     end)
     relay:on("roster", function(members)
       -- someone arriving with seconds left would be dropped into a match
@@ -558,6 +595,14 @@ return function(mod)
       if #members > 1 and (BR.lastRoster or 0) <= 1 then
         BR.sentFacing, BR.resync = nil, RESYNC_TICKS
       end
+      -- A newcomer has heard nobody's join announcement, so everyone
+      -- already here repeats theirs (POK-142).  Lobby only: in a round the
+      -- resync cadence above already covers it, and the room is locked
+      -- against late joiners anyway.
+      if BR.phase == "lobby" and #members > (BR.lastRoster or 0)
+         and relay:isOpen() then
+        broadcastPlace()
+      end
       BR.lastRoster = #members
       -- forget anyone who left; the host recounts survivors
       local present = {}
@@ -573,6 +618,15 @@ return function(mod)
           BR.players[id] = nil
         end
       end
+      -- The door's findings deliberately SURVIVE the leave (POK-142).  An
+      -- earlier cut cleared them here, on the reasoning that a warning
+      -- outliving the trainer it was about is worse than none.  That was
+      -- right while the door only warned; under the refusal it is exactly
+      -- backwards, because leaving is now what a flagged trainer always
+      -- does -- clearing on leave would erase the note a fraction of a
+      -- second after it was written, every single time.  They go on
+      -- resetMatch instead, with the room they belonged to -- or on the
+      -- clock, once Door.NOTE_SECONDS is up.
       -- The relay hands the room on by naming a new host in the roster, and
       -- lib/relay.lua has already adopted it by the time we get here -- so a
       -- promotion is something to notice, not something to negotiate.
@@ -716,6 +770,12 @@ return function(mod)
     end
     self.fellAt = nil
     self.players = {}
+    -- the door's findings go with the room they were about (POK-142): the
+    -- next room is different people, and a stale "!" against an id the
+    -- relay has since handed to somebody else would be a lie
+    self.oldPeers = {}
+    self.flagged = {}
+    self.buildWarned = nil
     self.pending = nil
     self.phase = "lobby"   -- setPhase would log a teardown as a new match
     self.status = "lobby"
@@ -1157,12 +1217,207 @@ return function(mod)
     LinkBattle.newGuest = withClock(LinkBattle.newGuest)
   end
 
+  -- ------- the room door (POK-142)
+  --
+  -- Sharing the overworld needs nothing but this mod's own PROTOCOL.
+  -- FIGHTING needs two more things to match, and the wire never carried
+  -- either of them:
+  --
+  --   the ENGINE RELEASE   src/link/Handshake.lua checkCompat returns
+  --                        `engine_skew` for any difference in the version
+  --                        STRING, and battleAllowed refuses it.  Not the
+  --                        major, not the minor -- the string.
+  --   this MOD's VERSION   Fingerprint.modKey folds `id@version` of every
+  --                        enabled mod that has not declared
+  --                        affects_link = false into the link digest, and
+  --                        this mod has not.  Different version, different
+  --                        digest, verdict `subset`, battle refused.
+  --
+  -- So a mismatched pair joins, shares a room, watches each other's ghosts
+  -- walk around, drops into Kanto together -- and then cannot engage.  The
+  -- only thing said at that moment is the engine's own "Link battle needs
+  -- the same version and mods", which names neither number and appears
+  -- several minutes after the decision that caused it.
+  --
+  -- This is a DOOR, not a bouncer.  Nobody is refused: the comparison is
+  -- new, the overworld genuinely does work, and bouncing a player out of a
+  -- room over it would be a worse failure than the one being diagnosed.
+  -- What it does is name the difference, at the join, in both numbers.
+
+  -- A peer whose place we could not even decode, because their BATTLE
+  -- ROYALE speaks a different PROTOCOL.  We know nothing about them except
+  -- that they are there -- their versions rode the message we just threw
+  -- away -- so this is the one case the door cannot put numbers on.
+  function BR:noteOldPeer(id)
+    if not id or Bots.isBot(id) then return end
+    self.oldPeers = self.oldPeers or {}
+    if self.oldPeers[id] then return end
+    self.oldPeers[id] = true
+    local name = (self.relay and self.relay:nameOf(id)) or "A trainer"
+    log:warn("door: %s speaks another BATTLE ROYALE protocol", tostring(name))
+    self:warnBuild(Door.oldSentence(name))
+  end
+
+  -- A peer we understood, who told us what they are running.
+  function BR:noteBuild(id, p)
+    if not p or Bots.isBot(id) then return end
+    local mine, theirs = self:buildOf(), p.build
+    if not Wire.buildDiffers(mine, theirs) then return end
+    p.buildBad = true
+    -- Sticky, and keyed on the ROOM rather than on who is currently in it.
+    -- Under the refusal below a mismatched guest is gone a moment after
+    -- they arrive, so a note that expires with their roster line expires
+    -- before the host can read it -- and a host on a stale build watching
+    -- people bounce off in silence is the failure this whole thing exists
+    -- to prevent, just from the other side.
+    self.flagged = self.flagged or {}
+    if not self.flagged[id] then
+      -- love.timer inline, not the clock() helper: that is defined
+       -- further down and locals capture lexically -- the POK-24 lesson,
+       -- and br_test gates on it.
+      self.flagged[id] = { name = p.name or "A trainer", build = theirs,
+                           at = (love.timer and love.timer.getTime
+                                 and love.timer.getTime()) or 0 }
+      log:warn("door: %s is on %s", tostring(p.name),
+               table.concat(Door.parts(mine, theirs), ", "))
+    end
+
+    -- ------- and the refusal itself
+    --
+    -- Measured against the HOST, and only the host.  "Leave if I differ
+    -- from anyone here" inverts under a crowd: when it is the HOST who is
+    -- the odd one out, every guest walks and the one person nobody can
+    -- fight keeps the room.  Matching the host makes the room homogeneous
+    -- by construction -- everyone agrees with the host, so everyone agrees
+    -- with each other -- and needs no majority logic anywhere.
+    --
+    -- Lobby only.  A room locks for the length of a round, so this is the
+    -- only window it can fire in anyway; and a host handed on mid-match
+    -- (POK-116) must never bounce a player out of a match they are already
+    -- playing, which is what a phase-blind rule would do.
+    local relay = self.relay
+    if self.phase == "lobby" and relay and not relay:isHost()
+       and id == relay.hostId then
+      self:refuseRoom(theirs)
+      return
+    end
+    if not p.buildTold then
+      p.buildTold = true
+      self:warnBuild(Door.sentence(p.name or "A trainer", mine, theirs))
+    end
+  end
+
+  -- Out of the room, and told why, without going anywhere near the title.
+  -- teardown()'s own `message` is documented as lost when it lands on the
+  -- title (POK-115), and this is the single message the feature exists to
+  -- deliver -- so the exit stays on the ROYALE screen and the explanation
+  -- becomes the screen.
+  function BR:refuseRoom(theirs)
+    if self.refusing then return end
+    self.refusing = true
+    local mine = self:buildOf()
+    local rows = Door.refusalRows(mine, theirs)
+    log:warn("door: refused this room -- %s",
+             table.concat(Door.parts(mine, theirs), ", "))
+    local ok, err = pcall(function()
+      if self.relay then self.relay:leave() end
+      self:reset()
+    end)
+    -- after reset(), which runs resetMatch() and would clear it
+    self.refused = { rows = rows }
+    self.refusing = nil
+    if not ok then
+      mod.log:warn("battle royale refusal failed: %s", tostring(err))
+    end
+  end
+
+  function BR:clearRefusal() self.refused = nil end
+
+  -- Said ONCE per session, however many mismatched trainers turn up: seven
+  -- text boxes at the drop would be worse than the silence this replaces.
+  -- The ROYALE menu carries the rest -- a mark against every trainer the
+  -- door flagged, which is where somebody waiting in a lobby is looking
+  -- anyway, and which does not need the script runner.  That matters:
+  -- the menu opens from the TITLE screen as well as from the start menu,
+  -- and with no overworld under it there is nothing to queue a say onto.
+  function BR:warnBuild(text)
+    if self.buildWarned then return end
+    self.buildWarned = true
+    sayLater(text, 1)
+  end
+
+  -- What the menu marks a roster row with: nil, or a reason.
+  function BR:buildTrouble(id)
+    if id == self.myId then return nil end
+    if self.oldPeers and self.oldPeers[id] then return "old" end
+    if self.flagged and self.flagged[id] then return "build" end
+    return nil
+  end
+
+  -- One line for the lobby saying what would have to change, or nil when
+  -- the room is fightable.  Specific on purpose: "cannot battle" leaves a
+  -- player guessing which of the two numbers to chase, and the two are
+  -- chased in different places -- the GAME from wherever they installed
+  -- it, this mod from the launcher's own Check for updates.  An older
+  -- BATTLE ROYALE told us nothing (its place never decoded), so it can
+  -- only ever mean "one of you is behind on the mod".
+  -- Both readers below PRUNE FIRST (Door.NOTE_SECONDS), so a note and the
+  -- row that summarises it can never disagree about whether it is still
+  -- there.
+  function BR:pruneFlagged()
+    -- love.timer inline for the same reason the stamp above is (POK-24)
+    local now = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
+    local flagged = self.flagged
+    if not flagged then return end
+    for id, f in pairs(flagged) do
+      if f.at and (now - f.at) > Door.NOTE_SECONDS then flagged[id] = nil end
+    end
+  end
+
+  -- Computed on the read rather than cached.  An earlier cut cached it and
+  -- refreshed on events, to keep Menu.items -- which runs every frame --
+  -- off a walk of the roster.  The expiry ended that: a note that goes
+  -- stale on a CLOCK has no event to refresh on, and the cache would sit
+  -- there contradicting a row that had already gone.  The walk is over
+  -- `flagged`, which holds only mismatched trainers and is empty in every
+  -- healthy room, so a normal frame pays for one empty table.
+  function BR:buildTroubleLabel()
+    self:pruneFlagged()
+    local peers = {}
+    for _ in pairs(self.oldPeers or {}) do peers[#peers + 1] = { old = true } end
+    for id, f in pairs(self.flagged or {}) do
+      if id ~= self.myId then peers[#peers + 1] = { build = f.build } end
+    end
+    return Door.label(self:buildOf(), peers)
+  end
+
+  -- Trainers the door flagged who are no longer on the roster -- which,
+  -- once a mismatch refuses the room, is all of them within a frame.  The
+  -- lobby lists these under the live members so a host can see who tried.
+  function BR:flaggedAbsent()
+    self:pruneFlagged()
+    local out = {}
+    for id, f in pairs(self.flagged or {}) do
+      if id ~= self.myId and not self.players[id] then
+        out[#out + 1] = { id = id, name = f.name, build = f.build }
+      end
+    end
+    table.sort(out, function(a, b) return tostring(a.id) < tostring(b.id) end)
+    return out
+  end
+
   -- ------- inbound room messages
 
   function BR:onMessage(fromId, raw)
-    local msg, why = Wire.decode(raw)
+    local msg, why, code = Wire.decode(raw)
     if not msg then
       mod.log:warn("battle royale dropped a message: %s", tostring(why))
+      -- The one drop a player can do something about, and the one that
+      -- will happen on every wire bump: their BATTLE ROYALE is a different
+      -- version from ours, so their `place` never decodes and they are
+      -- invisible.  Indistinguishable, from here, from a trainer who
+      -- joined and then never moved -- so say it once.
+      if code == "protocol" then self:noteOldPeer(fromId) end
       return
     end
     -- `as` lets the host move its bots.  Honoured only from the host, so a
@@ -1182,6 +1437,11 @@ return function(mod)
       p.map, p.x, p.y, p.facing = msg.map, msg.x, msg.y, msg.facing
       p.sprite = msg.sprite or p.sprite
       p.status = msg.status
+      -- keep the first answer rather than the latest: a resync from a bot
+      -- the host is puppeting carries no build, and "no build in this
+      -- message" must not erase what the trainer already told us
+      p.build = msg.build or p.build
+      self:noteBuild(actor, p)
       if msg.status == "out" and self:inRound() then self:checkWinner() end
 
     elseif msg.t == "step" then
@@ -1638,16 +1898,142 @@ return function(mod)
     end
   end
 
+  -- Put a mark over a bot's head, once, and tell the room.  Guarded on the
+  -- current value for the same reason broadcastBusy is: this runs on every
+  -- beat of a dwell and the room only needs the edges.
+  -- `id` is passed rather than read off `p`: BR.players is KEYED by id and
+  -- the records do not carry one.
+  function BR:markBot(id, p, kind)
+    if p.busy == kind then return end
+    p.busy = kind
+    if self.relay then self.relay:broadcast(Wire.busy(kind, id)) end
+  end
+
+  -- Tall grass per map, swept once.  It cannot change during a match, and
+  -- the sweep is every cell of the map -- fine once, not once a beat.
+  function BR:grassOn(mapId)
+    local data = self.game and self.game.data
+    if not (data and mapId) then return {} end
+    self.grassCache = self.grassCache or {}
+    local hit = self.grassCache[mapId]
+    if not hit then
+      hit = Bots.grassCells(data.maps, data.tilesets, mapId)
+      self.grassCache[mapId] = hit
+    end
+    return hit
+  end
+
+  -- What this bot is off to do, or nil to let the roam clock move it on.
+  function BR:pickBotGoal(p, now)
+    local g = Bots.chooseGoal(p, {
+      -- the fog outranks every errand, as it does for a player.  Reuses
+      -- the per-map question POK-140 needed for the CENTRE counters.
+      inFog = self:fogOver(p.map),
+      items = self.spills and self.spills:cellsOn(p.map) or nil,
+      grass = self:grassOn(p.map),
+      -- the floor under every other errand: a bot must always have
+      -- somewhere it can walk HERE, or a town with no grass freezes it
+      cells = walkableCells(p.map),
+    }, p.rng)
+    if not g or g.kind == "seam" then
+      -- nothing here worth walking to: bring the seam clock forward rather
+      -- than standing still until it comes round on its own
+      p.lastRoam = 0
+      return nil
+    end
+    g.map, g.at = p.map, now or 0
+    return g
+  end
+
+  -- One step of an errand: walk the path, then STAND THERE for a beat.
+  --
+  -- The dwell is the half that sells it.  A bot that walks to a patch of
+  -- grass and immediately leaves is a bot on a route; a bot that walks
+  -- into the grass and stops for six seconds is a trainer who found
+  -- something.  Same for a spill: you stop to pick things up.
+  function BR:stepBotErrand(id, p, now)
+    if p.dwellUntil then
+      if now and now < p.dwellUntil then return nil end
+      p.dwellUntil = nil
+      self:markBot(id, p, nil)
+    end
+
+    local goal = p.goal
+    local stale = not goal or goal.map ~= p.map
+      or (now and (now - (goal.at or 0)) > Bots.GOAL_SECONDS)
+    if stale then
+      p.goal, p.path = self:pickBotGoal(p, now), nil
+      goal = p.goal
+    end
+    if not goal then return nil end
+
+    if p.x == goal.x and p.y == goal.y then
+      local dwell = Bots.DWELL[goal.kind] or 0
+      if dwell > 0 then
+        p.dwellUntil = (now or 0) + dwell
+        -- What the room sees over their head while they stand there
+        -- (POK-113's marks, POK-121's errands).  Grass reads as a FIGHT,
+        -- because that is what standing in grass for six seconds is; a
+        -- spill reads as a menu, because picking things up is.
+        self:markBot(id, p, goal.kind == "grass" and "battle" or "menu")
+      end
+      p.goal, p.path = nil, nil
+      return nil
+    end
+
+    -- A real path, not a greedy step: the whole point is that a wall or a
+    -- ledge is walked AROUND.  Kept on the bot and rebuilt only when it
+    -- runs out or a step is refused, because the host pays for this thirty
+    -- times a beat.
+    if not (p.path and p.path[1]) then
+      p.path = Bots.path(function(x, y) return canWalk(p.map, x, y) end,
+                         { x = p.x, y = p.y }, { x = goal.x, y = goal.y })
+      if not p.path then
+        -- Unreachable, which is a REAL answer on these maps: walkable is
+        -- not reachable (POK-23 -- an island behind Surf, a Cut-fenced
+        -- pocket, a ledge-locked hollow all pass the walkable test), and
+        -- walkableCells hands out cells from the whole map.  A bot in a
+        -- pocket can pick unreachable goals forever.
+        --
+        -- The measured run said so: with the stroll fallback in but no
+        -- floor under it, two of six bots still never moved.  So the
+        -- errand system is allowed to fail, and WANDER IS THE FLOOR -- a
+        -- bot always moves, even when it has nowhere sensible to go.
+        p.goal = nil
+        p.pathFails = (p.pathFails or 0) + 1
+        if p.pathFails >= 2 then
+          p.pathFails = 0
+          return Bots.wander(p, p.rng, canWalk, nil)
+        end
+        return nil
+      end
+      p.pathFails = 0
+    end
+
+    local dir = table.remove(p.path, 1)
+    local d = dir and Bots.DELTA[dir]
+    if not (d and canWalk(p.map, p.x + d[1], p.y + d[2])) then
+      p.path = nil          -- somebody moved into us; repath next beat
+      return nil
+    end
+    return dir
+  end
+
   function BR:tickBots()
     if not (self.relay and self.relay:isHost() and self:inRound()) then return end
     local now = clock()
     local striding = self.walkUp and self.walkUp.id
-    -- once per tick, not once per bot: the seam clock tightens as the
-    -- roster thins (POK-95) and every bot reads the same roster
-    local roamEvery = Bots.roamSeconds(self:aliveCount())
+    -- The roster half is once per tick -- the seam clock tightens as the
+    -- roster thins (POK-95) and every bot reads the same roster -- but the
+    -- TIER half is per bot (POK-121), so the multiply happens inside.
+    local alive = self:aliveCount()
     for id, p in pairs(self.players) do
       -- a bot on its way over is not also strolling somewhere (POK-85)
       if p.bot and p.status == "alive" and p.map and id ~= striding then
+        -- cached on the bot beside its rng, for the same reason: derived
+        -- from (seed, id) and constant for the match
+        p.tier = p.tier or Bots.tier(self.matchSeed, id)
+        local roamEvery = Bots.roamSeconds(alive, p.tier)
         -- every so often, walk a seam into a connected map
         if now and (now - (p.lastRoam or 0)) >= roamEvery then
           roamBot(id, p, now)
@@ -1673,34 +2059,24 @@ return function(mod)
               end
             end
           end
-          -- no prey on the map: walk somewhere, visibly (POK-71).  A far
-          -- goal cell, re-rolled on arrival or gone stale, turns the old
-          -- orbit-a-cell shuffle into legible marches with pauses.
-          local target = prey
-          if not target and self.phase == "match" then
-            local g = p.goal
-            local stale = not g or g.map ~= p.map
-              or (math.abs(g.x - p.x) + math.abs(g.y - p.y)) <= 1
-              or (now and (now - (g.at or 0)) > GOAL_SECONDS)
-            if stale then
-              local cells = walkableCells(p.map)
-              local pick = nil
-              if #cells > 0 then
-                for _ = 1, 8 do
-                  local c = cells[p.rng(1, #cells)]
-                  pick = pick or c
-                  if c and (math.abs(c.x - p.x) + math.abs(c.y - p.y)) >= 8 then
-                    pick = c
-                    break
-                  end
-                end
-              end
-              p.goal = pick and { map = p.map, x = pick.x, y = pick.y,
-                                  at = now or 0 } or nil
-            end
-            target = p.goal
+          -- Prey outranks any errand: a trainer on your map is what you
+          -- came for.  The hunt keeps Bots.wander, which is right for it --
+          -- a stalk should wobble.
+          --
+          -- Everything else is an ERRAND now (POK-121).  The old version
+          -- picked a far random walkable cell and biased wander toward it,
+          -- which aimed the walk but not at anything: a spectator following
+          -- a bot saw it cross a route for no reason, turn around, and do
+          -- it again.  Worse, wander is greedy -- two candidate directions
+          -- and a stroll when both are blocked -- so a ledge or a fence
+          -- turned the march back into pacing, which is exactly what a
+          -- watched bot must never do.
+          local dir
+          if prey or self.phase ~= "match" then
+            dir = Bots.wander(p, p.rng, canWalk, prey)
+          else
+            dir = self:stepBotErrand(id, p, now)
           end
-          local dir = Bots.wander(p, p.rng, canWalk, target)
           if dir then
             local d = Bots.DELTA[dir]
             p.facing = dir
@@ -1786,6 +2162,27 @@ return function(mod)
   -- match reaching attrition, not the player's own map going dark.
   function BR:fogIsUp()
     return self.ring ~= nil and Fog.isUp(self.ring.radius)
+  end
+
+  -- Is the ring over this map?  False for a map the town grid cannot place,
+  -- which is isSafe's own answer for an interior.
+  function BR:fogOver(mapId)
+    if not (self.ring and mapId) then return false end
+    return not Fog.isSafe(townLocations(), mapId,
+                          self.ring.center, self.ring.radius)
+  end
+
+  -- Has the fog reached the CENTRE the player is standing in (POK-140)?
+  -- Resolved through the town the building's door opens onto, because an
+  -- interior has no square on the ring's grid -- see Fog.outdoorFor.
+  function BR:nurseClosed()
+    if not self.ring then return false end
+    local ow = mod.world:current()
+    local save = self.game and self.game.save
+    local last = save and save.lastOutdoor and save.lastOutdoor.id
+    local mapId = Fog.outdoorFor(townLocations(), ow and ow.mapId, last)
+    if not mapId then return false end   -- cannot say: serve them
+    return self:fogOver(mapId)
   end
 
   function BR:safariLeft()
@@ -3428,14 +3825,16 @@ return function(mod)
     -- stale.
     if BR.phase ~= "match" or type(party) ~= "table" then return party end
     local rung = BR:level()
-    -- a gym leader is a boss, not a speed bump (POK-26)
-    local bonus = Gyms.leader(oppClass) and Gyms.BOSS_BONUS or 0
+    -- Leaders included (POK-76): they used to carry a flat +10, which is
+    -- the one shape a bonus cannot take on a ladder from 5 to 100 -- see
+    -- the note in lib/gyms.lua.  The race for the TM is what makes a gym
+    -- a boss, not the levels.
     local scaled = {}
     for i, slot in ipairs(party) do
       if type(slot) == "table" and slot.species then
         local copy = {}
         for k, v in pairs(slot) do copy[k] = v end
-        copy.level = math.min(100, rung + bonus)
+        copy.level = math.min(100, rung)
         scaled[i] = copy
       else
         scaled[i] = slot
@@ -3526,16 +3925,25 @@ return function(mod)
     return next(battle)
   end)
 
-  -- No EXP from a trainer battle during a round (POK-74).  The rung is the
-  -- only power curve: D12 scaling never demotes, so paid EXP compounds into
-  -- a party above the fog's beat while every opponent stays at the rung.
-  -- Skipping the award skips the whole payout -- levels, stat exp and the
-  -- "gained EXP" boxes.  Wild battles still pay: a catch snaps to the rung
-  -- anyway, and grinding wilds is time the fog does not give back.
+  -- No EXP from ANY battle during a round (POK-74, widened by POK-139).
+  -- The rung is the only power curve: D12 scaling never demotes, so paid
+  -- EXP compounds into a party above the fog's beat while every opponent
+  -- stays at the rung.  Skipping the award skips the whole payout --
+  -- levels, stat exp and the "gained EXP" boxes with it.
+  --
+  -- This used to exempt WILD battles, on the reasoning that a catch snaps
+  -- to the rung anyway and grinding wilds is time the fog does not give
+  -- back.  Both of those are still true, and they were the wrong thing to
+  -- weigh: the EXP a wild fight pays cannot buy a level the rung has not
+  -- already granted, so the ONLY thing it produces is boxes -- one per
+  -- surviving party member, after every encounter, while the ring closes.
+  -- It was never a reward, only a reading cost.
+  --
+  -- If a reason to pay wild EXP ever comes back, it needs a reason the
+  -- LEVEL LADDER can see; restoring the `kind` test alone would only
+  -- restore the text.
   mod.hooks:wrap("battle.exp_award", function(next, ctx)
-    if inMatch() and ctx and ctx.battle and ctx.battle.kind == "trainer" then
-      return
-    end
+    if inMatch() then return end
     return next(ctx)
   end)
 
@@ -4219,11 +4627,29 @@ return function(mod)
   -- Two of these arm from a conversation as well; that half is in the
   -- world.talk wrap below.
   for mapId in pairs(Lockstep.CELLS) do
+    local repair = Lockstep.REPAIRS[mapId]
     mod.content.map_scripts:register(mapId, {
       onStep = function(_, _, x, y)
         if not BR:inSession() then return false end
         return Lockstep.blocks(mapId, x, y)
       end,
+      -- ...and put back whatever the scene we suppressed was also doing
+      -- (lib/lockstep.lua REPAIRS).  onEnter composes all-run and fires on
+      -- every entry rather than only the first, so a player who reaches
+      -- CERULEAN by any route gets the same city.  Writes to the match's
+      -- throwaway save, never the player's.
+      onEnter = repair and function(game, ow)
+        if not BR:inSession() then return end
+        local Commands = require("src.script.Commands")
+        local ctx = { game = game, save = game.save, overworld = ow }
+        for _, name in ipairs(repair.show or {}) do
+          Commands.show_object(ctx, mapId, name)
+        end
+        for _, name in ipairs(repair.hide or {}) do
+          Commands.hide_object(ctx, mapId, name)
+        end
+        log:say("lockstep: repaired %s after standing its scene down", mapId)
+      end or nil,
     })
   end
 
@@ -4255,7 +4681,18 @@ return function(mod)
       -- OverworldState picks the nurse out of a Centre's NPCs to begin with
       -- (OverworldController:_talk) -- so this covers all twelve Centres
       -- without naming one of them.  The PC beside her is untouched.
-      if entry and entry.nurse and BR:inRound() and BR:fogIsUp() then
+      --
+      -- THIS Centre, not every Centre (POK-140).  The first cut asked
+      -- BR:fogIsUp(), which is a question about the BOARD -- has the ring
+      -- started closing anywhere -- so the moment phase 2 began all twelve
+      -- counters shut at once, including the ones in towns the fog would
+      -- not reach for another ten minutes.  Reported from a live match.
+      --
+      -- No isUp() guard any more either: the per-map answer subsumes it.
+      -- Phase 1's radius is Fog.NOWHERE, which clears the grid's diagonal,
+      -- so every town reads safe during the grace period and the counters
+      -- stay open on the same rule rather than on a second one.
+      if entry and entry.nurse and BR:inRound() and BR:nurseClosed() then
         say("Sorry -- we're\nclosed! The fog\nis coming!")
         return
       end
@@ -4900,6 +5337,23 @@ return function(mod)
     BR:onWinner(BR.myId)
     return BR.phase
   end
+  -- Whether this room is fightable, and what would have to change if not
+  -- (POK-142).  Part of the same surface as the verbs above: a companion
+  -- tool showing a room's health wants this before it shows anything else,
+  -- because a room nobody can fight in is not a room.
+  mod.exports.door = function()
+    return { label = BR:buildTroubleLabel(), build = BR:buildOf(),
+             -- a refusal is over in milliseconds -- the two-client run
+             -- clocked 18 of them between joining and leaving -- so this
+             -- is the only way anything outside can observe that it
+             -- happened rather than trying to sample the window
+             refused = BR.refused ~= nil,
+             -- who the door turned away and what they were on.  The
+             -- durable half of the same 18 milliseconds: by the time
+             -- anything reads this they are already off the roster.
+             turnedAway = BR:flaggedAbsent() }
+  end
+  mod.exports.doorTrouble = function(id) return BR:buildTrouble(id) end
   mod.exports.inFog = function() return BR.wasInFog == true end
   mod.exports.spillBalls = function()
     local out = {}
@@ -5059,7 +5513,10 @@ return function(mod)
                         status = p.status,
                         -- the mark over their head (POK-113), so a driver
                         -- can read what a second client is being shown
-                        busy = p.busy }
+                        busy = p.busy,
+                        -- ...and the mark on their roster row (POK-142):
+                        -- nil, or why they cannot be fought
+                        door = BR:buildTrouble(id), build = p.build }
     end
     return out
   end

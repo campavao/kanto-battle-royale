@@ -16,7 +16,16 @@
 
 local Gyms = {}
 
-Gyms.BOSS_BONUS = 10   -- a leader fights above the rung: a boss, not a bot
+-- A leader fights AT the rung, like everything else in a match (POK-76).
+-- There used to be a flat +10 on top -- "a boss, not a bot" -- and a flat
+-- number is the one shape that cannot mean the same thing twice on a
+-- ladder that runs 5 to 100: +10 over a rung-5 party is triple their
+-- level and an instant wall, +10 over a rung-80 party is noise.  It made
+-- the earliest gym the hardest and the last one free, which is backwards.
+--
+-- What makes a leader a boss is not the number: it is that there is ONE
+-- of them, everyone wants the TM, and whoever gets there first closes the
+-- gym for the rest of the match.  That contest is untouched.
 Gyms.PURSE = 1000      -- the gym's money, on top of the TM
 
 Gyms.LEADERS = {
