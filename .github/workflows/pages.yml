@@ -1,0 +1,39 @@
+name: pages
+
+# Publishes site/ at the Pages root so the mod feed resolves at
+# https://campavao.github.io/kanto-battle-royale/data/index.json --
+# the URL src/mods/ModIndex.lua:66 asks for first. Until this existed it
+# 404'd and every client fell back to raw.githubusercontent.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never cancel a deploy in flight: a half-published feed is worse than a
+# slightly stale one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4
