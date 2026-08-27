@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kanto BR Signals</title>
+<meta name="description" content="Downloads, releases and relay health for the Kanto Battle Royale mod.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --void:  #100f0e;
+    --panel: #171615;
+    --line:  #2b2926;
+    --dim:   #6a665c;
+    --text:  #d9d4c4;
+    --red:   #d5273e;
+    --ember: #f26b4e;
+
+    --pixel: "Silkscreen", "Courier New", monospace;
+    --mono:  "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--void);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 15px;
+    line-height: 1.55;
+    background-image:
+      radial-gradient(circle at 1px 1px, rgba(217,212,196,.045) 1px, transparent 0);
+    background-size: 4px 4px;
+  }
+
+  .wrap { max-width: 780px; margin: 0 auto; padding: 40px 20px 80px; }
+
+  a { color: var(--ember); text-underline-offset: 3px; }
+  a:focus-visible,
+  button:focus-visible { outline: 2px solid var(--ember); outline-offset: 3px; }
+
+  .top {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--line); padding-bottom: 18px;
+  }
+  .wordmark {
+    font-family: var(--pixel); font-weight: 700;
+    font-size: clamp(19px, 5.2vw, 28px);
+    letter-spacing: .02em; line-height: 1.2; margin: 0;
+  }
+  .wordmark .lo { color: var(--red); }
+  .build { font-size: 12px; color: var(--dim); letter-spacing: .06em; }
+  .build strong { color: var(--text); font-weight: 600; }
+
+  .readings {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 4px; margin: 34px 0 12px;
+  }
+  .reading { padding: 2px 0; }
+  .reading dt {
+    font-family: var(--pixel); font-size: 9px; color: var(--dim);
+    letter-spacing: .1em; text-transform: uppercase; margin-bottom: 10px;
+  }
+  .reading dd {
+    margin: 0; font-family: var(--pixel); font-weight: 700;
+    font-size: clamp(26px, 8vw, 44px); line-height: 1; color: var(--text);
+  }
+  .reading dd.void { color: var(--line); }
+  .reading .sub { display:block; font-family: var(--mono); font-size: 11px;
+                  font-weight: 400; color: var(--dim); margin-top: 9px; line-height:1.4; }
+
+  .band {
+    display: flex; align-items: center; gap: 12px;
+    margin: 52px 0 18px;
+  }
+  .band h2 {
+    font-family: var(--pixel); font-size: 11px; font-weight: 400;
+    letter-spacing: .12em; text-transform: uppercase;
+    color: var(--dim); margin: 0; white-space: nowrap;
+  }
+  .band::after { content:""; flex:1; height:1px; background: var(--line); }
+
+  .ladder { display: flex; align-items: flex-end; gap: 3px; height: 128px; }
+  .rung { flex: 1 1 0; min-width: 0; position: relative; display: flex;
+          flex-direction: column; justify-content: flex-end; height: 100%; }
+  .rung i {
+    display: block; width: 100%; background: var(--red);
+    border-radius: 1px 1px 0 0; min-height: 3px;
+    transition: background .12s;
+  }
+  .rung.blind i { background: var(--line); }
+  .rung.zero  i { min-height: 2px; background: var(--line); }
+  .rung:hover i, .rung:focus-within i { background: var(--ember); }
+  .rung button {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    background: none; border: 0; padding: 0; cursor: pointer;
+  }
+
+  .eras { display: flex; gap: 3px; margin-top: 10px; }
+  .era { font-size: 10px; color: var(--dim); letter-spacing: .04em;
+         border-top: 1px solid var(--line); padding-top: 7px; }
+  .era b { display:block; color: var(--text); font-weight: 500; }
+
+  .readout {
+    margin-top: 16px; min-height: 42px; padding: 10px 12px;
+    background: var(--panel); border-left: 2px solid var(--red);
+    font-size: 13px; line-height: 1.5;
+  }
+  .readout .v { font-family: var(--pixel); font-size: 12px; color: var(--text); }
+  .readout .n { color: var(--dim); }
+  .readout.idle { border-left-color: var(--line); color: var(--dim); }
+
+  .relay { display: flex; gap: 14px; align-items: flex-start;
+           background: var(--panel); padding: 18px; border: 1px solid var(--line); }
+  .ring { flex: 0 0 auto; width: 34px; height: 34px; border-radius: 50%;
+          border: 2px dashed var(--line); margin-top: 2px; }
+  .relay.live .ring { border-style: solid; border-color: var(--red); animation: close 3.2s ease-in-out infinite; }
+  @keyframes close { 0%,100% { transform: scale(1); opacity:.85 } 50% { transform: scale(.72); opacity:1 } }
+  .relay p { margin: 0 0 6px; }
+  .relay .hint { font-size: 12px; color: var(--dim); margin: 0; }
+  code { background: var(--void); padding: 1px 5px; font-size: .92em; color: var(--ember); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th {
+    font-family: var(--pixel); font-size: 9px; font-weight: 400; color: var(--dim);
+    letter-spacing: .1em; text-transform: uppercase;
+    text-align: left; padding: 0 8px 10px 0; border-bottom: 1px solid var(--line);
+  }
+  th.num, td.num { text-align: right; padding-right: 0; font-variant-numeric: tabular-nums; }
+  td { padding: 9px 8px 9px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  td.tag { font-family: var(--pixel); font-size: 11px; white-space: nowrap; color: var(--text); }
+  td.title { color: var(--dim); }
+  td.when { color: var(--dim); white-space: nowrap; font-size: 12px; }
+  td.num { color: var(--text); }
+  td.num.zero { color: var(--line); }
+  tr.blind td.tag { color: var(--dim); }
+
+  .foot { margin-top: 44px; padding-top: 18px; border-top: 1px solid var(--line);
+          font-size: 12px; color: var(--dim); display:flex; justify-content:space-between;
+          gap:14px; flex-wrap:wrap; }
+
+  .err { border-left: 2px solid var(--ember); background: var(--panel);
+         padding: 12px 14px; font-size: 13px; }
+
+  @media (max-width: 560px) {
+    .readings { grid-template-columns: 1fr 1fr; row-gap: 26px; }
+    .reading:last-child { grid-column: 1 / -1; }
+    td.title { display: none; }
+    .ladder { height: 96px; gap: 2px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <h1 class="wordmark">KANTO<br><span class="lo">BATTLE ROYALE</span></h1>
+    <div class="build">
+      SHIPPING <strong id="ver">····</strong><br><span id="verwhen"></span>
+    </div>
+  </header>
+
+  <dl class="readings">
+    <div class="reading">
+      <dt>Downloads</dt>
+      <dd id="dl">···</dd>
+      <span class="sub" id="dlsub">across all releases</span>
+    </div>
+    <div class="reading">
+      <dt>Releases</dt>
+      <dd id="rel">··</dd>
+      <span class="sub" id="relsub">since the first cut</span>
+    </div>
+    <div class="reading">
+      <dt>Playing now</dt>
+      <dd id="players" class="void">—</dd>
+      <span class="sub">relay not reporting yet</span>
+    </div>
+  </dl>
+
+  <div class="band"><h2>Every release</h2></div>
+  <div id="ladderbox">
+    <div class="ladder" id="ladder"></div>
+    <div class="eras" id="eras"></div>
+    <div class="readout idle" id="readout">Pick a bar to read it.</div>
+  </div>
+
+  <div class="band"><h2>Relay</h2></div>
+  <div class="relay" id="relay">
+    <div class="ring"></div>
+    <div>
+      <p id="relaytext">No relay data on this page yet.</p>
+      <p class="hint" id="relayhint">
+        The relay is a raw TCP server with no HTTP surface, so a browser cannot ask it
+        anything. Wiring this up means a scheduled job writing <code>data/stats.json</code>
+        from the Railway logs — no relay redeploy, so no live match gets cut.
+      </p>
+    </div>
+  </div>
+
+  <div class="band"><h2>History</h2></div>
+  <div id="tablebox"></div>
+
+  <div class="foot">
+    <span id="stamp">reading…</span>
+    <span><a href="https://github.com/campavao/kanto-battle-royale">repo</a> ·
+          <a href="https://github.com/campavao/kanto-battle-royale/releases">releases</a></span>
+  </div>
+
+</div>
+
+<script>
+const REPO = "campavao/kanto-battle-royale";
+// v0.27.1 added the manifest `github` field. Before it, the launcher's
+// check-for-updates walked right past this mod, so those releases could
+// only ever be installed by hand.
+const OFFERABLE_FROM = [0, 27, 1];
+const CACHE_KEY = "kbr-releases-v1";
+const CACHE_MS = 10 * 60 * 1000;
+
+const $ = id => document.getElementById(id);
+const semver = t => (t.replace(/^v/, "").split(".").map(Number).concat([0,0,0])).slice(0,3);
+const cmp = (a, b) => a[0]-b[0] || a[1]-b[1] || a[2]-b[2];
+const blind = tag => cmp(semver(tag), OFFERABLE_FROM) < 0;
+const day = iso => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
+function cached() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return Date.now() - parsed.at < CACHE_MS ? parsed.data : null;
+  } catch (e) { return null; }
+}
+function cache(data) {
+  try { localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), data })); } catch (e) {}
+}
+
+async function releases() {
+  const hit = cached();
+  if (hit) return { list: hit, stale: true };
+  const r = await fetch("https://api.github.com/repos/" + REPO + "/releases?per_page=100");
+  if (r.status === 403) throw new Error("GitHub is rate-limiting this IP. It resets within the hour.");
+  if (!r.ok) throw new Error("GitHub answered " + r.status + ".");
+  const list = (await r.json()).map(x => ({
+    tag: x.tag_name,
+    name: (x.name || "").replace(/^v[\d.]+\s*[—–-]\s*/, ""),
+    at: x.published_at,
+    dl: (x.assets || []).reduce((n, a) => n + a.download_count, 0)
+  }));
+  cache(list);
+  return { list, stale: false };
+}
+
+function drawLadder(list) {
+  const asc = list.slice().reverse();
+  const top = Math.max.apply(null, asc.map(r => r.dl).concat([1]));
+  const ladder = $("ladder");
+  ladder.innerHTML = "";
+
+  asc.forEach(r => {
+    const rung = document.createElement("div");
+    rung.className = "rung" + (blind(r.tag) ? " blind" : "") + (r.dl === 0 ? " zero" : "");
+    const bar = document.createElement("i");
+    bar.style.height = r.dl === 0 ? "2px" : Math.max(4, (r.dl / top) * 100) + "%";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.setAttribute("aria-label", r.tag + ", " + r.dl + " downloads, " + day(r.at));
+    const show = () => {
+      $("readout").className = "readout";
+      $("readout").innerHTML =
+        '<span class="v">' + r.tag + "</span> — " + r.dl + " download" + (r.dl === 1 ? "" : "s") +
+        ' <span class="n">· ' + day(r.at) + (blind(r.tag) ? " · updater could not see it" : "") + "</span>" +
+        (r.name ? '<br><span class="n">' + r.name + "</span>" : "");
+    };
+    btn.addEventListener("mouseenter", show);
+    btn.addEventListener("focus", show);
+    btn.addEventListener("click", show);
+    rung.appendChild(bar);
+    rung.appendChild(btn);
+    ladder.appendChild(rung);
+  });
+
+  const cut = asc.filter(r => blind(r.tag)).length;
+  const dead = asc.filter(r => blind(r.tag)).reduce((n, r) => n + r.dl, 0);
+  const live = asc.filter(r => !blind(r.tag)).reduce((n, r) => n + r.dl, 0);
+  $("eras").innerHTML =
+    '<div class="era" style="flex:' + cut + '"><b>' + dead + " downloads</b>" +
+      cut + " releases the updater could not offer</div>" +
+    '<div class="era" style="flex:' + (asc.length - cut) + '"><b>' + live + " downloads</b>" +
+      (asc.length - cut) + " releases since v0.27.1</div>";
+}
+
+function drawTable(list) {
+  $("tablebox").innerHTML =
+    "<table><thead><tr><th>Version</th><th>Called</th><th>Cut</th><th class=\"num\">DL</th></tr></thead><tbody>" +
+    list.map(r =>
+      '<tr class="' + (blind(r.tag) ? "blind" : "") + '">' +
+      '<td class="tag">' + r.tag + "</td>" +
+      '<td class="title">' + (r.name || "") + "</td>" +
+      '<td class="when">' + day(r.at) + "</td>" +
+      '<td class="num ' + (r.dl === 0 ? "zero" : "") + '">' + r.dl + "</td></tr>"
+    ).join("") + "</tbody></table>";
+}
+
+async function feed() {
+  try {
+    const r = await fetch("data/index.json", { cache: "no-cache" });
+    if (!r.ok) return;
+    const mod = (await r.json()).mods.find(m => m.id === "battle_royale");
+    if (!mod) return;
+    $("ver").textContent = "v" + mod.version;
+    $("verwhen").textContent = "cut " + day(mod.latest.published_at);
+  } catch (e) {}
+}
+
+async function relay() {
+  try {
+    const r = await fetch("data/stats.json", { cache: "no-cache" });
+    if (!r.ok) return;
+    const s = await r.json();
+    $("relay").classList.add("live");
+    $("players").textContent = s.conns == null ? 0 : s.conns;
+    $("players").classList.remove("void");
+    $("relaytext").textContent =
+      (s.rooms || 0) + " room" + (s.rooms === 1 ? "" : "s") + " open, " +
+      (s.conns || 0) + " connected. Peak " + (s.peakConns || 0) + " in this deployment.";
+    $("relayhint").textContent = "Read from the Railway heartbeat at " + day(s.at) + ".";
+  } catch (e) {}
+}
+
+(async () => {
+  feed();
+  relay();
+  try {
+    const res = await releases();
+    const list = res.list;
+    const total = list.reduce((n, r) => n + r.dl, 0);
+    $("dl").textContent = total;
+    $("rel").textContent = list.length;
+    $("dlsub").textContent = "the updater re-downloads on every update, so this counts events, not people";
+    $("relsub").textContent = "first cut " + day(list[list.length - 1].at);
+    drawLadder(list);
+    drawTable(list);
+    $("stamp").textContent = res.stale ? "from cache, up to 10 min old" : "read just now from the GitHub API";
+  } catch (e) {
+    $("ladderbox").innerHTML = '<div class="err">' + e.message + "</div>";
+    $("stamp").textContent = "could not reach GitHub";
+  }
+})();
+</script>
+</body>
+</html>
