@@ -57,6 +57,15 @@ class Client {
     });
   }
 
+  // Round-trip this connection: everything sent on it before the ping has
+  // been processed by the time the pong comes back.  This is the only
+  // ordering guarantee available between two clients -- the server reads one
+  // connection in order, but nothing sequences one client against another.
+  async settled(timeoutMs = 2000) {
+    this.send({ type: "ping" });
+    await this.until("pong", timeoutMs);
+  }
+
   // skip messages until one of the given type arrives
   async until(type, timeoutMs = 2000) {
     for (;;) {
@@ -172,10 +181,19 @@ test("join errors: not_found, locked, full, already_in_room", async () => {
     x.send({ type: "join_room", code: "ZZZZZZ", name: "X" });
     assert.deepEqual(await x.next(), { type: "room_error", reason: "not_found" });
 
+    // lock_room is silent -- no ack, no roster -- and `a` and `x` are two
+    // independent sockets, so "send the lock, then send the join" orders
+    // nothing at all: on a fast machine the join is read first and the
+    // assertion below fails against a server that is behaving perfectly.
+    // A ping on the SAME connection as the lock is the ordering: the server
+    // reads one connection's lines in order, so a pong means the lock landed.
+    await a.settled();
     a.send({ type: "lock_room", locked: true });
+    await a.settled();
     x.send({ type: "join_room", code, name: "X" });
     assert.deepEqual(await x.next(), { type: "room_error", reason: "locked" });
     a.send({ type: "lock_room", locked: false });
+    await a.settled();
 
     x.send({ type: "join_room", code, name: "X" });
     assert.equal((await x.next()).type, "room_joined");

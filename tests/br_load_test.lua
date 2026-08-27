@@ -224,5 +224,61 @@ do
   end
 end
 
+-- ------- a battle that never ran is not a defeat (POK-134)
+--
+-- Driven through the REAL event bus, because the bug this replaces was
+-- entirely a question of WHICH bus.  The guard shipped on
+-- `link.battle_ended`, whose payload LinkState builds by hand
+-- ({ result, myParty, theirParty, peerName, role } -- src/link/LinkState.lua),
+-- so the `ev.skipped` and `ev.battle.safari` it tested for could never be
+-- there and the clause was unreachable.  The refusal really arrives on
+-- `battle.ended` (BattleState emits `lose` with `skipped` when it marks a
+-- battle dead) and the elimination is raised by the `world.blacked_out`
+-- that follows, so the verdict has to be carried between the two.
+--
+-- Read through the log because that is the one observable that does not
+-- need a live match under it: BR:eliminate is a no-op out of a round, so
+-- status would look identical either way and prove nothing.
+do
+  local Runtime = require("src.mods.Runtime")
+  local Logger = require("src.core.Logger")
+
+  local function blackoutAfter(...)
+    local seen, real = {}, Logger.warn
+    Logger.warn = function(fmt, ...) seen[#seen + 1] = tostring(fmt) end
+    for _, ev in ipairs({ ... }) do Runtime.emit("battle.ended", ev) end
+    Runtime.emit("world.blacked_out", {})
+    Logger.warn = real
+    for _, line in ipairs(seen) do
+      if line:find("blacked out, but not a loss", 1, true) then return true end
+    end
+    return false
+  end
+
+  T.check(blackoutAfter({ result = "lose", skipped = true }),
+          "a refused battle's blackout is not a loss")
+  T.check(blackoutAfter({ result = "lose", battle = { safari = true } }),
+          "a SAFARI battle's blackout is not a loss either")
+
+  -- the other half, and the one that keeps this honest: an ordinary
+  -- whiteout must still be one
+  T.check(not blackoutAfter({ result = "lose" }),
+          "an ordinary loss still blacks out as a loss")
+
+  -- ...and the verdict must not go stale.  A refusal, then a real battle,
+  -- then a blackout is a real whiteout -- the flag is rewritten by every
+  -- battle.ended, not only by the refusals.
+  T.check(not blackoutAfter({ result = "lose", skipped = true },
+                            { result = "lose" }),
+          "a refusal does not excuse the NEXT battle's whiteout")
+
+  -- and it is consumed, not merely read: two blackouts in a row after one
+  -- refusal means the second is a real one
+  Runtime.emit("battle.ended", { result = "lose", skipped = true })
+  T.check(blackoutAfter(), "the blackout the refusal earned is excused")
+  T.check(not blackoutAfter(),
+          "...and the pass is spent -- a second blackout is a real one")
+end
+
 run.release()
 T.finish("br_load")
