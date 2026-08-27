@@ -22,86 +22,53 @@
 -- Pure where it matters: encode/decode are plain functions over plain
 -- tables, so tests/br_test.lua can check the format without an engine.
 
+local KeyFile = require("mods.battle_royale.lib.keyfile")
+
 local Career = {}
 
 -- Versioned in the key, not in the body: a format that has to change gets
 -- a new file and leaves the old one for a migration to read.
 Career.KEY = "career/v1"
 
-local function trim(s)
-  return (s:gsub("^%s+", ""):gsub("%s+$", ""))
-end
-
--- `key=value`, one per line, first `=` splits so a value may contain more.
--- Wire.cleanName already strips every control character, so a name cannot
--- carry the newline that would forge a second row -- and decode ignores
--- what it does not recognise anyway, so a hand-edited file loses a field
--- at worst.
+-- Three lines; lib/keyfile.lua owns the format and this owns what the
+-- fields MEAN.  Order is fixed so the file does not reshuffle itself on
+-- every write, and an unset name or skin writes no line at all.
 function Career.encode(career)
   career = career or {}
-  local out = {}
-  if type(career.name) == "string" and career.name ~= "" then
-    out[#out + 1] = "name=" .. career.name
-  end
-  if type(career.skin) == "string" and career.skin ~= "" then
-    out[#out + 1] = "skin=" .. career.skin
-  end
-  out[#out + 1] = "wins=" .. tostring(Career.cleanWins(career.wins))
-  return table.concat(out, "\n") .. "\n"
+  return KeyFile.encode({
+    { "name", KeyFile.str(career.name) },
+    { "skin", KeyFile.str(career.skin) },
+    { "wins", tostring(Career.cleanWins(career.wins)) },
+  })
 end
 
-function Career.decode(text)
-  local out = {}
-  if type(text) ~= "string" then return out end
-  for line in text:gmatch("[^\r\n]+") do
-    local key, value = line:match("^([^=]+)=(.*)$")
-    if key then
-      key, value = trim(key), trim(value)
-      if key == "name" and value ~= "" then
-        out.name = value
-      elseif key == "skin" and value ~= "" then
-        out.skin = value
-      elseif key == "wins" and tonumber(value) then
-        out.wins = Career.cleanWins(value)
-      end
-    end
-  end
+function Career.decode(str)
+  local field, out = KeyFile.parse(str), {}
+  if field.name and field.name ~= "" then out.name = field.name end
+  if field.skin and field.skin ~= "" then out.skin = field.skin end
+  -- absent and unparseable both mean "no win count in this file", which the
+  -- caller reads as zero -- never as a reset of one it already had
+  if tonumber(field.wins) then out.wins = Career.cleanWins(field.wins) end
   return out
 end
 
 -- a win count is a whole number of wins or it is zero; a file poked by
 -- hand cannot hand the wardrobe a fraction or a negative
-function Career.cleanWins(n)
-  return math.max(0, math.floor(tonumber(n) or 0))
-end
+Career.cleanWins = KeyFile.count
 
 -- ------- the store
 --
--- Best effort by contract: a reader always gets a table, a writer always
+-- Best effort by contract -- a reader always gets a table, a writer always
 -- gets a boolean, and a filesystem that will not cooperate costs one
--- warning rather than a throw inside a match tick.
+-- warning rather than a throw inside a match tick.  lib/keyfile.lua holds
+-- that contract; these two say which file it is about.
 
 function Career.load(mod)
-  local cache = mod and mod.cache
-  if not cache then return {} end
-  local ok, bytes = pcall(cache.read, cache, Career.KEY)
-  if not ok or type(bytes) ~= "string" then return {} end
-  return Career.decode(bytes)
+  return KeyFile.load(mod, Career.KEY, Career.decode)
 end
 
 function Career.save(mod, career, log)
-  local cache = mod and mod.cache
-  if not cache then return false, "no mod.cache on this engine" end
-  local ok, wrote, err = pcall(cache.write, cache, Career.KEY,
-                               Career.encode(career))
-  if not ok then wrote, err = nil, wrote end
-  if not wrote then
-    -- the old code swallowed this in a bare pcall, which is why the bug
-    -- was silent for as long as it was
-    if log then log:warn("career not saved (%s)", tostring(err or "unknown")) end
-    return false, err
-  end
-  return true
+  return KeyFile.save(mod, Career.KEY, Career.encode(career), log, "career")
 end
 
 return Career

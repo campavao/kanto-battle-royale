@@ -1,16 +1,21 @@
 {
   "id": "battle_royale",
   "name": "Kanto Battle Royale",
-  "version": "0.35.0",
+  "version": "0.36.0",
   "api": 2,
   "github": "campavao/kanto-battle-royale",
   "entry": "main.lua",
   "profile": "content",
   "category": "MULTIPLAYER",
-  "games": ["gen1"],
+  "games": [
+    "gen1"
+  ],
   "game_version": ">=0.2.26 <2.0.0",
   "priority": 100,
-  "permissions": ["network"],
+  "permissions": [
+    "network",
+    "engine_internals"
+  ],
   "dependencies": [],
   "optional_dependencies": [],
   "conflicts": [],

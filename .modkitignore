@@ -1,0 +1,30 @@
+# Files tools/pack.py keeps out of the release zip, so modkit must not
+# treat them as distributed. Regenerate with: find tests -type f | sort
+tests/br_load_test.lua
+tests/br_test.lua
+tests/drivers/bot_smoke.lua
+tests/drivers/bot_walk_smoke.lua
+tests/drivers/cerulean_smoke.lua
+tests/drivers/coexist_smoke.lua
+tests/drivers/fame_smoke.lua
+tests/drivers/lobby_fit_smoke.lua
+tests/drivers/lockstep_smoke.lua
+tests/drivers/playtest_drop.lua
+tests/drivers/playtest_gift.lua
+tests/drivers/playtest_hunt.lua
+tests/drivers/playtest_match.lua
+tests/drivers/playtest_over.lua
+tests/drivers/pvp/guest_door.lua
+tests/drivers/pvp/guest_duel.lua
+tests/drivers/pvp/guest_skew.lua
+tests/drivers/pvp/guest_stall.lua
+tests/drivers/pvp/host_door.lua
+tests/drivers/pvp/host_duel.lua
+tests/drivers/pvp/host_freeze.lua
+tests/drivers/pvp/host_skew.lua
+tests/drivers/pvp/host_stall.lua
+tests/drivers/pvp/pvplib.lua
+tests/drivers/pvp/run_pvp.py
+tests/drivers/spectate_smoke.lua
+tests/fake_relay.lua
+tests/seams_test.lua

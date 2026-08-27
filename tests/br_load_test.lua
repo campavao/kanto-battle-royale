@@ -224,5 +224,99 @@ do
   end
 end
 
+-- ------- a battle that never ran is not a defeat (POK-134)
+--
+-- Driven through the REAL event bus, because the bug this replaces was
+-- entirely a question of WHICH bus.  The guard shipped on
+-- `link.battle_ended`, whose payload LinkState builds by hand
+-- ({ result, myParty, theirParty, peerName, role } -- src/link/LinkState.lua),
+-- so the `ev.skipped` and `ev.battle.safari` it tested for could never be
+-- there and the clause was unreachable.  The refusal really arrives on
+-- `battle.ended` (BattleState emits `lose` with `skipped` when it marks a
+-- battle dead) and the elimination is raised by the `world.blacked_out`
+-- that follows, so the verdict has to be carried between the two.
+--
+-- Read through the log because that is the one observable that does not
+-- need a live match under it: BR:eliminate is a no-op out of a round, so
+-- status would look identical either way and prove nothing.
+do
+  local Runtime = require("src.mods.Runtime")
+  local Logger = require("src.core.Logger")
+  local setPhase = exports.debugPhase
+
+  T.check(type(setPhase) == "function", "exports debugPhase (the phase fixture)")
+  T.check(setPhase("nonsense") == nil, "...which refuses a phase BR does not have")
+
+  local function blackoutAfter(...)
+    local seen, real = {}, Logger.warn
+    Logger.warn = function(fmt, ...) seen[#seen + 1] = tostring(fmt) end
+    for _, ev in ipairs({ ... }) do Runtime.emit("battle.ended", ev) end
+    Runtime.emit("world.blacked_out", {})
+    Logger.warn = real
+    for _, line in ipairs(seen) do
+      if line:find("blacked out, but not a loss", 1, true) then return true end
+    end
+    return false
+  end
+
+  -- ------- inside the hunt, where an empty party is the designed state
+  local REFUSED  = { result = "lose", skipped = true }
+  local SAFARIL  = { result = "lose", battle = { safari = true } }
+  local ORDINARY = { result = "lose" }
+
+  for _, phase in ipairs({ "safari", "drop" }) do
+    setPhase(phase)
+    T.check(blackoutAfter(REFUSED),
+            "in " .. phase .. ": a refused battle's blackout is not a loss")
+    T.check(blackoutAfter(SAFARIL),
+            "in " .. phase .. ": a SAFARI battle's blackout is not a loss either")
+    -- the other half, and the one that keeps this honest
+    T.check(not blackoutAfter(ORDINARY),
+            "in " .. phase .. ": an ordinary loss still blacks out as a loss")
+  end
+
+  -- ------- and NOWHERE else (the narrowing).
+  --
+  -- Catching nothing costs you the match: tickDrop eliminates an
+  -- empty-handed player at the buzzer.  Past that point a refused battle
+  -- is a real whiteout, because a party can only be empty there if
+  -- something went wrong -- and a player quietly immune to elimination is
+  -- worse than one eliminated for a reason.  Keyed on the phase rather
+  -- than trusted to the buzzer, so it does not depend on an invariant
+  -- held in another function.
+  for _, phase in ipairs({ "off", "lobby", "match", "over" }) do
+    setPhase(phase)
+    T.check(not blackoutAfter(REFUSED),
+            "in " .. phase .. ": a refused battle's blackout IS a loss")
+    T.check(not blackoutAfter(SAFARIL),
+            "in " .. phase .. ": a SAFARI-flavoured loss IS a loss too")
+  end
+
+  -- ------- the verdict must not go stale, or outlive the phase it was
+  -- earned in.
+  setPhase("safari")
+  -- a refusal, then a real battle, then a blackout is a real whiteout: the
+  -- flag is rewritten by EVERY battle.ended, not only by the refusals
+  T.check(not blackoutAfter(REFUSED, ORDINARY),
+          "a refusal does not excuse the NEXT battle's whiteout")
+
+  -- consumed, not merely read: two blackouts after one refusal means the
+  -- second is a real one
+  Runtime.emit("battle.ended", REFUSED)
+  T.check(blackoutAfter(), "the blackout the refusal earned is excused")
+  T.check(not blackoutAfter(),
+          "...and the pass is spent -- a second blackout is a real one")
+
+  -- a pass earned in the SAFARI does not survive into the match: the drop
+  -- happens between the two, and a refusal from before it must not excuse
+  -- a whiteout after it
+  Runtime.emit("battle.ended", REFUSED)
+  setPhase("match")
+  T.check(not blackoutAfter(),
+          "a pass earned in the SAFARI does not cross into the match")
+
+  setPhase("off")
+end
+
 run.release()
 T.finish("br_load")

@@ -33,17 +33,13 @@
 -- plain tables, so tests/br_test.lua can check the format and the wire
 -- shape without an engine or a socket.
 
+local KeyFile = require("mods.battle_royale.lib.keyfile")
+
 local Stats = {}
 
 Stats.KEY = "stats/v1"
 
-local function trim(s)
-  return (s:gsub("^%s+", ""):gsub("%s+$", ""))
-end
-
-function Stats.cleanCount(n)
-  return math.max(0, math.floor(tonumber(n) or 0))
-end
+Stats.cleanCount = KeyFile.count
 
 -- 16 hex characters of nothing in particular.  love.math.random when the
 -- game is up, math.random under the headless tests; seeded off the clock
@@ -80,59 +76,41 @@ end
 -- lib/career.lua uses, for the same reason: a file poked by hand loses a
 -- field at worst.
 
+-- Four fixed lines; lib/keyfile.lua owns the format and this owns what the
+-- fields mean.  `off` is always written, because "the player turned this
+-- off" is a decision and an absent line would read as never having made it.
 function Stats.encode(s)
   s = s or {}
-  local out = {}
-  if type(s.id) == "string" and s.id ~= "" then out[#out + 1] = "id=" .. s.id end
-  if type(s.since) == "string" and s.since ~= "" then
-    out[#out + 1] = "since=" .. s.since
-  end
-  out[#out + 1] = "solo=" .. tostring(Stats.cleanCount(s.solo))
-  out[#out + 1] = "off=" .. (s.off and "1" or "0")
-  return table.concat(out, "\n") .. "\n"
+  return KeyFile.encode({
+    { "id",    KeyFile.str(s.id) },
+    { "since", KeyFile.str(s.since) },
+    { "solo",  tostring(Stats.cleanCount(s.solo)) },
+    { "off",   s.off and "1" or "0" },
+  })
 end
 
 function Stats.decode(text)
-  local out = {}
-  if type(text) ~= "string" then return out end
-  for line in text:gmatch("[^\r\n]+") do
-    local key, value = line:match("^([^=]+)=(.*)$")
-    if key then
-      key, value = trim(key), trim(value)
-      if key == "id" and value ~= "" then out.id = value
-      elseif key == "since" and value ~= "" then out.since = value
-      elseif key == "solo" and tonumber(value) then out.solo = Stats.cleanCount(value)
-      elseif key == "off" then out.off = (value == "1" or value == "true")
-      end
-    end
-  end
+  local field, out = KeyFile.parse(text), {}
+  if field.id and field.id ~= "" then out.id = field.id end
+  if field.since and field.since ~= "" then out.since = field.since end
+  if tonumber(field.solo) then out.solo = Stats.cleanCount(field.solo) end
+  -- present-but-anything-else is an explicit "on", which is why this tests
+  -- for the line rather than for a truthy value
+  if field.off then out.off = (field.off == "1" or field.off == "true") end
   return out
 end
 
 -- ------- the store
 --
--- Best effort, like the career: a reader always gets a table, a writer
--- always gets a boolean, and a filesystem that will not cooperate costs a
--- warning rather than a throw on the path into a match.
+-- Best effort, like the career, and the same contract in the same place:
+-- lib/keyfile.lua.
 
 function Stats.load(mod)
-  local cache = mod and mod.cache
-  if not cache then return {} end
-  local ok, bytes = pcall(cache.read, cache, Stats.KEY)
-  if not ok or type(bytes) ~= "string" then return {} end
-  return Stats.decode(bytes)
+  return KeyFile.load(mod, Stats.KEY, Stats.decode)
 end
 
 function Stats.save(mod, s, log)
-  local cache = mod and mod.cache
-  if not cache then return false, "no mod.cache on this engine" end
-  local ok, wrote, err = pcall(cache.write, cache, Stats.KEY, Stats.encode(s))
-  if not ok then wrote, err = nil, wrote end
-  if not wrote then
-    if log then log:warn("stats not saved (%s)", tostring(err or "unknown")) end
-    return false, err
-  end
-  return true
+  return KeyFile.save(mod, Stats.KEY, Stats.encode(s), log, "stats")
 end
 
 -- Load, minting an id and a first-seen date in MEMORY the first time.

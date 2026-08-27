@@ -202,6 +202,18 @@ return function(mod)
   -- and seed so this log
   -- and the relay's own can be lined up afterwards.
   local log = Log.new(mod.log)
+  -- Wall clock, or nil where there is no LOVE under us (the headless test
+  -- loader).  Defined up here rather than beside its first caller because
+  -- a Lua local is only in scope BELOW its line: half the file used to be
+  -- above it and hand-rolled `(love.timer and love.timer.getTime and
+  -- love.timer.getTime()) or 0` instead -- six copies of a helper that
+  -- already existed, and each one indexing `love` without checking it is
+  -- there at all.  `clock() or 0` is the same expression for callers that
+  -- want a number rather than the absence of one.
+  local function clock()
+    if love and love.timer and love.timer.getTime then return love.timer.getTime() end
+    return nil
+  end
   -- One line at boot saying whether this engine really has what the mod
   -- is built on (POK-29).  manifest.json gates the version, but a fork or
   -- a local build can still be missing a seam, and a named complaint here
@@ -269,6 +281,7 @@ return function(mod)
     pendingFame = nil,    -- a parade that belongs to somebody else (POK-107)
     winnerId = nil,       -- who the host crowned (POK-107)
     arming = nil,         -- { map, x, y } while save.new_game reshapes the skeleton
+    refusedBattle = nil,  -- the last battle never ran, so its blackout is not a loss (POK-134)
     started = false,      -- have I dropped into the world yet this match
     myName = career.name, -- chosen on the NAME row; nil falls back to the save
     skin = career.skin,   -- the walk sheet every other trainer sees (POK-79)
@@ -310,11 +323,9 @@ return function(mod)
   -- A say that must not be lost.  The runner refuses a script while one is
   -- running (POK-49), and a say issued the frame of a warp can be eaten by
   -- a held button (POK-50) -- so park it here and let tickSays deliver it
-  -- once the runner is free and the delay has passed.  (love.timer inline:
-  -- the clock() helper is defined further down, and locals capture
-  -- lexically -- the POK-24 lesson.)
+  -- once the runner is free and the delay has passed.
   local function sayLater(text, delay)
-    local now = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
+    local now = clock() or 0
     local q = BR.pendingSays
     q[#q + 1] = { text = text, at = now + (delay or 0) }
   end
@@ -737,11 +748,6 @@ return function(mod)
     return true
   end
 
-  -- Back to a clean slate without leaving the world (a closed relay, a
-  -- cancelled lobby).  teardown() is the deliberate exit that also tells the
-  -- relay goodbye.
-  -- Everything one match owns, cleared for the next: a leave (reset) or
-  -- PLAY AGAIN (onAgain), which keeps the room.
   -- Give another mod its overworld back (POK-134).  Idempotent, and called
   -- from more than one place ON PURPOSE.  resetMatch is the one path every
   -- deliberate exit goes through, and it is the primary route -- but it is
@@ -760,7 +766,18 @@ return function(mod)
     self.suspendedMods = nil
   end
 
+  -- Back to a clean slate without leaving the world (a closed relay, a
+  -- cancelled lobby).  teardown() is the deliberate exit that also tells the
+  -- relay goodbye.
+  -- Everything one match owns, cleared for the next: a leave (reset) or
+  -- PLAY AGAIN (onAgain), which keeps the room.
   function BR:resetMatch()
+    -- What belongs to somebody ELSE goes back first, before anything here
+    -- can throw and strand it: every other line of this function is our own
+    -- state, and losing that costs a match, while losing this costs a
+    -- stranger their overworld for the session (POK-134).  Idempotent, so
+    -- the save-event net behind it is still free to arrive.
+    self:unsuspendMods()
     self:restoreSpeed()
     self.ghosts:despawnAll()
     self.spills:clear()
@@ -769,6 +786,7 @@ return function(mod)
       self.battle = nil
     end
     self.fellAt = nil
+    self.refusedBattle = nil
     self.players = {}
     -- the door's findings go with the room they were about (POK-142): the
     -- next room is different people, and a stale "!" against an id the
@@ -787,11 +805,6 @@ return function(mod)
     -- one path every exit goes through -- a deliberate LEAVE, a teardown,
     -- a host drop, PLAY AGAIN -- which is why it lives here and not in
     -- teardown beside restoreSkinWalk.
-    -- ...and whatever was asked to stand down gets its overworld back
-    -- (POK-134).  Before the TM restore rather than after it: this one
-    -- reaches into ANOTHER mod, so it goes first while the least has
-    -- already been undone, and it is safe to run twice.
-    self:unsuspendMods()
     if self.machineNames then
       Machines.restore(self.game and self.game.data, self.machineNames)
       self.machineNames = nil
@@ -951,7 +964,7 @@ return function(mod)
     self:resetMatch()
     -- an open room keeps driving itself, as quick play promised
     if self.relay:isHost() and self:isOpen() then
-      local now = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
+      local now = clock() or 0
       self.autoStartAt = now + QUICK_START_SECONDS
     end
     if wasMatchWorld and game then self:toLobbyScreen() end
@@ -1077,26 +1090,33 @@ return function(mod)
       self.machineNames = Machines.apply(self.game.data)
     end
     -- Other mods that act on the overworld stand down for the match
-    -- (POK-134).  Same guard as the TMs above and for the same reason: a
-    -- second suspend hands back an empty token, and that is how the way
-    -- back gets lost.  restore lives in resetMatch, the one path every
-    -- exit goes through.
+    -- (POK-134).  This guard looks like the TMs' above but is load-bearing
+    -- in a way that one is not: Machines.apply is idempotent, while
+    -- Coexist.suspend is NOT -- call it twice and the second token is
+    -- live too, so restoring both reinstalls another mod's hooks twice.
+    -- This `if` is the only thing standing between us and that.  restore
+    -- lives in resetMatch, the one path every exit goes through.
     if not self.suspendedMods then
       self.suspendedMods = Coexist.suspend(function(id) return mod.find(id) end,
                                            log)
     end
     self.stats = { catches = 0, beats = 0, steps = 0,
-                   startedAt = (love.timer and love.timer.getTime
-                                and love.timer.getTime()) or 0 }
+                   startedAt = clock() or 0 }
     if safari > 0 then
       -- the host's beats correct this; until the first lands it is the
       -- announced length from now, which is close enough for a clock
-      local now = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
+      local now = clock() or 0
       self.safariEndsAt = now + safari
       self.lastSafariBeat = nil
     end
-    self.game:startNewGame({ intro = false })
+    -- arming is cleared whatever happens.  It gates the save.created net
+    -- (BR.matchWorld, and the overworld another mod is owed back, POK-134),
+    -- so a throw in startNewGame leaving it set would switch that net off
+    -- for the rest of the session -- the one fault the net exists for.  The
+    -- failure still travels: the tick's pcall logs it exactly as before.
+    local ok, err = pcall(self.game.startNewGame, self.game, { intro = false })
     self.arming = nil
+    if not ok then error(err, 0) end
     self.sentMap, self.sentFacing, self.resync = nil, nil, 0
     self.sentBusy = false    -- not nil: nil is "not busy", a real answer
     broadcastPlace()
@@ -1538,10 +1558,7 @@ return function(mod)
       if self.phase == "over" and fromId == self.winnerId
          and not self.pendingFame then
         self.pendingFame = { party = msg.party, stats = msg.stats }
-        -- love.timer inline: clock() is defined further down and locals
-        -- capture lexically, so reaching for it here would read nil
-        -- (the POK-24 lesson, and br_test guards it)
-        local nowF = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
+        local nowF = clock() or 0
         self.pendingParade = nowF + 2.5
       end
 
@@ -1717,12 +1734,6 @@ return function(mod)
     return not Spawn.isWarp(maps, mapId, x, y)
   end
 
-  local function clock()
-    if love and love.timer and love.timer.getTime then return love.timer.getTime() end
-    return nil
-  end
-
-  -- (below clock(): a local helper is only in scope after its line)
   -- Fleeing is not free (POK-24, lib/flee.lua).  After a flee neither of
   -- the pair engages the other for a few seconds -- the head start a flee
   -- promises -- and the runner may not initiate on who they fled from for
@@ -2144,6 +2155,18 @@ return function(mod)
 
   function BR:inRound()
     return self.phase == "safari" or self.phase == "drop" or self.phase == "match"
+  end
+
+  -- The window where an EMPTY PARTY is the designed state, not a defeat.
+  -- The SAFARI is entered with nothing and the team is caught during it
+  -- (lendGhostLead lends a stand-in precisely because #party == 0), and
+  -- "drop" is the buzzer's own frame, before tickDrop has eliminated an
+  -- empty-handed player for catching nothing.  Past it, no party means a
+  -- real whiteout.  POK-134's refusal guard is scoped to this on BOTH
+  -- sides -- recorded here, spent here -- so a verdict cannot outlive the
+  -- phase that earned it.
+  function BR:catching()
+    return self.phase == "safari" or self.phase == "drop"
   end
 
   -- inRound() is the RULES window -- levels, bag, encounters.  This is the
@@ -4124,6 +4147,46 @@ return function(mod)
   mod.events:on("battle.ended", function(ev)
     BR.localBattle = nil
     BR:reclaimGhostLead()   -- the Safari's stand-in leaves with the screen
+    -- A battle that never ran is not a defeat (POK-134).  The engine
+    -- refuses a wild battle against an empty party -- BattleState marks it
+    -- dead and emits `lose` with `skipped` set, then forces the blackout --
+    -- and the SAFARI opening is played with an empty party by design, so
+    -- anything that keeps the ghost lead from being lent used to eliminate
+    -- the player on the spot, every time they touched a wild mon.
+    --
+    -- The second clause does not depend on knowing why.  A SAFARI battle
+    -- has no player turn at all: the menu is BALL/BAIT/ROCK/RUN and no mon
+    -- of yours ever acts (BattleState makeSafari), so a `lose` arriving
+    -- from one is the engine's empty-party blackout ("battle finished with
+    -- no healthy party; forcing blackout") and never something the player
+    -- did.
+    --
+    -- Keyed on the BATTLE being a Safari one rather than on the phase.
+    -- Engagement is gated to phase "match" today, so a bot cannot beat
+    -- anyone during the SAFARI and a phase test would be equivalent -- but
+    -- it would be equivalent by an invariant held somewhere else, and a
+    -- bot defeat quietly not counting is exactly the bug this would become
+    -- if that ever moved.
+    --
+    -- Recorded rather than acted on here: the elimination is raised by the
+    -- blackout that follows (world.blacked_out), not by this event, so the
+    -- verdict has to survive the gap.  Written on EVERY battle.ended, so
+    -- an ordinary battle clears a refusal nobody blacked out for.
+    -- ...and ONLY while an empty party is the designed state.  The SAFARI
+    -- is entered with nothing and the team is caught during it --
+    -- lendGhostLead lends a stand-in precisely because #party == 0 -- so
+    -- there the engine's "no usable POKeMON" bail-out means "has not
+    -- caught anything yet", and everywhere else it means a real whiteout.
+    --
+    -- This must not undo the rule it sits next to: catching nothing DOES
+    -- cost you the match.  tickDrop eliminates an empty-handed player at
+    -- the buzzer ("caught nothing"), and that is the elimination that
+    -- counts -- being refused a battle mid-hunt is the only thing excused.
+    -- "drop" is in because the buzzer sets it a frame before tickDrop runs,
+    -- so a wild mon touched in that gap must not white the player out
+    -- before the PA has had its say.
+    BR.refusedBattle = (BR:catching() and (ev.skipped
+      or (ev.battle and ev.battle.safari and ev.result == "lose"))) and true or nil
     local npc = BR.npcFight
     BR.npcFight = nil
     if npc and BR.phase == "match" and ev.result == "win" and not BR.botFight then
@@ -4223,34 +4286,14 @@ return function(mod)
       end
     end
     BR.fleeing = nil
-    -- A battle that never ran is not a defeat (POK-134).  The engine
-    -- refuses a wild battle against an empty party -- BattleState.newWild
-    -- marks it dead and reports it as `lose` with `skipped` set -- and the
-    -- SAFARI opening is played with an empty party by design, so anything
-    -- that keeps the ghost lead from being lent used to eliminate the
-    -- player on the spot, every time they touched a wild mon.
-    --
-    -- The second clause is the one that does not depend on knowing why.  A
-    -- SAFARI battle has no player turn at all: the menu is BALL/BAIT/ROCK/
-    -- RUN and no mon of yours ever acts (BattleState makeSafari), so a
-    -- `lose` arriving from one is the engine's empty-party blackout
-    -- (BattleState "battle finished with no healthy party; forcing
-    -- blackout") and never something the player did.
-    --
-    -- Keyed on the BATTLE being a Safari one rather than on the phase.
-    -- Engagement is gated to phase "match" today, so a bot cannot beat
-    -- anyone during the SAFARI and a phase test would be equivalent -- but
-    -- it would be equivalent by an invariant held somewhere else, and a
-    -- bot defeat quietly not counting is exactly the bug this would become
-    -- if that ever moved.  `battle.safari` is the state makeSafari hangs
-    -- on the battle itself, which is the thing actually being claimed.
-    if ev.skipped or (ev.battle and ev.battle.safari and ev.result == "lose") then
-      log:warn("a battle was refused (skipped=%s, safari=%s) -- not a loss",
-               tostring(ev.skipped),
-               tostring(ev.battle and ev.battle.safari ~= nil))
-      BR.status = "alive"
-      return
-    end
+    -- No "a refused battle is not a defeat" guard here on purpose: a
+    -- refusal cannot reach this event.  LinkState builds this payload by
+    -- hand -- { result, myParty, theirParty, peerName, role } -- so there
+    -- is no `skipped` and no `battle` to read, and a link battle always
+    -- has a player battler installed, so it is never the empty-party
+    -- refusal in the first place.  POK-134's guard lives on the path that
+    -- really carries one: battle.ended sets BR.refusedBattle and
+    -- world.blacked_out honours it.
     if ev.result == "lose" then
       -- one elimination path for every way of losing, so a PvP defeat
       -- spills the team -- and the bag, on the ground beside the victor
@@ -4569,6 +4612,20 @@ return function(mod)
   -- never blacks anyone out: cable rules leave the real party untouched,
   -- which is why link.battle_ended handles that case separately.)
   mod.events:on("world.blacked_out", function()
+    -- ...unless the battle behind it never ran (POK-134).  The flag is
+    -- consumed here rather than merely read: the engine's own blackout has
+    -- already healed the party and warped them to the heal point, so the
+    -- next one to arrive is a real whiteout and must count.
+    local refused = BR.refusedBattle
+    BR.refusedBattle = nil
+    -- Both halves, checked where it matters: the battle never ran, AND we
+    -- are still in the hunt.  The drop is what turns "no party yet" into
+    -- "no party left", so a pass carried across it would make an
+    -- empty-handed player immune to the elimination tickDrop owes them.
+    if refused and BR:catching() then
+      log:warn("a battle was refused -- blacked out, but not a loss")
+      return
+    end
     BR:eliminate("You whited out!\nYou are out of\nthe match.", "whiteout")
   end)
 
@@ -4907,6 +4964,18 @@ return function(mod)
     return nil
   end
 
+  -- Game Boy pixels -> screen, the mapping Renderer:endFrame hands us, with
+  -- the state pushed so a hook can draw in 160x144 and put everything back.
+  -- The caller pops.  (The town-map fog overlay below does its own: it
+  -- needs the offset and the scale as numbers rather than as a transform.)
+  local function gbCanvas(viewport)
+    local g = love.graphics
+    g.push("all")
+    g.translate(viewport.gameX or 0, viewport.gameY or 0)
+    g.scale((viewport.gameWidth or 160) / 160, (viewport.gameHeight or 144) / 144)
+    return g
+  end
+
   local function hudBox(text, tx, ty)
     local Font = require("src.render.Font")
     local w = #text + 2
@@ -4941,12 +5010,7 @@ return function(mod)
     local okFont, Font = pcall(require, "src.render.Font")
     if not okFont or not Font.draw then return out end
 
-    local sx = (viewport.gameWidth or 160) / 160
-    local sy = (viewport.gameHeight or 144) / 144
-    local g = love.graphics
-    g.push("all")
-    g.translate(viewport.gameX or 0, viewport.gameY or 0)
-    g.scale(sx, sy)
+    local g = gbCanvas(viewport)
     -- Into the battle's OWN message box: BattleState:drawTextArea has
     -- already put it on screen and this phase leaves it empty, so we use
     -- its exact text origin (8, 112) and its black, the same as a real
@@ -4967,12 +5031,7 @@ return function(mod)
     local okFont, Font = pcall(require, "src.render.Font")
     if not okFont or not Font.drawBox then return out end
 
-    local sx = (viewport.gameWidth or 160) / 160
-    local sy = (viewport.gameHeight or 144) / 144
-    local g = love.graphics
-    g.push("all")
-    g.translate(viewport.gameX or 0, viewport.gameY or 0)
-    g.scale(sx, sy)
+    local g = gbCanvas(viewport)
     g.setColor(1, 1, 1, 1)
 
     -- top-right: the count
@@ -5442,6 +5501,21 @@ return function(mod)
     return BR.status
   end
 
+  -- Put BR in a phase with no match under it, for tests and drivers.  The
+  -- headless loader has no game, and every real route into a phase goes
+  -- through startMatch or the wire and needs one -- so a phase-dependent
+  -- rule (the POK-134 refusal guard) could not be driven through the real
+  -- event bus at all without this.  A FIXTURE, not a transition: it
+  -- deliberately skips setPhase's logging and side effects, and takes only
+  -- the six names BR actually uses.
+  local PHASES = { off = true, lobby = true, safari = true,
+                   drop = true, match = true, over = true }
+  mod.exports.debugPhase = function(p)
+    if not PHASES[p] then return nil, "not a phase" end
+    BR.phase = p
+    return BR.phase
+  end
+
   -- POK-72: the tick runs behind ONE pcall, so a throw in any subsystem
   -- is swallowed and only warned once.  A driver needs to see that it
   -- happened at all.
@@ -5471,7 +5545,7 @@ return function(mod)
     return {
       phase = BR.phase, status = BR.status,
       botFight = BR.botFight, botFightAt = BR.botFightAt,
-      now = (love.timer and love.timer.getTime and love.timer.getTime()) or 0,
+      now = clock() or 0,
       ring = BR.ring and BR.ring.phase,
       radius = BR.ring and BR.ring.radius,
       mapId = (here and here.mapId) or "nil",

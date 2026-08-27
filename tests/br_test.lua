@@ -2943,6 +2943,55 @@ do
   ok(S:keyAt("ROUTE_1", 40, 40) == nil, "an empty cell has no key")
 end
 
+-- The `key=value` store under both the career and the stats.  Tested on its
+-- own because it is now shared: a change here moves two files at once, and
+-- "the career round-trips" would not say which half broke.
+do
+  local KeyFile = require("mods.battle_royale.lib.keyfile")
+
+  eq(KeyFile.trim("  RED  "), "RED", "trim takes both ends")
+  eq(KeyFile.trim(""), "", "...and an empty string survives it")
+
+  local f = KeyFile.parse("a=1\nb = two \n")
+  eq(f.a, "1", "a row parses")
+  eq(f.b, "two", "...and both sides are trimmed")
+
+  eq(KeyFile.parse("name=A=B").name, "A=B", "the FIRST = splits, so a value may hold more")
+  eq(next(KeyFile.parse("")), nil, "an empty file parses to nothing")
+  eq(next(KeyFile.parse(nil)), nil, "and so does a missing one")
+  eq(next(KeyFile.parse("not a row")), nil, "a line with no = is dropped")
+  eq(KeyFile.parse("a=1\r\nb=2\r\n").b, "2", "CRLF is a line ending too")
+  eq(KeyFile.parse("a=1\na=2\n").a, "2", "a later row wins")
+  eq(KeyFile.parse("a=\n").a, "", "a valueless row is present and empty")
+
+  eq(KeyFile.encode({ { "a", "1" }, { "b", "2" } }), "a=1\nb=2\n",
+     "encode writes the pairs in order, one per line")
+  eq(KeyFile.encode({ { "a", "1" }, { "b", nil }, { "c", "3" } }), "a=1\nc=3\n",
+     "a nil value writes no line at all")
+
+  -- the round trip is the property that matters: the parser must read back
+  -- what the encoder wrote, for every value the callers can produce
+  local pairs_ = { { "id", "0123456789abcdef" }, { "since", "2026-08-27" },
+                   { "solo", "17" }, { "off", "0" } }
+  local back = KeyFile.parse(KeyFile.encode(pairs_))
+  for _, kv in ipairs(pairs_) do
+    eq(back[kv[1]], kv[2], "round trip: " .. kv[1])
+  end
+
+  eq(KeyFile.count("3"), 3, "count reads a number out of a string")
+  eq(KeyFile.count(-1), 0, "a negative count is none")
+  eq(KeyFile.count(2.7), 2, "a fractional count is floored")
+  eq(KeyFile.count("nope"), 0, "and a word is none")
+  eq(KeyFile.count(nil), 0, "and so is nothing")
+
+  -- no mod.cache (an engine that will not give us one) is not an error
+  eq(next(KeyFile.load(nil, "k", function() return { bad = true } end)), nil,
+     "no cache loads an empty table without calling decode")
+  local okSave, why = KeyFile.save(nil, "k", "a=1\n", nil, "thing")
+  eq(okSave, false, "no cache is a failed save")
+  ok(type(why) == "string", "...with a reason")
+end
+
 -- POK-120: the career that outlives a playthrough
 do
   local Career = require("mods.battle_royale.lib.career")
@@ -3574,19 +3623,28 @@ do
     ok(true, "...and restores cleanly")
   end
 
-  -- ------- the documented trap, asserted so it stays documented: a SECOND
-  -- suspend hands back an empty token.  main.lua must guard on the token it
-  -- already holds -- exactly as it guards Machines.apply, and for the same
-  -- reason written there: "a double call is how the way back gets lost".
+  -- ------- the documented trap, asserted so it stays documented: a second
+  -- suspend is NOT a no-op.  It hands back a second LIVE token, and
+  -- restoring both installs the other mod's hooks twice -- so main.lua's
+  -- `if not self.suspendedMods` is the only thing preventing it, and this
+  -- pins the behaviour that makes that guard load-bearing.
+  --
+  -- These assertions were `>= 0` and `ok(true)` and passed against the
+  -- opposite claim: the comment said the second token came back empty,
+  -- nothing could fail, and the double install went unnoticed.  Assert the
+  -- real numbers or do not assert.
   do
-    local handle = fake()
+    local handle, calls = fake()
     local first = Coexist.suspend(function() return handle end)
     local second = Coexist.suspend(function() return handle end)
     eq(#Coexist.suspended(first), 1, "the first token holds the way back")
-    ok(#Coexist.suspended(second) >= 0, "the second token is not the way back")
+    eq(#Coexist.suspended(second), 1,
+       "a second suspend is live too -- the caller must not make one")
     Coexist.restore(second)
     Coexist.restore(first)
-    ok(true, "restoring both is safe")
+    local n = 0
+    for _, c in ipairs(calls) do if c == "installHooks" then n = n + 1 end end
+    eq(n, 2, "...and restoring both double-installs, which is the trap")
   end
 end
 

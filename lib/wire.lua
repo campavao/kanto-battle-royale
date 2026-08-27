@@ -510,26 +510,43 @@ local function clampInt(v, lo, hi, default)
   return math.max(lo, math.min(hi, math.floor(v)))
 end
 
-decoders.state = function(m)
-  if type(m.party) ~= "table" then return nil, "bad party" end
+-- Every party that arrives over the wire is the same shape of untrusted:
+-- at most six rows, each naming a species, and a peer that says otherwise
+-- is refused rather than clamped.  What each row BECOMES differs -- a
+-- state row carries health and moves, a fame row carries a nickname -- so
+-- that part stays with the decoder; `row` builds it.
+--
+-- The cap is a hard six, not a truncation to be tidied up later: a party of
+-- two hundred marching past the Hall of Fame is the thing being prevented
+-- (POK-107).
+local function decodeParty(rows, row)
+  if type(rows) ~= "table" then return nil, "bad party" end
   local party = {}
-  for i, r in ipairs(m.party) do
+  for i, r in ipairs(rows) do
     if i > 6 then break end
     if type(r) ~= "table" or type(r.sp) ~= "string" or r.sp == "" or #r.sp > MAX_ID then
       return nil, "bad party row"
     end
+    party[#party + 1] = row(r)
+  end
+  return party
+end
+
+decoders.state = function(m)
+  local party, bad = decodeParty(m.party, function(r)
     local moves = {}
     for j, mv in ipairs(type(r.mv) == "table" and r.mv or {}) do
       if j > 4 then break end
       if type(mv) == "string" and mv ~= "" and #mv <= MAX_ID then moves[#moves + 1] = mv end
     end
-    party[#party + 1] = {
+    return {
       species = r.sp, level = clampInt(r.lv, 1, 100, 1),
       hp = clampInt(r.hp, 0, 999, 0), maxHp = clampInt(r.mhp, 1, 999, 1),
       status = type(r.st) == "string" and r.st:sub(1, MAX_ID) or nil,
       moves = moves,
     }
-  end
+  end)
+  if not party then return nil, bad end
   local items = decodeItems(m.items or {})
   if not items then return nil, "bad items" end
   return { t = "state", party = party, items = items,
@@ -540,20 +557,15 @@ end
 -- Hall of Fame can put on a screen, so a peer cannot stretch the card or
 -- march a party of two hundred past everyone (POK-107).
 decoders.fame = function(m)
-  if type(m.party) ~= "table" then return nil, "bad party" end
-  local party = {}
-  for i, r in ipairs(m.party) do
-    if i > 6 then break end
-    if type(r) ~= "table" or type(r.sp) ~= "string" or r.sp == "" or #r.sp > MAX_ID then
-      return nil, "bad party row"
-    end
-    party[#party + 1] = {
+  local party, bad = decodeParty(m.party, function(r)
+    return {
       species = r.sp,
       nickname = type(r.nm) == "string" and r.nm ~= "" and r.nm:sub(1, MAX_ID)
                  or r.sp,
       level = clampInt(r.lv, 1, 100, 1),
     }
-  end
+  end)
+  if not party then return nil, bad end
   local st = type(m.stats) == "table" and m.stats or {}
   return { t = "fame", party = party, stats = {
     catches = clampInt(st.catches, 0, 99999, 0),
