@@ -48,29 +48,39 @@ async function gql(query, variables) {
 // A SKIPPED deployment becomes the "latest" one and carries no logs, so
 // asking for the latest deployment returns an empty list that reads exactly
 // like an idle relay. Resolve the newest SUCCESS instead.
+//
+// DeploymentListInput takes projectId and serviceId only -- an environmentId
+// or a status filter in there is a 400. Sort and filter here instead.
 async function liveDeployment() {
   const data = await gql(
     `query($input: DeploymentListInput!) {
-       deployments(input: $input, first: 1) {
+       deployments(input: $input, first: 20) {
          edges { node { id status createdAt } }
        }
      }`,
-    { input: { projectId: PROJECT, serviceId: SERVICE, environmentId: ENVIRONMENT,
-               status: { successfulOnly: true } } }
+    { input: { projectId: PROJECT, serviceId: SERVICE } }
   );
-  const node = data?.deployments?.edges?.[0]?.node;
-  if (!node) throw new Error("no SUCCESS deployment found for the relay service");
-  return node;
+  const nodes = (data?.deployments?.edges || []).map(e => e.node);
+  const live = nodes
+    .filter(n => n.status === "SUCCESS")
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
+  if (!live) {
+    throw new Error(`no SUCCESS deployment in the last ${nodes.length}: ` +
+                    nodes.map(n => n.status).join(", "));
+  }
+  return live;
 }
 
+// deploymentLogs takes deploymentId and limit only. There is no server-side
+// filter argument, so pull a window and match the heartbeat here.
 async function heartbeat(deploymentId) {
   const data = await gql(
-    `query($deploymentId: String!, $filter: String, $limit: Int) {
-       deploymentLogs(deploymentId: $deploymentId, filter: $filter, limit: $limit) {
+    `query($deploymentId: String!, $limit: Int) {
+       deploymentLogs(deploymentId: $deploymentId, limit: $limit) {
          timestamp message
        }
      }`,
-    { deploymentId, filter: "peak", limit: 20 }
+    { deploymentId, limit: 500 }
   );
   const lines = (data?.deploymentLogs || []).filter(l => /\bpeak \d+ rooms/.test(l.message));
   if (!lines.length) return null;
