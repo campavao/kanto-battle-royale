@@ -182,9 +182,9 @@
       <span class="sub" id="relsub">since the first cut</span>
     </div>
     <div class="reading">
-      <dt>Playing now</dt>
+      <dt>Connected</dt>
       <dd id="players" class="void">—</dd>
-      <span class="sub">relay not reporting yet</span>
+      <span class="sub" id="playersub">relay not reporting yet</span>
     </div>
   </dl>
 
@@ -329,13 +329,29 @@ async function relay() {
     const r = await fetch("data/stats.json", { cache: "no-cache" });
     if (!r.ok) return;
     const s = await r.json();
+    const clock = iso => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+
     $("relay").classList.add("live");
     $("players").textContent = s.conns == null ? 0 : s.conns;
     $("players").classList.remove("void");
+    $("playersub").textContent = s.conns
+      ? (s.rooms || 0) + " room" + (s.rooms === 1 ? "" : "s") + " open right now"
+      : "nobody on the relay right now";
+
+    // Peak resets with the process, so it is never all-time. Say which window
+    // it covers rather than letting it read as a record.
     $("relaytext").textContent =
-      (s.rooms || 0) + " room" + (s.rooms === 1 ? "" : "s") + " open, " +
-      (s.conns || 0) + " connected. Peak " + (s.peakConns || 0) + " in this deployment.";
-    $("relayhint").textContent = "Read from the Railway heartbeat at " + day(s.at) + ".";
+      "Peak " + (s.peakConns || 0) + " connected across " + (s.peakRooms || 0) +
+      " room" + (s.peakRooms === 1 ? "" : "s") + " since this deploy on " + day(s.deployedAt) + ".";
+
+    const solo = s.statSolo == null ? null : s.statSolo;
+    $("relayhint").innerHTML =
+      (solo === null
+        ? "No solo telemetry in this deployment yet. "
+        : solo + " solo match" + (solo === 1 ? "" : "es") + " reported by " +
+          (s.statSeen || 0) + " check-in" + (s.statSeen === 1 ? "" : "s") + ". ") +
+      "Heartbeat " + clock(s.at) + ", " + day(s.at) + " · " +
+      (s.sent || "0B") + " out.";
   } catch (e) {}
 }
 
