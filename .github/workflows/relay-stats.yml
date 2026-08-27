@@ -12,9 +12,6 @@ on:
     - cron: '*/15 * * * *'
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 concurrency:
   group: relay-stats
   cancel-in-progress: false
@@ -22,6 +19,10 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      moved: ${{ steps.commit.outputs.moved }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -35,16 +36,32 @@ jobs:
         run: node tools/relay-stats.mjs
 
       - name: commit if it moved
+        id: commit
         run: |
           if [ -z "$(git status --porcelain site/data/stats.json)" ]; then
             echo "nothing to commit"
+            echo "moved=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          summary=$(node -e "
+            const s = require('./site/data/stats.json');
+            process.stdout.write(\`\${s.conns} connected, \${s.rooms} rooms, \${s.statSolo ?? 0} solo\`);
+          ")
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add site/data/stats.json
-          git commit -m "relay: $(node -e "
-            const s=require('./site/data/stats.json');
-            process.stdout.write(\`\${s.conns} connected, \${s.rooms} rooms, \${s.statSolo ?? 0} solo\`);
-          ")"
+          git commit -m "relay: $summary"
           git push
+          echo "moved=true" >> "$GITHUB_OUTPUT"
+
+  # The commit above is made with the default GITHUB_TOKEN, and GitHub will
+  # not start a workflow from such a push. Without this the file lands in the
+  # repo and the published site never sees it.
+  publish:
+    needs: scrape
+    if: needs.scrape.outputs.moved == 'true'
+    uses: ./.github/workflows/pages.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
