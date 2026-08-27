@@ -1,0 +1,16 @@
+{
+  "at": "2026-08-27T17:20:14.703Z",
+  "rooms": 0,
+  "roomCap": 40,
+  "conns": 0,
+  "connCap": 200,
+  "peakRooms": 2,
+  "peakConns": 2,
+  "statSeen": 21,
+  "statSolo": 25,
+  "sent": "1.7MB",
+  "lines": 19923,
+  "deployedAt": "2026-08-26T17:44:52.032Z",
+  "deploymentId": "2e29e264-d01f-4a65-a904-04887904627d",
+  "readAt": "2026-08-27T17:20:54.699Z"
+}
