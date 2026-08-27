@@ -4,6 +4,10 @@ name: pages
 # https://campavao.github.io/kanto-battle-royale/data/index.json --
 # the URL src/mods/ModIndex.lua:66 asks for first. Until this existed it
 # 404'd and every client fell back to raw.githubusercontent.
+#
+# workflow_call is here because the relay-stats job commits with the default
+# GITHUB_TOKEN, and a push made with that token deliberately triggers nothing.
+# Calling this workflow is a direct job invocation, so it sidesteps that.
 on:
   push:
     branches: [main]
@@ -11,6 +15,7 @@ on:
       - 'site/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
