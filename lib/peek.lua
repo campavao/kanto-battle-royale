@@ -40,14 +40,23 @@ function Peek.summary(save, bag)
   return { party = party, items = (bag and bag.items) or {}, money = (bag and bag.money) or 0 }
 end
 
--- a bot's party, derived: its team at the rung, at full HP.  Bots.party
--- hands back species and level; the fight builds the real Pokemon from
--- them, and so does this, when the data is there to build from -- a
--- spectator should see the stats and the moves the fight would.
-function Peek.botParty(Bots, seed, id, data, level)
+-- a bot's party: its RECORD (POK-158) at the rung -- the team it built
+-- and the wounds it carries -- built into real Pokemon when the data is
+-- there, so a spectator sees the stats and the moves the fight would.
+-- With no record (an engine-data gap) it falls back to the old synth.
+function Peek.botParty(Bots, seed, id, data, level, record)
   local party = {}
   local okP, Pokemon = pcall(require, "src.pokemon.Pokemon")
-  for i, mon in ipairs(Bots.party(seed, id, data, level) or {}) do
+  local rows = {}
+  if record then
+    for _, m in ipairs(record) do
+      rows[#rows + 1] = { species = m.species, level = level,
+                          hpFrac = m.hpFrac }
+    end
+  else
+    rows = Bots.party(seed, id, data, level) or {}
+  end
+  for i, mon in ipairs(rows) do
     if i > 6 then break end
     local built = mon
     if okP and data and data.pokemon and data.pokemon[mon.species] and Pokemon.new then
@@ -55,7 +64,9 @@ function Peek.botParty(Bots, seed, id, data, level)
       if okB and real then built = real end
     end
     local m = monSummary(built)
-    m.hp = m.maxHp
+    local frac = mon.hpFrac or 1
+    m.hp = math.floor(m.maxHp * frac + 0.5)
+    if frac > 0 and m.hp < 1 then m.hp = 1 end
     party[#party + 1] = m
   end
   return party

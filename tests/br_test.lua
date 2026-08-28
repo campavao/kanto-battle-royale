@@ -48,7 +48,32 @@ do
   ok(Wire.decode({ t = "start", seed = 1, spawns = {} }) == nil, "empty start is refused")
 
   -- the Safari opening (POK-21): start carries the round, beats carry the clock
-  eq(Wire.PROTOCOL, 9, "a room that can name a build mismatch is PROTOCOL 9")
+  eq(Wire.PROTOCOL, 10, "a room whose bots carry records is PROTOCOL 10")
+
+  -- botrec (POK-158): the record on the wire
+  local br = Wire.decode(Wire.botrec(1001, {
+    { species = "PIDGEY", hpFrac = 1 }, { species = "EKANS", hpFrac = 0.4 },
+  }))
+  ok(br ~= nil, "botrec round-trips")
+  eq(br and #br.record, 2, "both mons arrive")
+  eq(br and br.record[2].hpFrac, 0.4, "the wound arrives with them")
+  ok(Wire.decode({ t = "botrec", id = 1001, mons = {} }) == nil,
+     "an empty record is refused")
+  ok(Wire.decode({ t = "botrec", id = 1001,
+                   mons = { { s = "A", f = "x" } } }) == nil,
+     "a wordy hp fraction is refused")
+  local clampR = Wire.decode({ t = "botrec", id = 1001,
+                               mons = { { s = "MEW", f = 7 } } })
+  eq(clampR and clampR.record[1].hpFrac, 1, "fractions clamp to [0,1]")
+  -- the bag rides as a field on the record table itself
+  local recBag = { { species = "PIDGEY", hpFrac = 1 } }
+  recBag.bag = { items = { { id = "POTION", n = 2 } }, money = 750 }
+  local withBag = Wire.decode(Wire.botrec(1001, recBag))
+  ok(withBag and withBag.record.bag, "the bag rides the record")
+  eq(withBag and withBag.record.bag.money, 750, "money intact")
+  eq(withBag and withBag.record.bag.items[1].n, 2, "stacks intact")
+  ok(Wire.decode({ t = "botrec", id = 1001, mons = { { s = "A", f = 1 } },
+                   bag = "nope" }) == nil, "a wordy bag is refused")
 
   -- ------- the room door (POK-142)
   --
@@ -1938,6 +1963,27 @@ do
   ok(not none[key(0, 0)], "no seeds, no region")
   local edge = Spawn.floodEscapable(8, 6, isWalk, { { x = -3, y = 99 } })
   ok(not edge[key(0, 0)], "an out-of-bounds seed seeds nothing")
+
+  -- An edge is only a way out where the step actually CROSSES.  Pewter's
+  -- fenced south-east corner touches the south edge, but ROUTE_2 is half
+  -- Pewter's width and every landing from that stretch clamps onto a
+  -- tree -- a real player was dropped there with no Fly and no way out.
+  local okData, maps = pcall(dofile, "data/generated/maps.lua")
+  local okTs, tilesets = pcall(dofile, "data/generated/tilesets.lua")
+  if okData and okTs and maps and tilesets and maps.PEWTER_CITY then
+    local def = maps.PEWTER_CITY
+    local ts = tilesets[def.tileset]
+    local pocket = {}
+    for _, c in ipairs(Spawn.cellsOf(def, ts, maps, tilesets)) do
+      if c.x >= 36 and c.y >= 26 then pocket[#pocket + 1] = c.x .. "," .. c.y end
+    end
+    eq(#pocket, 0, "nobody drops in Pewter's fenced corner ("
+       .. table.concat(pocket, " ") .. ")")
+    ok(#Spawn.cellsOf(def, ts, maps, tilesets) > 500,
+       "the town square is still a drop zone")
+  else
+    print("skip: Pewter corner pin (no generated Kanto data)")
+  end
 end
 
 -- ------- bots that hunt (POK-42, POK-43)
@@ -1969,6 +2015,30 @@ do
   ok(not dup, "no two bots share a town while towns remain")
   eq(#Bots.dealTowns(3, 7, Spawn.rng(7)), 7, "more bots than towns still all land")
 
+  -- POK-147: the deal only avoids sharing WHILE MAPS REMAIN, so the pool
+  -- has to be at least the roster.  Eleven fly towns under thirty bots
+  -- wrapped into 2-3 per town, all in sight-line at t=0, and 18 of 31
+  -- trainers were gone before the player met anybody.  The bot deal now
+  -- draws from every outdoor map the Town Map can place (BR:botDropSpots);
+  -- this pins that Kanto actually offers Bots.MAX of them.
+  do
+    local okData, maps = pcall(dofile, "data/generated/maps.lua")
+    local okField, field = pcall(dofile, "data/generated/field.lua")
+    local locs = okField and field and field.townMap and field.townMap.locations
+    if okData and maps and locs then
+      local Map = require("src.world.Map")
+      local spots = 0
+      for id, def in pairs(maps) do
+        if Map.isOutdoor(def) and locs[id] then spots = spots + 1 end
+      end
+      ok(spots >= Bots.MAX,
+         "enough placeable outdoor maps that a full deal never wraps ("
+         .. spots .. " for " .. Bots.MAX .. " bots)")
+    else
+      print("skip: bot drop pool (no generated Kanto data)")
+    end
+  end
+
   -- POK-62: the TM in the bag
   local inPool = {}
   for _, id in ipairs(Bots.TM_COMMON) do inPool[id] = true end
@@ -1988,6 +2058,135 @@ do
   end
   ok(prizes >= 20 and prizes <= 100,
      "roughly one bag in four holds a prize (" .. prizes .. "/" .. total .. ")")
+
+  -- ------- the record (POK-158 M1): a team a bot BUILDS, not a synth
+
+  local rec = Bots.newRecord(4242, 1001, nil)
+  eq(#rec, 1, "one mon at the drop, whatever the tier")
+  eq(rec[1].hpFrac, 1, "and it is healthy")
+  eq(Bots.newRecord(4242, 1001, nil)[1].species, rec[1].species,
+     "the drop mon is derived: two lazy creations agree")
+
+  eq(Bots.recordCap(), 6, "every bot builds to a full six, like a player")
+
+  local team = {
+    { species = "PIDGEY", hpFrac = 1 },
+    { species = "RATTATA", hpFrac = 0 },     -- fainted last fight
+    { species = "EKANS", hpFrac = 0.4 },
+  }
+  local rows, idx = Bots.fightRows(team, 30)
+  eq(#rows, 2, "a fainted mon does not fight")
+  eq(rows[1].species, "PIDGEY", "record order holds")
+  eq(rows[2].species, "EKANS", "the hurt one still answers the bell")
+  eq(rows[1].level, 30, "every fight is at the rung")
+  eq(idx[2], 3, "idx maps each row back to its record slot")
+  eq(#Bots.spillRows(team, 30), 3, "the spill counts the fallen too")
+
+  -- the fight ends; the enemyParty rows land back on the right mons
+  Bots.scarRecord(team, idx, {
+    { hp = 12, stats = { hp = 48 } },        -- PIDGEY down to a quarter
+    { hp = 0, stats = { hp = 40 } },         -- EKANS fainted
+  })
+  eq(team[1].hpFrac, 0.25, "damage carries out of the fight")
+  eq(team[2].hpFrac, 0, "an untouched fainted mon stays fainted")
+  eq(team[3].hpFrac, 0, "a mon lost in the fight is recorded lost")
+  ok(Bots.recordAlive(team), "one healthy mon is still a trainer")
+  ok(not Bots.recordAlive({ { species = "A", hpFrac = 0 } }),
+     "a wiped record is not")
+
+  -- catches: capped by tier, paced by chance, drawn from the map's table
+  local slots = { { species = "CATERPIE", level = 4 } }
+  local always = function(a, b) if a then return a end return 0 end
+  local never = function(a, b) if a then return a end return 0.99 end
+  local r2 = { { species = "MANKEY", hpFrac = 1 } }
+  eq(Bots.rollCatch(r2, 2, slots, always), "CATERPIE", "a dwell can catch")
+  eq(#r2, 2, "and the team grew")
+  eq(r2[2].hpFrac, 1, "a fresh catch is healthy")
+  eq(Bots.rollCatch(r2, 2, slots, always), nil, "the cap is the cap")
+  eq(Bots.rollCatch({ {} }, 6, slots, never), nil, "most dwells catch nothing")
+  eq(Bots.rollCatch({ {} }, 6, {}, always), nil, "no grass table, no catch")
+
+  -- ------- the records fight (POK-158 M3)
+
+  local sim = { pokemon = {
+    BIG = { baseStats = { hp = 100, attack = 100, defense = 100,
+                          speed = 100, special = 100 } },
+    SMALL = { baseStats = { hp = 20, attack = 20, defense = 20,
+                            speed = 20, special = 20 } },
+  } }
+  eq(Bots.recordPower({ { species = "BIG", hpFrac = 1 } }, sim), 500,
+     "power is the base-stat total")
+  eq(Bots.recordPower({ { species = "BIG", hpFrac = 0.5 },
+                        { species = "SMALL", hpFrac = 0 } }, sim), 250,
+     "wounds scale it and faints zero it")
+  eq(Bots.recordPower({ { species = "WHO", hpFrac = 1 } }, nil), 300,
+     "an unplaceable species gets the middling default")
+
+  local recA = { { species = "BIG", hpFrac = 1 } }
+  local recB = { { species = "SMALL", hpFrac = 1 } }
+  eq(Bots.resolveFight(recA, recB, sim, function() return 0.5 end), "a",
+     "the stronger team usually wins")
+  eq(recA[1].hpFrac, 0.8, "and pays a fifth of itself for a small win")
+  local recA2 = { { species = "BIG", hpFrac = 1 } }
+  local recB2 = { { species = "SMALL", hpFrac = 1 } }
+  eq(Bots.resolveFight(recA2, recB2, sim, function() return 0.9 end), "b",
+     "an upset stays possible")
+  eq(recB2[1].hpFrac, 0.1, "and the underdog barely stands")
+  ok(Bots.recordAlive(recB2), "a winner is never wiped by its own win")
+
+  -- who wants the nurse (POK-158 M2)
+  ok(Bots.wantsHeal({ { hpFrac = 0.4 } }), "half a team down wants healing")
+  ok(Bots.wantsHeal({ { hpFrac = 1 }, { hpFrac = 0 } }), "a faint always does")
+  ok(not Bots.wantsHeal({ { hpFrac = 1 }, { hpFrac = 0.8 } }),
+     "scratches walk it off")
+  ok(not Bots.wantsHeal({}), "an empty record wants nothing")
+
+  -- ...and the errand ladder honours it
+  local sick = { x = 5, y = 5 }
+  local g = Bots.chooseGoal(sick, { heal = { x = 9, y = 9 },
+                                    items = { { x = 6, y = 5 } } },
+                            function() return 0 end)
+  eq(g.kind, "heal", "a hurt team walks to the Centre before the loot")
+  eq(Bots.chooseGoal(sick, { inFog = true, heal = { x = 9, y = 9 } },
+                     function() return 0 end).kind, "seam",
+     "but never into the fog")
+
+  -- ------- the bag lives (POK-158 M2/M4)
+
+  local hurtRec = { { species = "A", hpFrac = 0.3 },
+                    { species = "B", hpFrac = 0.5 } }
+  local bag = { items = { { id = "POKE_BALL", n = 2 },
+                          { id = "SUPER_POTION", n = 1 },
+                          { id = "POTION", n = 1 } }, money = 500 }
+  local used, onto = Bots.quaff(hurtRec, bag)
+  eq(used, "POTION", "the weakest potion that helps goes first")
+  eq(onto and onto.species, "A", "onto the most-hurt mon standing")
+  eq(hurtRec[1].hpFrac, 0.6, "and it helps")
+  eq(#bag.items, 2, "the empty bottle leaves the bag")
+  eq(Bots.quaff({ { species = "A", hpFrac = 0.9 } }, bag), nil,
+     "nobody hurt, nothing drunk")
+  eq(Bots.quaff({ { species = "A", hpFrac = 0 } }, bag), nil,
+     "a potion cannot raise the fainted")
+  local drained = { { species = "A", hpFrac = 0.2 } }
+  eq(Bots.quaff(drained, { items = { { id = "POKE_BALL", n = 9 } } }), nil,
+     "no medicine, no gulp")
+
+  Bots.bagMerge(bag, { items = { { id = "POKE_BALL", n = 3 },
+                                 { id = "TM_ICE_BEAM", n = 1 } },
+                       money = 250 })
+  eq(bag.money, 750, "the money adds")
+  local counts = {}
+  for _, it in ipairs(bag.items) do counts[it.id] = it.n end
+  eq(counts.POKE_BALL, 5, "stacks merge by id")
+  eq(counts.TM_ICE_BEAM, 1, "new items append")
+
+  eq(Bots.tmMove("TM_ICE_BEAM"), "ICE_BEAM", "a TM names its move")
+  eq(Bots.tmMove("POTION"), nil, "a potion does not")
+  ok(Bots.canLearn({ tmhm = { [13] = "ICE_BEAM", [15] = "SWIFT" } },
+                   "ICE_BEAM"), "tmhm says yes")
+  ok(not Bots.canLearn({ tmhm = { [15] = "SWIFT" } }, "ICE_BEAM"),
+     "and no")
+  ok(not Bots.canLearn(nil, "ICE_BEAM"), "an unknown species learns nothing")
 end
 
 -- ------- the endgame hunt (POK-95)
@@ -2457,25 +2656,92 @@ do
     BR.ring = { phase = 3, center = { name = "CELADON CITY" } }
     items = BRMenu.items({}, BR, {})
     eq(labels(items), "SPECTATING|LEVEL: 5|FOG: CELADON CITY|LEAVE MATCH", "spectating, with the fog")
-    -- The match is over: the host can run it back, a guest waits to be sent.
-    -- The champion is SENT here once the Hall of Fame closes (POK-82), so
-    -- the report reads as a result -- no live level, no ring that stopped
-    -- closing, no count of who is still standing.
+    -- The match is over, and this face is now only the moment between the
+    -- winner being named and endMatch taking the exit (POK-144) -- the
+    -- START menu is open at "over" (POK-84), so it is still reachable and
+    -- still reads as a result: no live level, no ring that stopped
+    -- closing, no count of who is still standing.  PLAY AGAIN is NOT here
+    -- any more; it is the lobby's own start row, below.
     BR.phase = "over"
     BR.relay = room(true)
     items = BRMenu.items({}, BR, {})
-    eq(labels(items), "MATCH OVER|PLAY AGAIN|LEAVE MATCH",
-       "over, as the host: PLAY AGAIN")
-    ok(not find(items, "PLAY AGAIN").keepOpen, "which closes the report (the world is about to go)")
+    eq(labels(items), "MATCH OVER|LEAVE MATCH",
+       "over, as the host: no run-it-back row on the match face")
     BR.relay = room(false)
     items = BRMenu.items({}, BR, {})
     eq(labels(items), "MATCH OVER|LEAVE MATCH",
-       "over, as a guest: the host decides")
+       "over, as a guest: the same two rows")
     -- still standing when it ended means you are the one left standing
     BR.status = "alive"
     items = BRMenu.items({}, BR, {})
     eq(labels(items), "YOU WIN!|LEAVE MATCH", "the champion is told so")
     BR.status = "out"
+
+    -- ------- T8: the finished match lands on the LOBBY face, carrying its
+    -- result (POK-144).  This is the screen every terminal route reaches
+    -- now, so it is the screen that has to say what happened -- there is no
+    -- overworld under it to queue a say onto.
+    BR.phase, BR.status, BR.relay = "lobby", "lobby", room(true)
+    BR.solo = true
+    BR.lastResult = { won = true, at = 0 }
+    items, view = BRMenu.items({}, BR, {})
+    eq(view, "lobby", "a finished match lands on the LOBBY face, not the match one")
+    ok(labels(items):find("YOU WIN!", 1, true), "and the lobby says so")
+    ok(labels(items):find("PLAY AGAIN", 1, true),
+       "the host's start row reads PLAY AGAIN")
+    ok(not labels(items):find("START MATCH", 1, true), "...and not both")
+    BR.lastResult = { won = false, name = "SAM", at = 0 }
+    items = BRMenu.items({}, BR, {})
+    ok(labels(items):find("MATCH OVER", 1, true), "a loss says so plainly")
+    ok(labels(items):find("SAM WON", 1, true),
+       "a loss names the trainer who did not lose")
+    BR.lastResult = nil
+    items = BRMenu.items({}, BR, {})
+    ok(labels(items):find("START MATCH", 1, true), "a fresh room is a fresh room")
+    ok(not labels(items):find("MATCH OVER", 1, true), "...with nothing to report")
+
+    -- ------- T9: and the first face too, when the room went with the
+    -- match.  A relay that closed means there is nothing to go back to, so
+    -- the screen offers the ways to start again -- with the result ON the
+    -- version row rather than above it.
+    --
+    -- That is not a stylistic choice.  This face is EXACTLY maxRows(2) long
+    -- (the assertion further up says so in as many words), so a row of its
+    -- own would push the build number off the bottom behind a scroll arrow
+    -- -- the regression POK-104 exists to prevent, on the one line a
+    -- refused player is asked to read out.  The suite asserted the
+    -- invariant and its violation in the same file for one round; it
+    -- asserts the invariant here too so that cannot happen twice.
+    BR.relay = nil
+    BR.solo = false
+    --
+    -- The version here is the WIDEST this mod can realistically stamp, not
+    -- a round "9.9.9": the folded row is "YOU LOST v" plus the version, so
+    -- the fixture is what decides whether the 17-character assertion below
+    -- means anything at all.  "0.36.10" makes it exactly 17 -- the last one
+    -- that fits.  One more character and fit() sizes the box to 21 tiles on
+    -- a 20-tile canvas and clips the build number off the right, which is
+    -- the whole reason the row exists.
+    local WIDEST = "0.36.10"
+    BR.lastResult = { won = false, name = "SAM", at = 0 }
+    items, view = BRMenu.items({ version = WIDEST }, BR, {})
+    eq(view, "menu", "no room left is the first face")
+    eq(labels(items),
+       "QUICK PLAY|SOLO VS BOTS|HOST GAME|JOIN BY CODE|NAME: RED|SKIN: RED|SERVER...|YOU LOST v0.36.10",
+       "the result rides ON the version row, and the winner's name is dropped")
+    ok(#items <= BRMenu.maxRows(2),
+       ("the first face still fits with a result on it (%d/%d)")
+       :format(#items, BRMenu.maxRows(2)))
+    BR.lastResult = { won = true, at = 0 }
+    items = BRMenu.items({ version = WIDEST }, BR, {})
+    ok(labels(items):find("YOU WIN! v0.36.10", 1, true),
+       "a win reads as a win on the same row")
+    eq(#items, BRMenu.maxRows(2), "...still eight rows, not nine")
+    for _, it in ipairs(items) do
+      ok(#it.label <= 17,
+         ("first-face row fits the box (%d): %s"):format(#it.label, it.label))
+    end
+    BR.lastResult = nil
   end
 end
 
@@ -3572,7 +3838,12 @@ do
   end
 
   -- ------- restore twice: every exit path runs through resetMatch and some
-  -- arrive twice, so this must not double-install
+  -- arrive twice, so this must not double-install.
+  --
+  -- That invariant used to be aspirational -- a bot winning, a match nobody
+  -- won and a champion whose parade could not run all reached no reset at
+  -- all.  It is true now: BR:endMatch is the single funnel, and both of its
+  -- branches (keep the room / teardown) call resetMatch (POK-144).
   do
     local handle, calls = fake()
     local token = Coexist.suspend(function() return handle end)

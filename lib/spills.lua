@@ -156,10 +156,14 @@ end
 -- Every spilled cell on a map, for a bot deciding where to walk (POK-121).
 -- A fallen trainer's mons and bag on the floor are the most player-like
 -- errand there is: somebody else paid for them and they are free.
-function Spills:cellsOn(mapId)
+-- `bagsOnly` narrows it to the bags, for a bot whose party is already
+-- full but whose pockets are not (POK-158).
+function Spills:cellsOn(mapId, bagsOnly)
   local out = {}
   for _, ball in pairs(self.balls) do
-    if ball.map == mapId then out[#out + 1] = { x = ball.x, y = ball.y } end
+    if ball.map == mapId and (not bagsOnly or ball.bag) then
+      out[#out + 1] = { x = ball.x, y = ball.y }
+    end
   end
   table.sort(out, function(a, b)
     if a.y ~= b.y then return a.y < b.y end

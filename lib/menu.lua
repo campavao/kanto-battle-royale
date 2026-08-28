@@ -54,6 +54,23 @@ function Menu.items(mod, BR, game)
     items[#items + 1] = { label = label, keepOpen = true, onSelect = onPress }
   end
 
+  -- The match you just left, on the screen you land on (POK-144).  Every
+  -- terminal state now ends HERE -- a win, a loss, a room that closed under
+  -- you -- so the screen has to say which, and it cannot be a text box:
+  -- this screen opens from the TITLE, with no overworld to queue a say
+  -- onto, which is the same reason the refusal rows below are rows.
+  --
+  -- A name is at most 7 characters, so "XXXXXXX WON" is 11 -- inside the
+  -- 17-character budget the comment further down documents.
+  --
+  -- NOT on the first face, which has no rows to spare: it is exactly
+  -- Menu.maxRows(2) long already and the result rides on its version row
+  -- instead (see the bottom of this function).
+  if view ~= "match" and view ~= "menu" and BR.lastResult then
+    row(BR.lastResult.won and "YOU WIN!" or "MATCH OVER")
+    if BR.lastResult.name then row(tostring(BR.lastResult.name) .. " WON") end
+  end
+
   if view == "match" then
     -- A finished match is a place you have LEFT (POK-82): the champion is
     -- sent here once the Hall of Fame closes, so the rows have to read as
@@ -76,10 +93,12 @@ function Menu.items(mod, BR, game)
         row("FOG: " .. tostring((ring.center and ring.center.name) or "CLOSING"))
       end
     end
-    -- the host can run it back (POK-20); everyone else waits to be sent
-    if BR.phase == "over" and BR.relay and BR.relay:isHost() then
-      items[#items + 1] = { label = "PLAY AGAIN", onSelect = function() BR:playAgain() end }
-    end
+    -- No PLAY AGAIN row here any more (POK-144): every client leaves the
+    -- finished world on its own, and the host's "run it back" is the
+    -- lobby's own start row by the time anyone can press it.  This face is
+    -- still reachable, briefly, between onWinner and endMatch -- the START
+    -- menu is open at "over" (POK-84) -- so it keeps its own MATCH OVER /
+    -- YOU WIN! line above and the way out below, and nothing else.
     items[#items + 1] = {
       label = "LEAVE MATCH",
       onSelect = function() BR:teardown("You left the match.") end,
@@ -175,8 +194,14 @@ function Menu.items(mod, BR, game)
         row("TRAINERS: " .. (#relay.members + BR:botsAtStart()))
       end
       local countdown = BR:startsIn()
+      -- PLAY AGAIN and START MATCH are the same button (POK-144): once
+      -- every client returns to the lobby on its own, the host's "run it
+      -- back" IS the lobby's start row.  Only the label changes, so nobody
+      -- has to learn that the room they are looking at is the one they
+      -- just played in.
+      local start = BR.lastResult and "PLAY AGAIN" or "START MATCH"
       items[#items + 1] = {
-        label = countdown and ("START MATCH (" .. countdown .. ")") or "START MATCH",
+        label = countdown and (start .. " (" .. countdown .. ")") or start,
         onSelect = function() BR:startMatch() end,
       }
     else
@@ -276,7 +301,25 @@ function Menu.items(mod, BR, game)
     -- (POK-104) and it is already full.  It shows up in the lobby, where
     -- the question is actually asked -- and only when the door has found
     -- something, which is the only time anyone needs to read it out.
-    row("v" .. tostring(mod.version or "?"))
+    --
+    -- "Already full" is the literal truth: eight rows against
+    -- Menu.maxRows(2) == 8.  So the result of the match that sent a player
+    -- here -- which is where a relay that closed mid-match lands them
+    -- (POK-144) -- rides ON this row rather than above it.  A ninth row
+    -- would push the build number off the bottom behind a scroll arrow, on
+    -- the one line a refused player is asked to read out.
+    --
+    -- Shorter wording than the other faces' "YOU WIN!" / "MATCH OVER"
+    -- because the two share seventeen characters here: at eight each they
+    -- still fit beside a two-digit patch version.  The winner's name does
+    -- not fit at all and is dropped -- with no room left there is nobody to
+    -- play again with, so who won is the least of what this face is for.
+    local build = "v" .. tostring(mod.version or "?")
+    if BR.lastResult then
+      row((BR.lastResult.won and "YOU WIN!" or "YOU LOST") .. " " .. build)
+    else
+      row(build)
+    end
   end
 
   return items, view

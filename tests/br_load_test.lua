@@ -318,5 +318,549 @@ do
   setPhase("off")
 end
 
+-- ------- a match that is OVER is over (POK-144 / POK-145)
+--
+-- All of this is driven through the REAL hook chain, because that is where
+-- the bugs lived: the guards existed, they were just asked at the wrong
+-- moment or scoped to the wrong window.  A phase table rather than a single
+-- case, so the row that fails is named.
+do
+  local Runtime = require("src.mods.Runtime")
+  local setPhase = exports.debugPhase
+  local setStatus = exports.debugStatus
+  T.check(type(setStatus) == "function", "exports debugStatus (the status fixture)")
+  T.check(setStatus("nonsense") == nil, "...which refuses a status BR does not have")
+  -- alive, because that is the only interesting one: a spectator is already
+  -- refused everything below by the status == "out" clause these hooks have
+  -- always had, and what POK-145 is about is the trainer who is still alive
+  -- in a match that has stopped.
+  setStatus("alive")
+
+  -- ------- T1: the 1X clamp, at every phase.
+  --
+  -- The clamp was scoped to inRound(), which stops at the last elimination
+  -- -- so it lifted the frame the winner was named and the Hall of Fame ran
+  -- at whatever the player's GAME SPEED row says.  "over" is the row that
+  -- failed.  "lobby"/"off" returning the vanilla value is what keeps the
+  -- fix from becoming "the mod owns the speed rows forever".
+  local function speedAt(phase)
+    setPhase(phase)
+    return Runtime.call("core.logic_speed", function() return 4 end, {})
+  end
+  for _, p in ipairs({ "safari", "drop", "match", "over" }) do
+    T.eq(speedAt(p), 1, "the clamp holds 1X in " .. p)
+  end
+  for _, p in ipairs({ "off", "lobby" }) do
+    T.eq(speedAt(p), 4,
+         "and lifts in " .. p .. " -- the speed rows are the player's again")
+  end
+
+  -- ------- T2: no route trainer opens once the match is over.
+  local function trainerCancelled(phase)
+    setPhase(phase)
+    local got
+    Runtime.call("trainer.before_battle", function() got = "ran" return false end,
+                 {}, {}, function(o) got = (o and o.cancel) and "cancel" or "continue" end)
+    return got
+  end
+  T.eq(trainerCancelled("match"), "ran", "in a match, Kanto's own trainers fight")
+  T.eq(trainerCancelled("over"), "cancel", "once it is over, none of them do")
+  T.eq(trainerCancelled("off"), "ran",
+       "and out of a session the hook is invisible")
+  -- The deliberate side effect of scoping this to canOpenBattle rather than
+  -- to "over" alone: the two phases either side of the match refuse as well.
+  -- Nobody fights in the Safari (POK-21) and "drop" is the buzzer's own
+  -- frame -- there are no route trainers in the zone to notice -- but it is
+  -- a real behaviour change and a decision, so it is asserted rather than
+  -- left to be rediscovered.  (The GRASS is the other way round in the
+  -- Safari -- see T3 -- which is why the two hooks ask different
+  -- predicates.)
+  T.eq(trainerCancelled("safari"), "cancel", "and nobody fights in the Safari")
+  T.eq(trainerCancelled("drop"), "cancel", "nor in the buzzer's own frame")
+
+  -- ------- T3: and nothing walks out of the grass either -- except in the
+  -- zone, where walking out of the grass is the entire game.
+  local function rolled(phase)
+    setPhase(phase)
+    return Runtime.call("encounter.roll", function() return "rolled" end, {}, {})
+  end
+  T.eq(rolled("match"), "rolled", "in a match the grass still rolls")
+  T.check(rolled("over") == nil, "once it is over it does not")
+  T.eq(rolled("off"), "rolled", "and out of a session the roll is untouched")
+  -- The Safari is NOT the same side effect as T2's.  This assertion used to
+  -- read the other way, justified by "the zone's wild rolls come through
+  -- encounter.species, a separate hook" -- which is not how the engine
+  -- chains them: encounter.species is only called on a NON-NIL roll
+  -- (src/world/OverworldController.lua:3867-3871).  A nil here is the
+  -- zone's grass switched off, so every player walked it for two minutes,
+  -- caught nothing, and was eliminated at the buzzer for catching nothing.
+  -- 212 assertions passed with the Safari opening dead.
+  T.eq(rolled("safari"), "rolled", "the Safari's grass is the point of the Safari")
+  T.check(rolled("drop") == nil, "the drop's does not -- it is the buzzer's frame")
+
+  -- ------- T3b: the two hooks AS THE ENGINE CHAINS THEM, which is the
+  -- coverage T3 on its own did not have.  rollEncounter calls
+  -- encounter.roll, and only if that is non-nil does it pass the result
+  -- through encounter.species -- so a test that drives each hook alone can
+  -- watch the second one work on a roll the first would never have handed
+  -- it.  This drives the pair the way the overworld does.
+  local function chained(phase)
+    setPhase(phase)
+    local enc = Runtime.call("encounter.roll",
+                             function() return { species = "RATTATA", level = 3 } end,
+                             {}, {})
+    if not enc then return nil end
+    return Runtime.call("encounter.species", function(e) return e end, enc, {})
+  end
+  T.check(type(exports.debugSafariPool) == "function",
+          "exports debugSafariPool (this match's zone, as a fixture)")
+  local pool = exports.debugSafariPool(20260827)
+  T.eq(#pool, require("mods.battle_royale.lib.safari").POOL_SIZE,
+       "the fixture stands a full zone")
+  local inPool = {}
+  for _, sp in ipairs(pool) do inPool[sp] = true end
+
+  local caught = chained("safari")
+  T.check(caught ~= nil,
+          "a step in the zone's grass produces an encounter at all")
+  T.check(caught and inPool[caught.species],
+          "...drafted from THIS match's zone (got "
+          .. tostring(caught and caught.species) .. ")")
+  T.eq(caught and caught.level, exports.level(),
+       "...at the rung, not the zone's vanilla levels")
+  -- and the same chain in a match: the roll survives, the level is
+  -- rewritten, and the pool does NOT apply -- outside the zone the species
+  -- is whatever the route rolled.
+  local wild = chained("match")
+  T.check(wild ~= nil, "a route's grass rolls in a match")
+  T.eq(wild and wild.species, "RATTATA",
+       "...and keeps the route's own species -- the pool is the zone's alone")
+  T.eq(wild and wild.level, exports.level(), "...also at the rung")
+  T.check(chained("over") == nil,
+          "and at \"over\" the chain never reaches encounter.species at all")
+  exports.debugSafariPool(nil)
+
+  -- T3c: the other two terms of canRollWild, which the phase table above
+  -- cannot see.  A spectator and a player already in a PvP battle are
+  -- refused in the ZONE too -- widening the roll to "safari" widened the
+  -- phase and nothing else.
+  setPhase("safari")
+  setStatus("out")
+  T.check(Runtime.call("encounter.roll", function() return "rolled" end, {}, {}) == nil,
+          "a spectator's grass is quiet even in the zone")
+  setStatus("alive")
+  T.check(exports.debugPvp(true), "the fixture stands a PvP battle in the zone")
+  T.check(Runtime.call("encounter.roll", function() return "rolled" end, {}, {}) == nil,
+          "...and a fight already in hand refuses a wild one on top of it")
+  exports.debugPvp(false)
+  T.eq(rolled("safari"), "rolled", "cleared again: the zone rolls")
+  setStatus("alive")
+
+  -- ------- T4: canOpenBattle's truth table.  Cheap, and it is the
+  -- predicate every guard above leans on.
+  T.check(type(exports.canOpenBattle) == "function", "exports canOpenBattle")
+  for _, phase in ipairs({ "off", "lobby", "safari", "drop", "match", "over" }) do
+    for _, status in ipairs({ "alive", "out", "battle" }) do
+      setPhase(phase)
+      setStatus(status)
+      local want = (phase == "match" and status == "alive")
+      T.eq(exports.canOpenBattle(), want,
+           ("a battle may%s open in %s/%s"):format(want and "" or " not", phase, status))
+    end
+  end
+  -- ...and the third term, which nothing above reaches: BR.battle is set one
+  -- frame before status follows it, and a live match is the only place that
+  -- happens.  With the fixture standing a PvP record, "match"/"alive" -- the
+  -- one row that says yes -- has to say no.
+  T.check(type(exports.debugPvp) == "function", "exports debugPvp (the PvP fixture)")
+  setPhase("match")
+  setStatus("alive")
+  T.eq(exports.canOpenBattle(), true, "match/alive with no PvP battle: yes")
+  T.check(exports.debugPvp(true), "the fixture stands a PvP battle")
+  T.eq(exports.canOpenBattle(), false,
+       "...and a PvP battle already in hand refuses a second one")
+  exports.debugPvp(false)
+  T.eq(exports.canOpenBattle(), true, "cleared again: yes")
+
+  -- ------- T11: the scripted route, which neither hook above can see.
+  --
+  -- encounter.roll is only ever raised by the grass-step roll and
+  -- trainer.before_battle only by trainer sight and talk; a gym leader, a
+  -- rival, Snorlax, a bird and Mewtwo all build their own BattleState in
+  -- src/script/Commands.lua and push it past both.  script.command is the
+  -- seam that sees those, and "end" is how a hook stops the script rather
+  -- than letting the rest of it run without the fight it was written around.
+  --
+  -- ...and unlike every other hook in this file, that one is NOT live at
+  -- load (POK-155).  It is armed by BR:onStart and dropped by BR:resetMatch,
+  -- because a wrap that outlives the match makes
+  -- Runtime.wantsHook("script.command") true for the life of the process and
+  -- puts every script row of every ordinary playthrough down the runner's
+  -- slower branch (src/script/ScriptRunner.lua:168-176).  This is the
+  -- assertion that keeps it that way: a fresh load has not touched the hook
+  -- at all.
+  T.eq(Runtime.wantsHook("script.command"), false,
+       "a freshly loaded mod has not wrapped script.command at all")
+  T.check(type(exports.debugScriptWrap) == "function",
+          "exports debugScriptWrap (the arm/disarm fixture)")
+  T.eq(exports.debugScriptWrap(true), true, "...which arms the real link")
+  T.eq(Runtime.wantsHook("script.command"), true,
+       "and an armed match is what puts the runner on its hooked branch")
+  T.eq(exports.debugScriptWrap(true), true, "arming twice is one link, not two")
+
+  local function scripted(phase, name)
+    setPhase(phase)
+    local ran = false
+    local out = Runtime.call("script.command",
+                             function() ran = true return nil end, {}, name, {})
+    if ran then return "ran" end
+    return out
+  end
+  setStatus("alive")
+  T.eq(scripted("match", "start_battle"), "ran", "in a match a scripted fight opens")
+  T.eq(scripted("over", "start_battle"), "end", "once it is over the script stops")
+  T.eq(scripted("over", "static_battle"), "end", "...and so does a static one")
+  T.eq(scripted("over", "rival_battle"), "end", "...and the rival's")
+  T.eq(scripted("over", "old_man_demo"), "end", "...and the old man's demo")
+  T.eq(scripted("over", "show_text"), "ran",
+       "while every other command in the script runs as it always did")
+  T.eq(scripted("off", "start_battle"), "ran",
+       "and out of a session the wrap is invisible -- a real playthrough is untouched")
+
+  -- ------- T11b: a YIELDING command through the live wrap, on a real
+  -- ScriptRunner (POK-155).
+  --
+  -- Everything above dispatches through Runtime.call by hand, which is a
+  -- straight function call and cannot yield.  The real dispatch is a
+  -- coroutine: ScriptRunner:exec runs inside one, and show_text pushes a
+  -- TextBox and then calls runner:yield() -- from INSIDE the hook's pcall,
+  -- three frames down (Hooks:call -> run(index) -> pcall(vanilla)).  Two
+  -- engine comments assert LuaJIT lets a coroutine yield across a pcall like
+  -- that (src/script/ScriptRunner.lua:168-176, src/script/gen2/Vm.lua), and
+  -- BR now leans on it for every script row of every match -- but nothing in
+  -- the tree exercised it: tests/mod_scripting_tests.lua:939 wraps
+  -- non-yielding commands, and the T11 block above has no ScriptRunner under
+  -- it at all.  So it is exercised here.
+  --
+  -- The fake game is the smallest thing show_text can run against: an empty
+  -- text table (so the id falls through to the literal-string path), and a
+  -- stack that captures the box instead of drawing it.  An EMPTY string
+  -- deliberately -- a real one paginates into glyphs the fixture font does
+  -- not have and buries the suite in warnings.  Calling the captured box's
+  -- onDone is the player pressing A.
+  do
+    local ScriptRunner = require("src.script.ScriptRunner")
+    local function stage()
+      local boxes = {}
+      local game = {
+        data = { text = {} },
+        save = { flags = {}, inventory = {} },
+        stack = { push = function(_, state) boxes[#boxes + 1] = state end },
+      }
+      return ScriptRunner.new(game, nil), game, boxes
+    end
+
+    -- (1) it yields, it resumes, and the script finishes.
+    setPhase("match")
+    setStatus("alive")
+    T.eq(Runtime.wantsHook("script.command"), true,
+         "the wrap is armed for the yielding run")
+    local runner, game, boxes = stage()
+    runner:run({ { "set_field", "before", 1 },
+                 { "show_text", "" },
+                 { "set_field", "after", 1 } }, {})
+    T.check(runner:isRunning(), "show_text yields inside the hook's pcall")
+    T.eq(#boxes, 1, "...with its box on the stack")
+    T.eq(game.save.before, 1, "the row before it ran")
+    T.check(game.save.after == nil, "and the row after it has not")
+    boxes[1].onDone()
+    T.check(not runner:isRunning(), "the box closing resumes the script")
+    T.eq(game.save.after, 1, "...and it runs to the end through the live wrap")
+
+    -- (2) the refusal still works on the far side of a yield.  This is what
+    -- the wrap is FOR: a gym leader's script is show_text rows and then a
+    -- start_battle, so every real refusal happens after at least one yield.
+    setPhase("over")
+    runner, game, boxes = stage()
+    runner:run({ { "show_text", "" },
+                 { "start_battle", "fixture" },
+                 { "set_field", "after", 1 } }, {})
+    T.check(runner:isRunning(), "the leader's text yields")
+    boxes[1].onDone()
+    T.check(not runner:isRunning(), "and the script resumes past it")
+    T.check(game.save.after == nil,
+            "...into a refusal that stops the rest of the script")
+
+    -- (3) and a yielded command can span the DISARM.  show_text is suspended
+    -- inside the hook's pcall while the input.step tick keeps running, and
+    -- that tick can reach resetMatch -- so the link the resume is standing
+    -- in can be gone by the time it comes back.  Safe only because BR is the
+    -- single link on this hook: `entry` is a captured local and
+    -- run(index + 1) re-reads #chain, which is now 0, and runs vanilla.  A
+    -- second mod on script.command makes this (and Hooks:call's missing
+    -- dispatch snapshot) a real bug.
+    setPhase("match")
+    runner, game, boxes = stage()
+    runner:run({ { "show_text", "" }, { "set_field", "after", 1 } }, {})
+    T.check(runner:isRunning(), "suspended inside the hook")
+    T.eq(exports.debugScriptWrap(false), false, "the match ends under it")
+    boxes[1].onDone()
+    T.check(not runner:isRunning(), "the resume lands even though the link went")
+    T.eq(game.save.after, 1, "...and the rest of the script runs vanilla")
+  end
+
+  -- dropped, the mod is invisible again: the refusal that fired at "over"
+  -- three assertions ago does not fire now.  (wantsHook stays true -- the
+  -- unregister closure empties the chain but leaves the table, which is
+  -- src/mods/Hooks.lua's to fix, not the mod's -- so this asserts the
+  -- BEHAVIOUR rather than the flag.)
+  T.eq(exports.debugScriptWrap(false), false, "the fixture drops the link")
+  T.eq(scripted("over", "start_battle"), "ran",
+       "with no match running, a scripted battle is nobody's business")
+  T.eq(exports.debugScriptWrap(false), false, "dropping twice is a no-op")
+
+  -- ------- T13: nobody is crowned from outside a round (POK-144).
+  --
+  -- The first half of the phantom-survivor cascade.  A client whose `start`
+  -- was dropped sits in the LOBBY while the room plays a whole match around
+  -- it -- it was still allocated a spawn, everyone else seeded it "alive",
+  -- and nothing it owns ever broadcasts again, so checkWinner counts it to
+  -- the end and crowns it.  With no phase guard, onWinner ran that ending
+  -- from the lobby: recordWin() and a saveCareer() of a match this client
+  -- never played, skin unlock and all.
+  --
+  -- debugWin has no guard of its own any more, precisely so this can be
+  -- asked of BR rather than of the fixture.
+  local winsBefore = exports.skinState().wins
+  for _, p in ipairs({ "lobby", "off" }) do
+    setPhase(p)
+    setStatus("lobby")
+    T.check(exports.debugWin() == nil, "no winner is crowned from " .. p)
+    T.eq(exports.phase(), p, "...and the phase does not move off " .. p)
+  end
+  T.eq(exports.skinState().wins, winsBefore,
+       "and no career win is banked for a match nobody here played")
+  -- ...while the transition the guard must NOT break still works.  Headless
+  -- there is no relay and BR.myId is nil, so the crown lands on the local
+  -- player whatever is passed -- which is convenient here: the SAME call
+  -- that changed nothing at all from the lobby banks a win from a match.
+  setPhase("match")
+  setStatus("alive")
+  T.eq(exports.debugWin(), "over", "a match still ends with a winner")
+  T.check(exports.ending() ~= nil, "...and arms the exit on its way out")
+  T.eq(exports.skinState().wins, winsBefore + 1,
+       "and the career win is banked exactly where it is earned")
+
+  -- ------- T14: and the other half -- a `start` that lands while the last
+  -- match is still standing.
+  --
+  -- The gate on `start` refused the message while self.started was true,
+  -- and started is cleared only by resetMatch, which the new ending no
+  -- longer runs at "over".  So the message was dropped with no log line and
+  -- no change on screen, which is what made the client above a phantom.
+  --
+  -- It has to arrive through a FULL resetMatch, not clearEnding: the ending
+  -- is seven fields and a match is forty.  BR.battle is the leftover this
+  -- can stand up headlessly (debugPvp) and it is on the other side of that
+  -- line -- clearEnding does not touch it, resetMatch does -- so it is
+  -- exactly the difference between the two clears.
+  T.eq(exports.phase(), "over", "the match that just ended is still standing")
+  T.check(exports.debugPvp(true), "...with a PvP record still in hand")
+  local landed, startErr = exports.debugStart({ seed = 7, spawns = {} })
+  T.check(startErr == nil,
+          "the arriving start applies cleanly (" .. tostring(startErr) .. ")")
+  T.eq(landed, "lobby",
+       "a client at \"over\" takes the next start rather than dropping it -- "
+       .. "a start with no drop for us stops here, and only resetMatch can "
+       .. "have put it in the lobby")
+  T.check(exports.ending() == nil, "the last match's armed exit went with it")
+  setPhase("match")
+  setStatus("alive")
+  T.eq(exports.canOpenBattle(), true,
+       "and its battle record too -- which clearEnding alone would have kept")
+
+  setStatus("lobby")
+  setPhase("off")
+
+  -- ------- T5/T6: the guards that cannot be called headlessly, read off
+  -- the source -- the established pattern from the start-menu scan above.
+  -- BR:startBotBattle and BR:beginBattle are closures over a live engine,
+  -- but the guard's PRESENCE is exactly what a future edit would drop.
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the battle-guard scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    for _, fn in ipairs({ "startBotBattle", "beginBattle" }) do
+      local body = src:match("function BR:" .. fn .. "%(.-\n  end\n")
+      T.check(body ~= nil, "found BR:" .. fn)
+      T.check(body and body:find("canOpenBattle", 1, true) ~= nil,
+              fn .. " asks the phase at the moment it opens a battle")
+      -- Scoped to the BODY, like the assertion above it.  Against the whole
+      -- file this bans a perfectly ordinary line from every function in the
+      -- mod for ever, and fails whoever writes it next with a message about
+      -- beginBattle.
+      T.check(body and body:find("if self.battle then return end", 1, true) == nil,
+              fn .. " does not fall back to the old battle-only guard")
+    end
+
+    -- T6: leaving "match" must ABANDON the walk-up, not fire it.  Firing it
+    -- is what opened a bot battle in a finished world.
+    local walk = src:match("function BR:tickWalkUp%(.-\n  end\n")
+    T.check(walk ~= nil, "found tickWalkUp")
+    if walk then
+      T.check(walk:find('and self.phase == "match"%) then return abandon%(%)') ~= nil,
+              "a match that moved on abandons the walk-up")
+      T.check(walk:find("return finish()", 1, true) == nil,
+              "...and nothing still calls the old one-exit finish()")
+      T.check(walk:find("Bots.WALKUP_STEPS then return arrived()", 1, true) ~= nil,
+              "while the walk that ARRIVES still opens the fight (POK-85)")
+      T.check(walk:find("self.pending = nil", 1, true) ~= nil,
+              "an abandoned walk-up clears the pending challenge with it")
+    end
+
+    -- ------- T12: the rest of the funnel's wiring, where a live engine hides
+    -- it.  endMatch, onAgain, the tick's exit block and tickSays are all
+    -- closures over a game, a stack and a relay, so none of them can be
+    -- called headless -- and every assertion below is a defect this feature
+    -- shipped with once, which is exactly what a source scan is for.
+
+    -- A client can still be at "over" when the next `start` arrives, so the
+    -- way IN to a match has to clear what the last one ended with -- above
+    -- all `parading`, which otherwise stays true for the session and makes
+    -- match two unendable (armEnding refused by the stale pendingEnd, the
+    -- tick pushing the clocks every frame).  ONE list, called from both
+    -- sides, because two lists drift.
+    local clear = src:match("function BR:clearEnding%(.-\n  end\n")
+    T.check(clear ~= nil, "found BR:clearEnding")
+    for _, field in ipairs({ "pendingEnd", "parading", "overBattleAt",
+                             "lastResult", "winnerId",
+                             "pendingParade", "pendingFame" }) do
+      T.check(clear and clear:find("self." .. field .. " = nil", 1, true) ~= nil,
+              "clearEnding clears " .. field)
+    end
+    for _, fn in ipairs({ "resetMatch", "onStart" }) do
+      local body = src:match("function BR:" .. fn .. "%(.-\n  end\n")
+      T.check(body ~= nil, "found BR:" .. fn)
+      T.check(body and body:find("self:clearEnding()", 1, true) ~= nil,
+              fn .. " goes through the one shared list")
+    end
+
+    -- ...and the same pair carries the script.command wrap's whole lifetime
+    -- (POK-155).  T11 proves the ARMED and DROPPED behaviours through the
+    -- fixture, but nothing headless can reach onStart -- it needs a wire
+    -- message and a live game -- so the two calls that actually put the mod
+    -- on that schedule are read off the source, the way the battle guards
+    -- below are.  Drop either one and the fixture-driven tests still pass
+    -- while the real game either never refuses a scripted battle or never
+    -- gives the hook back.
+    do
+      local starts = src:match("function BR:onStart%(.-\n  end\n")
+      T.check(starts and starts:find("armScriptWrap()", 1, true) ~= nil,
+              "onStart arms the scripted-battle wrap")
+      local resets = src:match("function BR:resetMatch%(.-\n  end\n")
+      T.check(resets and resets:find("disarmScriptWrap()", 1, true) ~= nil,
+              "resetMatch drops it again -- the one path every exit takes")
+      -- and it is registered in exactly one place, which is not the load
+      -- path: a second mod.hooks:wrap on this name would be back to a link
+      -- that outlives the match.
+      local _, wraps = src:gsub('hooks:wrap%("script%.command"', "")
+      T.eq(wraps, 1, "script.command is wrapped in exactly one place")
+      local arm = src:match("local function armScriptWrap%(.-\n  end\n")
+      T.check(arm and arm:find('hooks:wrap("script.command"', 1, true) ~= nil,
+              "...and that place is armScriptWrap")
+    end
+
+    -- The deadline has to be able to EXPIRE.  It was reset every frame while
+    -- a parade was armed, running or merely flagged -- so on the one route
+    -- it exists for, a parade that wedged, it never fired at all while its
+    -- comment claimed the opposite.
+    local endTick = src:match('if BR%.pendingEnd and BR%.phase == "over" then.-\n    end\n')
+    T.check(endTick ~= nil, "found the tick's exit block")
+    if endTick then
+      T.check(endTick:find("local expired = nowE >= BR.pendingEnd.deadline",
+                           1, true) ~= nil,
+              "the deadline is read before anything is allowed to push it")
+      T.check(endTick:find("game.stack:top() == BR.parading", 1, true) ~= nil,
+              "and only a parade actually ON the stack pushes it out")
+      T.check(endTick:find("BR:armEnding(why)", 1, true) ~= nil,
+              "an exit that threw re-arms instead of stranding the client")
+    end
+
+    local ends = src:match("function BR:endMatch%(.-\n  end\n")
+    T.check(ends ~= nil, "found BR:endMatch")
+    if ends then
+      T.check(ends:find("autoStartAt", 1, true) == nil,
+              "ending a match does not start the next one on its own")
+      T.check(ends:find('if wasInSession then log:say("match over', 1, true) ~= nil,
+              "and only writes 'match over' when there was a match to be over")
+      T.check(ends:find("if self.tearingDown then return false end", 1, true) ~= nil,
+              "a teardown already under way owns the exit: Relay:leave fires "
+              .. "`closed` synchronously, so this nests inside itself")
+    end
+
+    local again = src:match("function BR:onAgain%(.-\n  end\n")
+    T.check(again ~= nil, "found BR:onAgain")
+    if again then
+      T.check(again:find("armEnding", 1, true) ~= nil,
+              "`again` at \"over\" ARMS the exit -- a host cannot pop a "
+              .. "guest's Hall of Fame out from under them")
+      T.check(again:find("endMatch", 1, true) ~= nil,
+              "...and TAKES it for a client that never saw `winner`, which "
+              .. "is the recovery this message has always been")
+    end
+
+    local says = src:match("function BR:tickSays%(.-\n  end\n")
+    T.check(says ~= nil, "found BR:tickSays")
+    T.check(says and says:find("if not self:screenIsQuiet() then return end",
+                               1, true) ~= nil,
+            "a queued say waits for a quiet screen rather than freezing under "
+            .. "whatever is on top of it")
+    T.check(says and says:find("if self:liveLocalBattle() then return end",
+                               1, true) == nil,
+            "...and not on a live battle alone, which left the battle-return "
+            .. "transition and the parade open to the same freeze")
+
+    -- ORDER, and it is load-bearing: resetMatch clears pendingSays, so the
+    -- tick's exit block deletes the win banner if it runs first.  The
+    -- banner survives only because tickSays delivers it above, which puts
+    -- the runner to work, which makes screenIsQuiet() false, which defers
+    -- the exit.  Nothing about either call site says "me first" on its own,
+    -- so the order is asserted here.
+    local saysAt = src:find('if BR.phase ~= "off" then BR:tickSays() end', 1, true)
+    local exitAt = src:find('if BR.pendingEnd and BR.phase == "over" then', 1, true)
+    T.check(saysAt and exitAt and saysAt < exitAt,
+            "the tick delivers pending says BEFORE the exit that clears them")
+
+    -- The two lines T14 rests on.  A guest reading the MATCH RECORD card
+    -- cannot leave "over" by itself, so the gate must not refuse the host's
+    -- next start -- and onStart must tear the last match down in full when
+    -- it takes one.
+    local gate = src:match('elseif msg%.t == "start" then.-\n\n')
+    T.check(gate ~= nil, "found the `start` message gate")
+    T.check(gate and gate:find("if fromId == self.relay.hostId then",
+                               1, true) ~= nil,
+            "the gate asks who sent the message and nothing else")
+    T.check(gate and gate:find("self.relay.hostId and not self.started",
+                               1, true) == nil,
+            "...so it no longer drops a start for a client still in a match")
+    local into = src:match("function BR:onStart%(.-\n  end\n")
+    T.check(into and into:find("if self:inSession() then self:resetMatch() end",
+                               1, true) ~= nil,
+            "and onStart tears the last match down in full before it builds "
+            .. "the next one on top")
+    local crowns = src:match("function BR:onWinner%(.-\n  end\n")
+    T.check(crowns and crowns:find("if not self:inRound() then return end",
+                                    1, true) ~= nil,
+            "onWinner is refused from every phase that is not a round")
+
+    T.check(src:find("if BR:inSession() and ev and ev.battle then BR.localBattle",
+                     1, true) ~= nil,
+            "a battle that opens at \"over\" is recorded, so the funnel can "
+            .. "close what no guard could refuse")
+  end
+end
+
 run.release()
 T.finish("br_load")

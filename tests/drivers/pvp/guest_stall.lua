@@ -80,7 +80,7 @@ return function(game)
   U.log("PVP guest: won when the clock forfeited them")
 
   if not L.mashUntil(C, function() return E.phase() == "lobby" end, 1200) then
-    return C.fail("PLAY AGAIN never reached the guest")
+    return C.fail("the finished match never returned the guest to the lobby")
   end
   U.log("PVP OK guest: honest side won by forfeit, lobby again")
   love.event.quit(0)

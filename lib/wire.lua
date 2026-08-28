@@ -24,6 +24,8 @@
 --   {t="out"}                                     I have been eliminated
 --   {t="loot", items={{id=,n=}}, money=}          my bag, to my killer
 --   {t="botout", id=}                             I beat that bot
+--   {t="botrec", id=, mons={{s=,f=}}}             a bot's persistent team
+--                                                 changed (POK-158)
 --   {t="spill", map=, mons={{key,x,y,species,lv}}} my team hit the ground
 --   {t="took", key=}                              that ball is mine
 --   {t="npcout", map=, obj=}                     a map's own trainer fell:
@@ -82,7 +84,10 @@ local Wire = {}
 --    difference at the door, instead of leaving it to be discovered at
 --    the first engage where the only message is the engine's "Link
 --    battle needs the same version and mods" -- which names no number.
-Wire.PROTOCOL = 9
+-- 10: botrec -- a bot's persistent team (POK-158).  Two clients that
+--    disagree about a bot's record disagree about who wins a fight with
+--    it, so the message is load-bearing, not cosmetic.
+Wire.PROTOCOL = 10
 
 Wire.DIRS = { up = true, down = true, left = true, right = true }
 Wire.STATUS = { lobby = true, alive = true, battle = true, out = true }
@@ -184,6 +189,25 @@ function Wire.out() return { t = "out" } end
 
 function Wire.botout(id) return { t = "botout", id = id } end
 
+-- A bot's persistent team (POK-158): each mon's species and how much of
+-- itself it still has, plus its BAG once it has a real one -- potions get
+-- drunk and looted bags merge in, so the bag has to travel with the team.
+-- Broadcast by whoever changed the record -- the host on a catch, the
+-- client whose fight just scarred it -- and applied verbatim by everyone.
+function Wire.botrec(id, record)
+  local rows = {}
+  for i, m in ipairs(record or {}) do
+    if i > 6 then break end
+    rows[i] = { s = m.species, f = m.hpFrac }
+  end
+  local out = { t = "botrec", id = id, mons = rows }
+  local bag = record and record.bag
+  if bag then
+    out.bag = { items = bag.items or {}, money = bag.money or 0 }
+  end
+  return out
+end
+
 -- a fallen team on the ground (DESIGN D8); `mons` rows are
 -- { key, x, y, species, lv }, and `bag` -- the trainer's items and money,
 -- one more thing on the ground (POK-25) -- is { key, x, y, items, money,
@@ -236,7 +260,12 @@ function Wire.fame(party, stats)
   end
   return { t = "fame", party = rows, stats = stats }
 end
--- PLAY AGAIN (POK-20): host only, back to the lobby with the roster kept
+-- Back to the lobby with the roster kept (POK-20, re-based by POK-144).
+-- Host only, and no longer a button anybody presses: endMatch broadcasts it
+-- as part of every ending that keeps the room.  A client already at "over"
+-- takes it as "the exit is due" and lets its own ending finish first; a
+-- client still standing in a match it never saw end takes it as the exit
+-- itself, which is the recovery this message has always been.
 function Wire.again() return { t = "again" } end
 
 -- What this trainer is doing (POK-113).  Edge-triggered: sent when the
@@ -399,6 +428,32 @@ end
 decoders.botout = function(m)
   if not isId(m.id) then return nil, "bad id" end
   return { t = "botout", id = m.id }
+end
+
+decoders.botrec = function(m)
+  if not isId(m.id) then return nil, "bad id" end
+  if type(m.mons) ~= "table" then return nil, "bad mons" end
+  local record = {}
+  for i, r in ipairs(m.mons) do
+    if i > 6 then break end
+    if type(r) ~= "table" or type(r.s) ~= "string" or r.s == ""
+       or #r.s > MAX_ID then
+      return nil, "bad record row"
+    end
+    local f = tonumber(r.f)
+    if not f then return nil, "bad record hp" end
+    record[#record + 1] = { species = r.s,
+                            hpFrac = math.max(0, math.min(1, f)) }
+  end
+  if #record == 0 then return nil, "empty record" end
+  if m.bag ~= nil then
+    if type(m.bag) ~= "table" then return nil, "bad bag" end
+    local items = decodeItems(m.bag.items or {})
+    if not items then return nil, "bad bag items" end
+    record.bag = { items = items,
+                   money = math.max(0, math.floor(tonumber(m.bag.money) or 0)) }
+  end
+  return { t = "botrec", id = m.id, record = record }
 end
 
 local MAX_SPILL = 6 -- a party

@@ -245,6 +245,13 @@ Bots.FIGHT_COOLDOWN = 12
 -- Two bots notice each other about as far off as a player would.
 Bots.NOTICE = 3
 
+-- How far a bot SEES a player down its own facing (POK-149).  Four cells
+-- is the longest sight line Gen 1 gives its own trainers, and it is
+-- deliberately shorter than the player's eyeline (Engage.RANGE): spotting
+-- first is the player's edge, being spotted is the price of blundering
+-- across a line.
+Bots.SIGHT = 4
+
 function Bots.isBot(id)
   return type(id) == "number" and id >= Bots.ID_BASE
 end
@@ -424,7 +431,7 @@ end
 -- declines to move a bot already standing on the map nearest the ring's
 -- eye.  Nothing else was left to move them.  A bot must always have an
 -- errand it can perform HERE.
-Bots.DWELL = { grass = 6, item = 1.5, stroll = 0, ring = 0, seam = 0 }
+Bots.DWELL = { grass = 6, item = 1.5, heal = 4, stroll = 0, ring = 0, seam = 0 }
 
 -- A bot gives up on a goal it cannot reach rather than grinding at a wall.
 Bots.GOAL_SECONDS = 20
@@ -575,6 +582,11 @@ function Bots.chooseGoal(bot, ctx, rng)
   -- else on this map matters if standing here is what kills you.
   if ctx.inFog or ctx.ringSoon then return { kind = "seam", why = "ring" } end
 
+  -- A wrecked team walks to the Centre before it does anything else
+  -- (POK-158 M2).  `heal` is the door cell, offered by the caller only
+  -- when the team is hurt enough and the Centre still serves.
+  if ctx.heal then return { kind = "heal", x = ctx.heal.x, y = ctx.heal.y } end
+
   -- Loot on the floor beats grass: it is already a team, and somebody
   -- else paid for it.
   local item = Bots.nearest(bot, ctx.items)
@@ -678,6 +690,253 @@ function Bots.dealTowns(count, n, rng)
   local out = {}
   for k = 1, n do out[k] = deck[(k - 1) % count + 1] end
   return out
+end
+
+-- ------------------------------------------------ THE RECORD (POK-158)
+--
+-- A bot's PERSISTENT team.  Bots.party synthesizes a fresh, full-HP team
+-- at the moment a fight opens, which is the central cheat POK-158 names:
+-- a bot never catches anything, never carries a wound out of a fight,
+-- never needs healing.  The record replaces that: a list of
+-- { species=, hpFrac= } rows that is CREATED identically on every client
+-- (derived from the seed at the floor rung, so lazy creation needs no
+-- message) and then MUTATED only by broadcast events -- the host's catch
+-- rolls, and the scars reported by whichever client just fought it.
+--
+-- Levels are deliberately not stored: every fight is at the rung, exactly
+-- as before, so `hpFrac` is the only thing that has to survive a rung
+-- change and it survives it by construction.
+
+-- How often a grass dwell actually catches (M1 tuning knob).  The dwell
+-- cadence -- walk, six seconds in the grass, twenty-second goal clock --
+-- paces the team build the way steps pace a player's.
+Bots.CATCH_CHANCE = 0.5
+
+-- ONE mon at the drop, whatever the tier (the POK-121 rule, kept).
+-- Derived at the FLOOR rung so two clients creating the record lazily at
+-- different rungs still agree byte-for-byte.
+function Bots.newRecord(seed, id, data)
+  local first = Bots.party(seed, id, data, 5)[1]
+  return { { species = first.species, hpFrac = 1 } }
+end
+
+-- Every bot builds to a full six, like a player.  This was briefly the
+-- tier's maxParty, but the tier caps never actually read in play -- what
+-- a ROOKIE is worse AT is roaming and battle AI, and capping its team on
+-- top of that just made small teams nobody could attribute to anything.
+-- The catching itself is the pacing.
+function Bots.recordCap()
+  return 6
+end
+
+-- The rows a FIGHT is built from: healthy mons only, at the rung, in
+-- record order.  Also returns idx -- the record index behind each row --
+-- so the fight's outcome can be carried back (Bots.scarRecord).
+function Bots.fightRows(record, rung)
+  local rows, idx = {}, {}
+  for i, m in ipairs(record or {}) do
+    if (m.hpFrac or 0) > 0 then
+      rows[#rows + 1] = { species = m.species, level = rung }
+      idx[#idx + 1] = i
+    end
+  end
+  return rows, idx
+end
+
+-- The rows a SPILL is built from: the whole team, fainted included --
+-- "the team hits the ground where you fell" counts the fallen.
+function Bots.spillRows(record, rung)
+  local rows = {}
+  for _, m in ipairs(record or {}) do
+    rows[#rows + 1] = { species = m.species, level = rung }
+  end
+  return rows
+end
+
+-- Carry a finished fight's damage back into the record.  `idx` is
+-- fightRows' mapping; `enemyParty` the engine's post-battle mons in the
+-- same order.  Fractions round to hundredths so the wire copy and the
+-- local copy cannot drift.
+function Bots.scarRecord(record, idx, enemyParty)
+  for k, recI in ipairs(idx or {}) do
+    local mon = enemyParty and enemyParty[k]
+    local m = record and record[recI]
+    if mon and m then
+      local maxHp = (mon.stats and mon.stats.hp) or mon.maxHp
+      if maxHp and maxHp > 0 then
+        local frac = math.max(0, math.min(1, (tonumber(mon.hp) or 0) / maxHp))
+        m.hpFrac = math.floor(frac * 100 + 0.5) / 100
+      end
+    end
+  end
+  return record
+end
+
+function Bots.recordAlive(record)
+  for _, m in ipairs(record or {}) do
+    if (m.hpFrac or 0) > 0 then return true end
+  end
+  return false
+end
+
+-- What a record can put up in a fight: each healthy mon's base-stat
+-- total, scaled by how much of it is left.  Every mon fights at the same
+-- rung, so base stats are the whole difference between species -- an
+-- ACE's GOLEM outweighs a ROOKIE's third RATTATA, which is what the tier
+-- pools were always supposed to buy.  300 is a middling total, the
+-- benefit of the doubt for a species the data cannot place.
+function Bots.recordPower(record, data)
+  local total = 0
+  for _, m in ipairs(record or {}) do
+    local frac = m.hpFrac or 0
+    if frac > 0 then
+      local def = data and data.pokemon and data.pokemon[m.species]
+      local bs = def and def.baseStats
+      local stat = bs and ((bs.hp or 0) + (bs.attack or 0) + (bs.defense or 0)
+                          + (bs.speed or 0) + (bs.special or 0)) or 300
+      total = total + stat * frac
+    end
+  end
+  return total
+end
+
+-- Resolve a meeting between two records (POK-158 M3): the coin flip is
+-- dead.  The stronger team usually wins -- the roll is weighted by
+-- power, so an upset stays possible the way it is in a real fight -- and
+-- the WINNER walks away hurt: the loser's power lands on it as damage,
+-- front-loaded onto its lead the way a Gen 1 fight chews through one,
+-- capped so a won fight never wipes the team that won it.
+--
+-- Returns "a" or "b"; the winner's record is scarred in place, the
+-- loser's is left for the spill.
+function Bots.resolveFight(recA, recB, data, rng)
+  local pa = Bots.recordPower(recA, data)
+  local pb = Bots.recordPower(recB, data)
+  if pa <= 0 and pb <= 0 then return (rng() < 0.5) and "a" or "b" end
+  local winner = (rng() < pa / (pa + pb)) and "a" or "b"
+  local wrec = (winner == "a") and recA or recB
+  local wp = (winner == "a") and pa or pb
+  local lp = (winner == "a") and pb or pa
+  local budget = (wp > 0) and math.min(0.9, lp / wp) or 0
+  local healthy, totalFrac = {}, 0
+  for _, m in ipairs(wrec) do
+    if (m.hpFrac or 0) > 0 then
+      healthy[#healthy + 1] = m
+      totalFrac = totalFrac + m.hpFrac
+    end
+  end
+  local damage = budget * totalFrac
+  for i, m in ipairs(healthy) do
+    if damage <= 0 then break end
+    -- the last healthy mon is the one that took the fight: it stands
+    local floor_ = (i == #healthy) and 0.05 or 0
+    local take = math.min(m.hpFrac - floor_, damage)
+    if take > 0 then
+      m.hpFrac = math.floor((m.hpFrac - take) * 100 + 0.5) / 100
+      damage = damage - take
+    end
+  end
+  return winner
+end
+
+-- What one gulp of each potion tier is worth, as a fraction of a mon.
+-- The record stores fractions, not points, so the bag's medicine speaks
+-- the same language: a POTION is worth about a third of a mid-match mon,
+-- which is the same ballpark 20 points is against Gen 1 HP curves.
+Bots.POTION_HEAL = {
+  POTION = 0.3, SUPER_POTION = 0.5, HYPER_POTION = 0.8,
+  MAX_POTION = 1, FULL_RESTORE = 1,
+}
+
+-- Drink from the bag between fights (POK-158 M2): the weakest potion
+-- that helps, onto the most-hurt mon still standing, whenever anybody is
+-- under 0.6 -- roughly when a player reaches for the bag rather than the
+-- Centre.  Consumes the item.  Returns the item id used and the mon
+-- healed, or nil when nothing was needed or nothing was left.
+function Bots.quaff(record, bag)
+  if not (record and bag and bag.items) then return nil end
+  local worst
+  for _, m in ipairs(record) do
+    local f = m.hpFrac or 0
+    if f > 0 and f < 0.6 and (not worst or f < worst.hpFrac) then worst = m end
+  end
+  if not worst then return nil end
+  local best
+  for _, it in ipairs(bag.items) do
+    local heal = Bots.POTION_HEAL[it.id]
+    if heal and (it.n or 0) >= 1 and (not best or heal < best.heal) then
+      best = { it = it, heal = heal }
+    end
+  end
+  if not best then return nil end
+  best.it.n = best.it.n - 1
+  if best.it.n <= 0 then
+    for i, it in ipairs(bag.items) do
+      if it == best.it then table.remove(bag.items, i) break end
+    end
+  end
+  worst.hpFrac = math.min(1, math.floor((worst.hpFrac + best.heal) * 100 + 0.5) / 100)
+  return best.it.id, worst
+end
+
+-- A looted bag folds into the bot's own (POK-158 M2): stacks merge by
+-- id, money adds.
+function Bots.bagMerge(bag, loot)
+  if not (bag and loot) then return bag end
+  for _, it in ipairs(loot.items or {}) do
+    local mine
+    for _, own in ipairs(bag.items) do
+      if own.id == it.id then mine = own break end
+    end
+    if mine then mine.n = math.min(99, (mine.n or 0) + (it.n or 0))
+    else bag.items[#bag.items + 1] = { id = it.id, n = it.n or 1 } end
+  end
+  bag.money = (bag.money or 0) + (loot.money or 0)
+  return bag
+end
+
+-- The move inside a TM item id, or nil for anything else.
+function Bots.tmMove(itemId)
+  if type(itemId) ~= "string" then return nil end
+  local move = itemId:match("^TM_(.+)$")
+  return move
+end
+
+-- Can this species learn this move from a machine?  `def.tmhm` is the
+-- generated per-species table of machine moves.
+function Bots.canLearn(def, moveId)
+  for _, m in pairs((def and def.tmhm) or {}) do
+    if m == moveId then return true end
+  end
+  return false
+end
+
+-- Is this record hurt enough that a trainer would walk to a Centre?
+-- Half a team's worth of damage, or anything fainted -- a player limps
+-- in earlier than that, but a bot that healed every scratch would never
+-- be caught wounded, and being caught wounded is half the drama.
+function Bots.wantsHeal(record)
+  local n, total = 0, 0
+  for _, m in ipairs(record or {}) do
+    if (m.hpFrac or 0) <= 0 then return true end
+    n = n + 1
+    total = total + m.hpFrac
+  end
+  return n > 0 and (total / n) <= 0.5
+end
+
+-- The catch a grass dwell earns: a species off the map's own grass table
+-- (data.encounters[map].grass.slots), the same table the player's
+-- encounters roll on.  nil when the team is full, the map has no grass
+-- table, or the roll misses -- a dwell is a hunt, not a vending machine.
+function Bots.rollCatch(record, cap, slots, rng)
+  if not (record and slots and #slots > 0) then return nil end
+  if #record >= (cap or 1) then return nil end
+  if rng() >= Bots.CATCH_CHANCE then return nil end
+  local pick = slots[rng(1, #slots)]
+  if not (pick and pick.species) then return nil end
+  record[#record + 1] = { species = pick.species, hpFrac = 1 }
+  return pick.species
 end
 
 -- The TM in a bot's bag (POK-62).  Machine moves are only teachable FROM

@@ -57,6 +57,59 @@ Expected, not a bug, and worth knowing before it eats a playtest.
 Only where there is something a release note should not carry. Tickets are
 Linear (POK-nn).
 
+### 0.36.0 — unreleased
+
+**Wire protocol unchanged at 9,** but one message on it means something new
+— see POK-144 below. Requires gen1recomp ≥ 0.2.26, unchanged.
+
+- POK-144 — the end of a match is a funnel. There is no PLAY AGAIN row and
+  no `BR:playAgain()`. Every client arms its own ending the moment the
+  match ends (`BR:armEnding` → the tick → `BR:endMatch`) and leaves the
+  finished world by itself, landing on the BR screen with the result on it;
+  the lobby's own start row reads PLAY AGAIN when there is a result to run
+  back from. Before this, five routes could end a match and two of them
+  reached a teardown.
+
+  **`Wire.again()` changed meaning without changing shape.** It is still
+  `{ t = "again" }` and still host-only, but a peer that receives it at
+  `"over"` now ARMS its exit rather than taking it, so a host who finished
+  the Hall of Fame first cannot pop a guest's Hall of Fame out from under them; anywhere
+  else in a session it still takes the exit, which is the recovery it has
+  always been. Not a compatibility break, because the mod version has to
+  match anyway: the door turns a guest out of a room whose host is on a
+  different build (POK-142), and protocol 9 already refuses a pre-0.35.0
+  peer's `place`. So nothing carrying the old meaning of `again` can be in
+  the room. It is still a wire change, and belongs here.
+
+  Two message-handling changes ride with it: a `start` is no longer refused
+  because this client is still standing in the last match (it is torn down
+  in full first), and `winner` is refused from any phase that is not a
+  round.
+- POK-145 — nothing new opens once the match is over. `canOpenBattle()` is
+  asked at the moment a battle opens rather than the moment it was queued,
+  so a walk-up armed during the match cannot open a fight in a finished
+  world, and the 1X clamp holds through `"over"` so the Hall of Fame is
+  never fast-forwarded. Wild rolls ask a different predicate,
+  `canRollWild()`, which also says yes in `"safari"`: the zone's rule is
+  "no trainer fights", not "no wild encounters", and the engine only calls
+  `encounter.species` on a non-nil `encounter.roll`, so refusing there
+  switches the Safari opening off rather than deferring it.
+- POK-155 — the scripted route. `script.command` is wrapped so a gym
+  leader, rival, Snorlax, bird or Mewtwo script cannot push its own
+  `BattleState` past `encounter.roll` and `trainer.before_battle`. The wrap
+  is armed by `BR:onStart` and dropped by `BR:resetMatch` rather than
+  living for the process: `Runtime.wantsHook("script.command")` true for
+  ever puts every script row of every ordinary playthrough down the
+  runner's slower branch. A fight still on screen when the match ends is
+  closed out rather than waited on.
+- The manifest declares `engine_internals` and the package carries a
+  `.modkitignore`, so `modkit.py validate --strict` and `lint` pass. Both
+  are packaging only; nothing changes at runtime.
+
+Tests: 1810 unit checks (1765 at 0.35.0), plus a new driver —
+`tests/drivers/playtest_over.lua`, which drives every terminal route out of
+a match in the running game.
+
 ### 0.35.0 — unreleased
 
 **Wire protocol 8 → 9.** Everyone in a room must be on this build.

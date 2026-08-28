@@ -115,7 +115,18 @@ end
 -- warp is the way out) and along the walkable edge of every side with a
 -- connection.  A ledge-hop-only hollow never joins the region -- ledge
 -- tiles are not walkable, so nothing floods across them.
-function Spawn.escapableSet(def, tilesetDef)
+--
+-- An edge cell is only a seed if a step off it actually CROSSES.  The
+-- engine's rule (OverworldState:connectionLanding): the landing cell on
+-- the neighbour is our coordinate shifted by the connection's offset,
+-- CLAMPED into the neighbour's bounds, and the step happens only when
+-- that cell is passable.  Seeding the whole edge instead called Pewter's
+-- fenced south-east corner escapable -- it touches the south edge, but
+-- ROUTE_2 is half Pewter's width and every landing from that stretch
+-- clamps onto a tree, so a player dropped there could not leave at all.
+-- `maps`/`tilesets` may be nil (a caller without the world in hand), and
+-- the edge then keeps the old benefit of the doubt.
+function Spawn.escapableSet(def, tilesetDef, maps, tilesets)
   if not (def and tilesetDef) then return {} end
   local w, h = def.width * 2, def.height * 2
   local function walk(x, y)
@@ -129,21 +140,63 @@ function Spawn.escapableSet(def, tilesetDef)
     seeds[#seeds + 1] = { x = wp.x, y = wp.y + 1 }
     seeds[#seeds + 1] = { x = wp.x, y = wp.y - 1 }
   end
+  -- does a step off the edge at this coordinate land on a passable cell?
+  -- lx/ly may be huge: the clamp is the engine's own.
+  local function landOk(conn, lx, ly)
+    local dest = maps and maps[conn.map]
+    local ts = dest and tilesets and tilesets[dest.tileset]
+    if not (dest and ts) then return true end
+    local dw, dh = dest.width * 2, dest.height * 2
+    lx = math.max(0, math.min(dw - 1, lx))
+    ly = math.max(0, math.min(dh - 1, ly))
+    return Map.defIsWalkableCell(dest, ts, lx, ly)
+       and not Map.defIsWaterCell(dest, ts, lx, ly)
+  end
   local conns = def.connections or {}
-  if conns.north then for x = 0, w - 1 do seeds[#seeds + 1] = { x = x, y = 0 } end end
-  if conns.south then for x = 0, w - 1 do seeds[#seeds + 1] = { x = x, y = h - 1 } end end
-  if conns.west then for y = 0, h - 1 do seeds[#seeds + 1] = { x = 0, y = y } end end
-  if conns.east then for y = 0, h - 1 do seeds[#seeds + 1] = { x = w - 1, y = y } end end
+  if conns.north then
+    local off = (tonumber(conns.north.offset) or 0) * 2
+    for x = 0, w - 1 do
+      if landOk(conns.north, x - off, math.huge) then
+        seeds[#seeds + 1] = { x = x, y = 0 }
+      end
+    end
+  end
+  if conns.south then
+    local off = (tonumber(conns.south.offset) or 0) * 2
+    for x = 0, w - 1 do
+      if landOk(conns.south, x - off, 0) then
+        seeds[#seeds + 1] = { x = x, y = h - 1 }
+      end
+    end
+  end
+  if conns.west then
+    local off = (tonumber(conns.west.offset) or 0) * 2
+    for y = 0, h - 1 do
+      if landOk(conns.west, math.huge, y - off) then
+        seeds[#seeds + 1] = { x = 0, y = y }
+      end
+    end
+  end
+  if conns.east then
+    local off = (tonumber(conns.east.offset) or 0) * 2
+    for y = 0, h - 1 do
+      if landOk(conns.east, 0, y - off) then
+        seeds[#seeds + 1] = { x = w - 1, y = y }
+      end
+    end
+  end
   return Spawn.floodEscapable(w, h, walk, seeds)
 end
 
 -- Every cell a player could be dropped on for one map, in row-major order
--- -- walkable, unoccupied, and with a way off the map (POK-23).
-function Spawn.cellsOf(def, tilesetDef)
+-- -- walkable, unoccupied, and with a way off the map (POK-23).  Pass the
+-- full `maps`/`tilesets` so the edge seeding can check where a step off
+-- the map actually lands (the Pewter corner lesson above).
+function Spawn.cellsOf(def, tilesetDef, maps, tilesets)
   local out = {}
   if not (def and tilesetDef) then return out end
   local skip = blocked(def)
-  local escape = Spawn.escapableSet(def, tilesetDef)
+  local escape = Spawn.escapableSet(def, tilesetDef, maps, tilesets)
   local w, h = def.width * 2, def.height * 2
   for cy = 0, h - 1 do
     for cx = 0, w - 1 do
@@ -168,7 +221,8 @@ end
 function Spawn.pickIn(maps, tilesets, mapId, n, rng)
   rng = rng or Spawn.rng(os.time())
   local def = maps and maps[mapId]
-  local cells = Spawn.cellsOf(def, def and tilesets and tilesets[def.tileset])
+  local cells = Spawn.cellsOf(def, def and tilesets and tilesets[def.tileset],
+                              maps, tilesets)
   if #cells == 0 then return nil, "no free cells on " .. tostring(mapId) end
   for i = #cells, 2, -1 do
     local j = rng(1, i)
@@ -203,7 +257,8 @@ function Spawn.pick(maps, tilesets, n, rng)
   local function cells(id)
     if not cellCache[id] then
       local def = maps[id]
-      cellCache[id] = Spawn.cellsOf(def, tilesets and tilesets[def.tileset])
+      cellCache[id] = Spawn.cellsOf(def, tilesets and tilesets[def.tileset],
+                                    maps, tilesets)
     end
     return cellCache[id]
   end

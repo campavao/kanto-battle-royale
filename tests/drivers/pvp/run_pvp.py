@@ -39,6 +39,10 @@ SCENARIOS = {
     # different engine release and the room's door must name it in the
     # lobby, before anyone drops (POK-142)
     "door": ("host_door.lua", "guest_door.lua"),
+    # POK-144: the host presses PLAY AGAIN while the guest is still
+    # parked on the MATCH RECORD card.  The guest has to boot into
+    # match 2 instead of becoming a phantom survivor.
+    "again": ("host_again.lua", "guest_again.lua"),
 }
 
 
@@ -72,7 +76,9 @@ def main():
     workdir = args.pop(0) if args else tempfile.mkdtemp(prefix="br-pvp-")
     os.makedirs(workdir, exist_ok=True)
     for name in ("code.txt", "posted.txt", "joined.txt", "hostdone.txt",
-                 "guestdone.txt", "inplace.txt", "host.plog", "guest.plog"):
+                 "guestdone.txt", "inplace.txt", "host.plog", "guest.plog",
+                 "guestready.txt", "guestm1.txt", "guestcard.txt",
+                 "m2.txt", "m2go.txt"):
         p = os.path.join(workdir, name)
         if os.path.exists(p):
             os.remove(p)

@@ -1,7 +1,7 @@
 -- POK-64 scenario "duel", host side: host the room, publish the code,
 -- start the match with zero bots, take a post in Pewter, and LOSE the
 -- duel on purpose -- the guest asserts the spill; this side asserts the
--- elimination and that PLAY AGAIN brings the lobby back.
+-- elimination and that the finished match brings the lobby back by itself.
 local U = require("tests.drivers.util")
 local L = require("mods.battle_royale.tests.drivers.pvp.pvplib")
 
@@ -130,10 +130,14 @@ return function(game)
   if not L.mashUntil(C, function() return E.phase() == "over" end, 600) then
     return C.fail("the match never ended after the elimination")
   end
-  U.wait(300)   -- let the guest read the board before the reset
-  E.playAgain()
-  if not L.mashUntil(C, function() return E.phase() == "lobby" end, 900) then
-    return C.fail("PLAY AGAIN never returned this side to the lobby")
+  -- No button (POK-144).  There is nothing to press any more: every client
+  -- arms its own ending when the match ends and takes it once the screen is
+  -- quiet, so what this measures is the funnel, and it says so.  It said
+  -- "PLAY AGAIN never returned this side" while calling an export that
+  -- armed the same funnel a second time -- one thing measured, another
+  -- reported.
+  if not L.mashUntil(C, function() return E.phase() == "lobby" end, 1200) then
+    return C.fail("the finished match never returned this side to the lobby")
   end
   U.log("PVP OK host: duel fought, loss recorded, lobby again")
   love.event.quit(0)

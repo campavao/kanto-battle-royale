@@ -4,7 +4,7 @@
 -- cannot be played down to one survivor in a driver's lifetime), sit through
 -- the Champion's parade, then check the two things the ticket is about:
 --   1. the champion is no longer standing in the finished match world, and
---   2. the room survived, so PLAY AGAIN can still run it back.
+--   2. the room survived, so the lobby's PLAY AGAIN row can still run it back.
 --
 -- One client, no relay server: a solo room is a LocalRoom, so this needs
 -- only LOVE and an imported ROM.  Run from a gen1recomp checkout root:

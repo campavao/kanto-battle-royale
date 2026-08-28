@@ -52,6 +52,7 @@ local Lockstep = require("mods.battle_royale.lib.lockstep")
 local Stats = require("mods.battle_royale.lib.stats")
 local Door = require("mods.battle_royale.lib.door")
 local Log = require("mods.battle_royale.lib.log")
+local Despawn = require("mods.battle_royale.lib.despawn")
 
 local SCREEN = "BattleRoyaleMenu"
 -- The relay the mod ships pointed at, so downloading it and pressing QUICK
@@ -148,6 +149,14 @@ local SAFARI_BEAT_SECONDS = 5     -- how often the host re-announces the clock
 -- (POK-92).  Long enough for a ball already in the air to land -- a throw
 -- and its shakes run about two seconds -- and far too short to hide in.
 local BUZZER_BATTLE_GRACE = 3
+-- How long a finished match stays standing (POK-144).  The banner gets read
+-- before the world goes, and nothing holds a match that is already over
+-- open past the deadline -- a screen that never goes quiet is exactly the
+-- state this exists to leave.  The end-of-match battle close reuses
+-- BUZZER_BATTLE_GRACE above: a throw in flight deserves the same grace at
+-- the win as at the buzzer (POK-155).
+local END_GRACE_SECONDS = 4
+local END_DEADLINE_SECONDS = 15
 local PVP_TURN_SECONDS = 30       -- the PvP shot clock: pick or forfeit (POK-59)
 -- the two south warps out of the centre, to the gate: there is no leaving
 -- early -- the buzzer is the only way out
@@ -276,10 +285,16 @@ return function(mod)
     battle = nil,         -- active fight { channel, opponentId, isHost }
     nonceSeq = 0,
     pendingSays = {},     -- says waiting for a free runner (POK-49/POK-50)
+    despawns = Despawn.new(),  -- beaten trainers, hidden on a quiet frame
     stats = nil,          -- the run's record: catches, beats, steps (POK-47)
     pendingParade = nil,  -- when the champion's ending should start (POK-47)
     pendingFame = nil,    -- a parade that belongs to somebody else (POK-107)
     winnerId = nil,       -- who the host crowned (POK-107)
+    pendingEnd = nil,     -- the exit is DUE: { why, earliest, deadline } (POK-144)
+    parading = nil,       -- the Hall of Fame STATE, while one is on the stack
+    overBattleAt = nil,   -- when the ending first found a battle still open (POK-155)
+    lastResult = nil,     -- what the screen we land on has to say (POK-144)
+    endingMatch = false,  -- an exit is in flight; endMatch must not re-enter
     arming = nil,         -- { map, x, y } while save.new_game reshapes the skeleton
     refusedBattle = nil,  -- the last battle never ran, so its blackout is not a loss (POK-134)
     started = false,      -- have I dropped into the world yet this match
@@ -311,6 +326,7 @@ return function(mod)
     lastRoster = 0,       -- to notice an arrival and hold the countdown open
     matchSeed = nil,      -- every client derives bot names/parties from this
     botFight = nil,       -- the bot id we are locally fighting right now
+    botRecords = {},      -- id -> persistent team, POK-158 (see botRecord)
     botParty = nil,       -- handed to the trainer.party hook for one battle
     ring = nil,           -- { phase, center = {x,y,id,name}, radius }
     matchStartedAt = nil, -- host only: when the shared clock started
@@ -655,7 +671,14 @@ return function(mod)
       -- match and no longer a save -- with SAVE un-vetoed over their real
       -- slot, since matchWorld is exactly what the save.write hook reads
       -- (POK-115).
-      BR:teardown(reason)
+      --
+      -- Through the SAME funnel as every other ending now (POK-144).
+      -- relay:isOpen() is already false by the time we get here, so
+      -- endMatch takes its no-room branch straight into teardown; the only
+      -- difference is that a room closing MID-MATCH now records a
+      -- lastResult for the screen it lands on, and one closing from the
+      -- lobby does not.
+      BR:endMatch(reason)
     end)
   end
 
@@ -766,11 +789,137 @@ return function(mod)
     self.suspendedMods = nil
   end
 
+  -- Everything an ENDING owns, in ONE list because two lists drift.
+  --
+  -- resetMatch clears it on the way OUT of a match; onStart clears it on the
+  -- way IN.  The two are not the same call and neither is redundant:
+  --
+  --   arriving from a SESSION -- a guest still on the MATCH RECORD card
+  --   when the host's next `start` lands (the card waits for A forever,
+  --   lib/fame.lua:95-99), or the host's own startMatch, which has no phase
+  --   guard and is what tests/drivers/playtest_over.lua's `twice` legs
+  --   drive -- onStart runs a whole resetMatch first, and this list is one
+  --   line of it;
+  --
+  --   arriving from the LOBBY, which is every ordinary start, there is no
+  --   resetMatch to run and this call is the only clear there is.  It is
+  --   what takes the last match's lastResult off the screen the new one
+  --   starts from.
+  --
+  -- Delete either call and one of those two paths carries an ending into a
+  -- match.  What that costs: startNewGame drops the Fame state under a
+  -- guest who was still parading, so its onDone never runs, and `parading`
+  -- stays set for the rest of the session -- match two reaches "over",
+  -- armEnding is refused by the stale pendingEnd, and the tick pushes the
+  -- clocks out every frame.  That client's second match never ends at all.
+  --
+  -- ORDER IS LOAD-BEARING (POK-144): endMatch sets lastResult AFTER it
+  -- calls resetMatch, because this is what would eat it.  Move that
+  -- assignment up there -- which reads like a tidy-up -- and the result the
+  -- screen we are about to land on has to say is silently deleted.
+  function BR:clearEnding()
+    self.pendingParade = nil
+    self.pendingFame = nil
+    self.pendingEnd = nil
+    self.parading = nil
+    self.overBattleAt = nil
+    self.lastResult = nil
+    self.winnerId = nil
+  end
+
+  -- ------- the scripted-battle refusal, armed for the length of a match
+  --
+  -- The third route into a battle, and the one neither encounter.roll nor
+  -- trainer.before_battle can see: a SCRIPT builds its own BattleState and
+  -- pushes it (src/script/Commands.lua start_battle -> pushBattle), so every
+  -- gym leader, rival fight, Snorlax, bird and Mewtwo reached the stack past
+  -- both of them.  script.command is the one seam a mod has on that -- it
+  -- wraps every row ScriptRunner dispatches
+  -- (src/script/ScriptRunner.lua:168-176) -- and returning "end" stops the
+  -- script where it stands rather than letting the rest of it run without
+  -- the fight it was written around.
+  --
+  -- ARMED PER MATCH, NOT AT LOAD (POK-155).  A wrap that lives for the
+  -- process makes Runtime.wantsHook("script.command") true for ever, and the
+  -- runner takes its slower branch whenever that is so.  Measured per
+  -- command on LuaJIT 2.1.1720049189: 40ns unhooked, 1747ns with this link
+  -- live.  Arming at the drop and dropping it at resetMatch hands that back
+  -- to every playthrough that is not a match -- 91% of it.
+  --
+  -- What it does NOT hand back is the emptied chain.  Hooks:wrap's
+  -- unregister closure removes the entry and leaves chains["script.command"]
+  -- a live (empty) table, so wantsHook stays true and the dispatch still
+  -- costs ~189ns and two allocations.  That residue is the ENGINE's to fix
+  -- -- src/mods/Events.lua:26-27 nils an emptied key and says why,
+  -- src/mods/Hooks.lua:27-31 does not -- and is filed there.  Do NOT reach
+  -- into Runtime.hooks.chains from here to shave it: that table is shared,
+  -- and nilling the key would delete every other mod's link on the hook.
+  --
+  -- Two hazards, both benign only because BR is the single link on this hook
+  -- today (checked across every mod in the tree):
+  --
+  --   1. Hooks:call has no dispatch snapshot.  It captures `local chain` and
+  --      re-reads #chain per recursion, unlike Events:emit, which copies the
+  --      list precisely because a listener may retire itself mid-emit
+  --      (src/mods/Events.lua:49-53).  Dropping a link mid-dispatch shifts
+  --      the walk PAST the next one -- three links with A removing itself
+  --      runs A, C, vanilla and silently skips B.  Latent the moment a
+  --      second mod wraps script.command.
+  --   2. A yielded command can span the disarm.  show_text and start_battle
+  --      yield inside the hook's pcall while the input.step tick keeps
+  --      running and can reach resetMatch.  With a single link that resumes
+  --      cleanly -- `entry` is a captured local and run(index + 1) re-reads
+  --      #chain as 0 and runs vanilla -- which is the same single-link
+  --      assumption as (1).  Both halves are covered by the yielding-command
+  --      case in tests/br_load_test.lua.
+  --
+  -- And it is still not COMPLETE: a native map script that calls
+  -- Commands.start_battle directly has no ScriptRunner under it, so this
+  -- never fires for it (the same gap the gift hook documents further down).
+  -- battle.started recording localBattle at "over" is the backstop for those
+  -- -- the funnel can close a battle it could not refuse.
+  --
+  -- Nor is it the SOLE guard, and nothing above should be read as saying so.
+  -- resetMatch disarms this link before it reaches phase = "lobby", so a
+  -- throw anywhere in the forty lines between the two leaves a client still
+  -- in a session with the wrap already gone.  What holds in that window is
+  -- the rest of the set: canOpenBattle is asked again at encounter.roll, at
+  -- trainer.before_battle, in startBotBattle and in beginBattle, so three of
+  -- the four routes into a battle are still refused, and the battle.started
+  -- backstop above still records whatever the fourth lets through for the
+  -- exit funnel to close.  Only the scripted route is uncovered there, and
+  -- only while a teardown is already failing.
+  local SCRIPT_BATTLES = { start_battle = true, static_battle = true,
+                           rival_battle = true, old_man_demo = true }
+  -- The live link, or nil.  Declared HERE rather than beside armScriptWrap's
+  -- one caller because a Lua local is only in scope BELOW its line, and
+  -- resetMatch -- the function that drops it -- is the next one down.
+  local dropScriptWrap
+  local function armScriptWrap()
+    if dropScriptWrap then return end   -- idempotent, like every other arm
+    dropScriptWrap = mod.hooks:wrap("script.command", function(next, ctx, name, args)
+      -- inSession() is redundant on paper now that the wrap only EXISTS
+      -- during a session.  Kept anyway: it is what makes an arm/disarm bug
+      -- cost nothing instead of costing a real playthrough its gym leaders.
+      if SCRIPT_BATTLES[name] and BR:inSession() and not BR:canOpenBattle() then
+        log:say("refused a scripted battle (%s) at phase %s",
+                tostring(name), tostring(BR.phase))
+        return "end"
+      end
+      return next(ctx, name, args)
+    end)
+  end
+  local function disarmScriptWrap()
+    if not dropScriptWrap then return end
+    dropScriptWrap()
+    dropScriptWrap = nil
+  end
+
   -- Back to a clean slate without leaving the world (a closed relay, a
   -- cancelled lobby).  teardown() is the deliberate exit that also tells the
   -- relay goodbye.
-  -- Everything one match owns, cleared for the next: a leave (reset) or
-  -- PLAY AGAIN (onAgain), which keeps the room.
+  -- Everything one match owns, cleared for the next: a leave (reset) or the
+  -- ending every client now takes for itself (endMatch), which keeps the room.
   function BR:resetMatch()
     -- What belongs to somebody ELSE goes back first, before anything here
     -- can throw and strand it: every other line of this function is our own
@@ -779,6 +928,13 @@ return function(mod)
     -- the save-event net behind it is still free to arrive.
     self:unsuspendMods()
     self:restoreSpeed()
+    -- ...and the ENGINE gets its cheap script dispatch back (POK-155).  This
+    -- is the only disarm, because resetMatch is the one path every exit goes
+    -- through -- the same claim the TM restore below leans on.  Deliberately
+    -- NOT hung on setPhase: resetMatch sets self.phase directly further down
+    -- ("setPhase would log a teardown as a new match") and so does BR:reset,
+    -- so a disarm inside setPhase would never fire on the way out.
+    disarmScriptWrap()
     self.ghosts:despawnAll()
     self.spills:clear()
     if self.battle then
@@ -815,12 +971,11 @@ return function(mod)
     self.pendingDrop = nil   -- a release that never landed (POK-34)
     self.pendingGift = nil   -- a gift whose box was never reopened (POK-112)
     self.pendingSays = {}
+    self.despawns:clear()
     self.runnerBusySince, self.lastAutoA = nil, nil
     self.stats = nil
     self.walkUp = nil
-    self.pendingParade = nil
-    self.pendingFame = nil
-    self.winnerId = nil
+    self:clearEnding()
     self.ringDistOf = nil
     self.ringLocs = nil
     self.matchFog = nil
@@ -835,7 +990,10 @@ return function(mod)
     self.pickingTown = nil
     self.matchSeed = nil
     self.botFight = nil
+    self.botFightPos = nil
+    self.botFightIdx = nil
     self.botParty = nil
+    self.botRecords = {}
     self.npcFight = nil
     self.ring = nil
     self.ringCenter = nil
@@ -861,26 +1019,6 @@ return function(mod)
     self.wasHost = false
   end
 
-  -- Leaving has to actually leave.  A match runs in a throwaway world, so
-  -- dropping the relay while standing in it left the player in a Kanto that
-  -- was no longer a match and no longer a save -- the menu said "you left"
-  -- and nothing else changed.  BOTH exits land here now -- teardown() and a
-  -- room that closed under us (POK-115) -- so neither can be the one that
-  -- forgets.  Takes the flag rather than reading it, because reset() clears
-  -- matchWorld on its way past.
-  function BR:toTitle(wasMatchWorld)
-    if not (wasMatchWorld and self.game) then return false end
-    self.matchWorld = false   -- the throwaway world is gone; SAVE is theirs again
-    local ok, err = pcall(function()
-      while self.game.stack:top() do self.game.stack:pop() end
-      self.game.stack:push(self.game:makeTitleState())
-    end)
-    if not ok then
-      mod.log:warn("could not return to the title: %s", tostring(err))
-    end
-    return true
-  end
-
   function BR:teardown(message)
     -- Re-entrant by construction: teardown drops the relay, and a dropped
     -- relay fires `closed`, whose handler is itself an exit that tears
@@ -898,9 +1036,21 @@ return function(mod)
       self:reset()
       -- A say cannot outlive the stack pop: Menu.say queues a script in the
       -- world we are leaving, so only an exit that stays put can deliver
-      -- one.  Landing on the title with no reason given is POK-115's
-      -- known gap, not an oversight here.
-      if not self:toTitle(wasMatchWorld) and message then say(message) end
+      -- one.  Leaving the world with no reason given is POK-115's known
+      -- gap, not an oversight here.
+      --
+      -- POK-144: every terminal state ends on the BR SCREEN, not the bare
+      -- title.  With no room left the screen shows its first face -- QUICK
+      -- PLAY / SOLO / HOST -- which is the right answer to "the room
+      -- closed": there is nothing to go back to, so it offers the way to
+      -- start again.  And the screen has rows where a say cannot reach, so
+      -- POK-115's gap is narrower than it was: BR.lastResult is read there
+      -- (lib/menu.lua) by everything that arrives with a result to report.
+      if wasMatchWorld and self.game then
+        self:toLobbyScreen()
+      elseif message then
+        say(message)
+      end
     end)
     self.tearingDown = false
     if not ok then
@@ -908,10 +1058,12 @@ return function(mod)
     end
   end
 
-  -- Leaving the finished world WITHOUT leaving the room: the throwaway
-  -- Kanto is dropped and the lobby screen comes back with the roster
-  -- intact.  Shared by PLAY AGAIN (onAgain) and the Champion's exit
-  -- (POK-82) -- the two ways a match stops being somewhere you stand.
+  -- Leaving the finished world: the throwaway Kanto is dropped and the BR
+  -- screen comes back -- with the roster intact while there is still a
+  -- room, and on its own first face when there is not.  THE landing, now
+  -- (POK-144), not one of several: a win, a loss, a LEAVE and a room that
+  -- closed under us all arrive here, where they used to scatter between
+  -- here, the bare title, and standing in the match world forever.
   function BR:toLobbyScreen()
     local game = self.game
     if not game then return false end
@@ -927,47 +1079,122 @@ return function(mod)
     return ok
   end
 
-  -- The Hall of Fame is the end of the run (POK-82).  Standing in the
-  -- match world after it was a dead end -- nothing tore the match down,
-  -- and phase "over" quietly lifts every in-match menu restriction while
-  -- the winner stands there (LINK and SAVE come back).  So the parade
-  -- hands off to here.  The room is KEPT whenever there still is one, so
-  -- PLAY AGAIN can run it back with the same people -- a host who left
-  -- would close the room on everybody (relay `room_closed`).  Only a
-  -- champion with no room left says goodbye to the relay.
+  -- The match is over for this client.  Not an exit in itself: it says the
+  -- exit is DUE, and the tick takes it once the screen is quiet -- or when
+  -- the deadline runs out, because a finished match nothing tears down is
+  -- exactly POK-144.  Armed by EVERY way a match can end, not only by the
+  -- one that has a parade behind it.
+  function BR:armEnding(why)
+    if self.endingMatch or self.pendingEnd then return end
+    -- Nothing to arm outside the window the tick can take it in.  onAgain
+    -- is the caller that can arrive here cold -- a guest that finished its
+    -- own ending while the host was still parading -- and a pendingEnd
+    -- left standing in the lobby would be dead weight that the NEXT
+    -- match's arm is then refused by, one line above.
+    if self.phase ~= "over" then return end
+    local now = clock() or 0
+    self.pendingEnd = { why = why or "ended",
+                        earliest = now + END_GRACE_SECONDS,
+                        deadline = now + END_DEADLINE_SECONDS }
+  end
+
+  -- The one teardown every terminal route funnels into (POK-144).  Before
+  -- this there were five ways a match could end and two of them reached a
+  -- reset; a bot winning, nobody winning, and a champion whose parade
+  -- could not run left the player standing in a throwaway Kanto with
+  -- another mod's overworld hooks still stood down (POK-134) and TM01..50
+  -- still wearing BR names in game.data, which the real save shares.
+  -- Returns true when the exit was actually taken, so the caller that armed
+  -- it can arm it again: this swallows its own throw (a teardown that dies
+  -- before resetMatch reaches phase = "lobby" leaves the client at "over"
+  -- with nothing left to re-arm it, which is POK-144 reopened by the first
+  -- exception).
+  function BR:endMatch(why)
+    if self.endingMatch then return false end
+    -- A teardown already owns this exit.  Relay:leave fires `closed`
+    -- SYNCHRONOUSLY (lib/relay.lua), so LEAVE MATCH nests
+    -- teardown -> closed -> endMatch inside itself: without this line the
+    -- inner call sets a lastResult that the outer reset() then clears, and
+    -- "a player who chose to leave gets no result row" would be true only
+    -- by the order of two statements nobody is warned about.
+    if self.tearingDown then return false end
+    self.endingMatch = true
+    local ok, err = pcall(function()
+      local wasInSession = self:inSession()
+      local wasMatchWorld = self.matchWorld
+      local keepRoom = (self.relay and self.relay:isOpen()) or false
+      local won = self.winnerId ~= nil and self.winnerId == self.myId
+      local winner = self.winnerId and self.players[self.winnerId]
+      local result = { won = won, winnerId = self.winnerId,
+                       name = (not won) and self.winnerId
+                              and ((winner and winner.name)
+                                   or (self.relay and self.relay:nameOf(self.winnerId)))
+                              or nil,
+                       at = clock() or 0 }
+      -- only when there WAS a match: this funnel is shared with the relay's
+      -- `closed`, which fires just as readily over a lobby nobody had
+      -- started, and "match over (room_closed)" in the story log with no
+      -- match behind it is a false positive in the tier this project reads
+      -- as evidence
+      if wasInSession then log:say("match over (%s)", tostring(why or "ended")) end
+      if keepRoom then
+        -- the host runs the room back, as PLAY AGAIN used to (POK-20): the
+        -- roster kept, the code kept, the door unlocked for anyone else.
+        -- What it does NOT do is start the next match: PLAY AGAIN is the
+        -- lobby's own start row now, and a countdown nobody pressed
+        -- anything to arm would drop a host who won, read the result and
+        -- walked away into a fresh match thirty seconds later.
+        if self.relay:isHost() then
+          self.relay:broadcast(Wire.again())
+          self.relay:lock(false)
+        end
+        self:resetMatch()
+        if wasMatchWorld then self:toLobbyScreen() end
+      else
+        self:teardown(why)   -- reset() -> resetMatch(), then the same screen
+      end
+      -- LAST: resetMatch clears this, and the result is what the screen we
+      -- just landed on has to say
+      if wasInSession then self.lastResult = result end
+    end)
+    self.endingMatch = false
+    if not ok then mod.log:warn("could not end the match: %s", tostring(err)) end
+    return ok
+  end
+
+  -- The Hall of Fame is the end of the run (POK-82): the parade hands off
+  -- to here, and here hands off to the one funnel.
   function BR:endRun()
-    if self.relay and self.relay:isOpen() then
-      self:toLobbyScreen()
-    else
-      self:teardown()
+    self.pendingEnd = nil     -- the parade WAS the ending; nothing to wait for
+    -- ...unless the exit threw on the way out.  endMatch warns and returns
+    -- false rather than raising, so the only thing that can try again is
+    -- whoever asked it to go.
+    if not self:endMatch("the parade ended") and self.phase == "over" then
+      self:armEnding("the parade ended")
     end
   end
 
-  -- PLAY AGAIN (POK-20): the host sends the room back to the lobby -- the
-  -- roster kept, the code kept, the room unlocked for anyone else who wants
-  -- in -- and everyone leaves the finished world for the lobby screen.  The
-  -- next START MATCH rolls a new seed and new spawns exactly as the first
-  -- did.  Nobody exchanges a code twice.
-  function BR:playAgain()
-    local relay = self.relay
-    if not (relay and relay:isHost() and self.phase == "over") then return false end
-    relay:broadcast(Wire.again())
-    relay:lock(false)
-    self:onAgain()
-    return true
-  end
-
+  -- PLAY AGAIN is no longer a row of its own (POK-144).  Every client now
+  -- returns to the lobby on its own the moment its ending finishes, so the
+  -- host's job shrank to the one thing only a host can do -- unlock the
+  -- room -- and endMatch does it.  The `again` message is kept and still
+  -- means "back to the lobby", in the two shapes that are left:
+  --
+  --   at "over" it only ARMS the exit, so a host who finished the parade
+  --   first cannot pop a guest's Hall of Fame out from under them;
+  --
+  --   anywhere else in a session it TAKES it, which is the recovery this
+  --   message has always been and the reason it is still on the wire.  A
+  --   client that never saw `winner` -- a dropped packet, a rejoin -- is
+  --   still standing in a match the rest of the room has left, and `again`
+  --   is the only thing that will ever tell it so.
   function BR:onAgain()
     if not (self.relay and self.relay:isOpen()) then return end
-    local game = self.game
-    local wasMatchWorld = self.matchWorld
-    self:resetMatch()
-    -- an open room keeps driving itself, as quick play promised
-    if self.relay:isHost() and self:isOpen() then
-      local now = clock() or 0
-      self.autoStartAt = now + QUICK_START_SECONDS
+    if self.phase == "over" then
+      self:armEnding("play again")
+    elseif self:inSession() then
+      self:endMatch("play again")
     end
-    if wasMatchWorld and game then self:toLobbyScreen() end
   end
 
   -- ------- starting a match
@@ -1021,8 +1248,37 @@ return function(mod)
   end
 
   function BR:onStart(msg)
+    -- The LAST match, gone in full, before this one is built on top of it
+    -- (POK-144).  A client can arrive here still standing in one: a guest
+    -- reading the MATCH RECORD card cannot leave "over" on its own, and the
+    -- message gate no longer drops the host's `start` at it -- dropping it
+    -- is what made that client a phantom survivor of the next match.
+    --
+    -- resetMatch, not clearEnding: the ending is seven fields and a match is
+    -- forty.  The difference is the ring (match one's final radius, so
+    -- tickFog bites from frame one until the host's first `ring` arrives),
+    -- the ghosts, the spills, the flee lockouts, the buzzer flags, the say
+    -- queue, the bot fight and the door's findings -- every one of which
+    -- would otherwise walk into match two.
+    --
+    -- Skipped from the LOBBY, which is every ordinary start, so nothing is
+    -- reset twice.  And resetMatch sets self.phase directly rather than
+    -- through setPhase, so an arrival at "over" does not log its teardown
+    -- as a new match either.
+    --
+    -- Before baseSpeed is read, because resetMatch's restoreSpeed hands the
+    -- pre-match speed back to the game: this line has to record what the
+    -- game is left running at, not what the last match was running at.
+    if self:inSession() then self:resetMatch() end
     -- what this session runs at normally, before anyone holds a bumper
     self.baseSpeed = (self.game and self.game.speedOverride) or false
+    -- Nothing the LAST match ended with comes into this one (POK-144): not
+    -- its result, and above all not a parade flag or an armed exit that
+    -- this match's own ending would then be refused by.  The same list
+    -- resetMatch uses, so the two cannot drift apart -- and NOT redundant
+    -- with the line above, which runs only for an arrival from a session.
+    -- This is the clear the ordinary lobby start gets.
+    self:clearEnding()
     -- find my drop
     local mine
     for _, s in ipairs(msg.spawns) do
@@ -1074,6 +1330,11 @@ return function(mod)
     local safari = tonumber(msg.safari) or 0
     self.arming = { map = mine.map, x = mine.x, y = mine.y,
                     safari = safari > 0, safariSeconds = safari }
+    -- The scripted-battle refusal goes live HERE and nowhere else: onStart
+    -- is the single entry into a session, the way resetMatch is the single
+    -- exit (POK-155).  Before setPhase, so no script can dispatch a row in
+    -- the new phase ahead of the guard that reads it.
+    armScriptWrap()
     self:setPhase(safari > 0 and "safari" or "match",
                   safari > 0 and "the SAFARI opens" or "straight to the drop")
     self.status = "alive"
@@ -1485,8 +1746,26 @@ return function(mod)
       if p then p.busy = msg.kind end
 
     elseif msg.t == "start" then
-      -- only the host is a legitimate author; ignore a forged one
-      if fromId == self.relay.hostId and not self.started then
+      -- Only the host is a legitimate author; ignore a forged one.
+      --
+      -- What used to stand beside that was `not self.started`, and it cost
+      -- a match (POK-144).  A client at "over" still has started = true and
+      -- cannot clear it by itself -- the MATCH RECORD card waits for A
+      -- forever (lib/fame.lua:95-99) and pushes the exit's clocks out every
+      -- frame while it is up -- so a host who read their own card first and
+      -- pressed PLAY AGAIN had this message DROPPED here, with no log line
+      -- and no change on screen.  startMatch still allocated that guest a
+      -- spawn, every other client seeded them "alive", and nothing they own
+      -- ever broadcast again: the fog could not reach them, checkWinner
+      -- counted them to the end, and the phantom was crowned.
+      --
+      -- So a session is not a reason to refuse this message; it is a reason
+      -- to tear the last match down first, which is what onStart does with
+      -- it now.  Nothing is lost by dropping the guard: startMatch is the
+      -- only sender, the stream is ordered, and the server broadcasts to
+      -- every OTHER member (relay/server.js:376-380), so the host applies
+      -- its own start directly rather than reading it back.
+      if fromId == self.relay.hostId then
         self:onStart(msg)
       end
 
@@ -1526,7 +1805,7 @@ return function(mod)
 
     elseif msg.t == "npcout" then
       -- somebody beat one of Kanto's own; the sprite goes away here too
-      pcall(function() mod.world:toggleObject(msg.map, msg.obj, false) end)
+      pcall(function() BR.despawns:hide(BR.game, msg.map, msg.obj) end)
       -- a fallen gym leader is news to the whole lobby (POK-26) -- whether
       -- a rival took the prize or the fog burned it
       local fallen = Gyms.leaderOfObject(
@@ -1564,6 +1843,12 @@ return function(mod)
 
     elseif msg.t == "again" then
       if fromId == self.relay.hostId then self:onAgain() end
+
+    elseif msg.t == "botrec" then
+      -- a bot's team changed: a catch (the host) or a fight's scars (the
+      -- client who fought it).  Applied verbatim -- the record is owned
+      -- by whoever last touched it, like the bots' movement is
+      self.botRecords[msg.id] = msg.record
 
     elseif msg.t == "peek" then
       self:answerPeek(fromId)
@@ -1666,11 +1951,17 @@ return function(mod)
       -- engage LATER, never earlier, and an idle ghost is snapped onto the
       -- truth by the very next sync.
       local gx, gy = self.ghosts:cellOf(id)
-      others[#others + 1] = { id = id, map = p.map, x = gx or p.x,
-                              y = gy or p.y,
-                              facing = p.facing, moving = false,
-                              status = p.status,
-                              busy = p.status == "battle" }
+      -- No drawn ghost, no engage (POK-149).  The old `gx or p.x` fallback
+      -- was the pop-in: a bot that had just crossed a seam onto this map
+      -- could be fought off its wire cell before this screen had drawn it
+      -- at all -- "I couldn't see them before the ! appeared".  Skipping it
+      -- only ever delays the engage a beat, until the ghost exists.
+      if gx then
+        others[#others + 1] = { id = id, map = p.map, x = gx, y = gy,
+                                facing = p.facing, moving = false,
+                                status = p.status,
+                                busy = p.status == "battle" }
+      end
     end
     -- terrain stops the eyeline; the other trainers on it do not, since they
     -- are entities rather than map tiles (a body in the way is exactly the
@@ -1713,6 +2004,58 @@ return function(mod)
     -- and the challenger flashes while the challenge flies (POK-55)
     if ow then
       ow.emote = { npc = ow.player, frames = ENGAGE_FLASH_FRAMES, bubble = 1 }
+    end
+  end
+
+  -- The other half of the eyeline (POK-149).  tryEngage is the player
+  -- spotting somebody; nothing ever let a bot spot the PLAYER, so the only
+  -- way a bot fight started was the player standing still, facing it, at
+  -- whatever range it had already closed to -- and the walk-up beat
+  -- (POK-85) was built for a range nobody ever engaged at.  Now a bot
+  -- whose own facing crosses you calls the fight the way a route trainer
+  -- does: the ! goes up over ITS head, it walks over, the battle opens.
+  --
+  -- Local, like every bot fight: each client tests its own player against
+  -- the bots on its map, and whoever is seen fights the team every client
+  -- derives from the seed anyway.
+  function BR:tryBotEngage()
+    if self.status ~= "alive" or self.battle or self.pending
+       or self.botFight then return end
+    local ow = mod.world:overworld()
+    local player = ow and ow.player
+    if not (player and ow.map) or ow.transitioning then return end
+    local map = ow.map
+    local blocked = function(x, y)
+      return not (map:inBounds(x, y) and map:isWalkableCell(x, y))
+    end
+    -- inbound honours a flee's grace only, like an inbound challenge
+    local avoid = self:fleeAvoid(false)
+    local me = { { id = self.myId, map = map.id, x = player.cellX,
+                   y = player.cellY, facing = player.facing, moving = false,
+                   status = "alive", busy = false } }
+    for id, p in pairs(self.players) do
+      if Bots.isBot(id) and p.status == "alive" and p.map == map.id
+         and not avoid[id] then
+        -- its GHOST's cell, never its wire cell, for the same reason
+        -- tryEngage asks the screen (POK-96): a bot this client has not
+        -- drawn cannot call a fight
+        local gx, gy = self.ghosts:cellOf(id)
+        if gx and Engage.target(
+             { id = id, map = p.map, x = gx, y = gy, facing = p.facing,
+               moving = false, status = "alive", busy = p.busy and true },
+             me, { range = Bots.SIGHT, blocked = blocked }) == self.myId then
+          self.pending = { to = id, nonce = -1, host = true }
+          engageFlash(self.ghosts:npcOf(id), function()
+            BR:walkUpThen(id, function()
+              if BR.pending and BR.pending.to == id then BR.pending = nil end
+              if BR.status == "alive" and not BR.battle and not BR.botFight then
+                BR:startBotBattle(id)
+              end
+            end)
+          end)
+          return
+        end
+      end
     end
   end
 
@@ -1760,7 +2103,8 @@ return function(mod)
     local data = BR.game and BR.game.data
     local def = data and data.maps[mapId]
     if not def then return {} end
-    local cells = Spawn.cellsOf(def, data.tilesets[def.tileset])
+    local cells = Spawn.cellsOf(def, data.tilesets[def.tileset],
+                                data.maps, data.tilesets)
     cellCache[mapId] = cells
     return cells
   end
@@ -1831,7 +2175,20 @@ return function(mod)
       -- no safe-here exemption: standing still is exactly the failure
       -- being fixed.  homeward still holds when no exit is any closer.
       dest = Bots.homeward(exits, hunt, hunt(p.map), p.rng)
-      if not dest then p.lastRoam = now return end
+      if not dest then
+        local hereD = hunt(p.map)
+        if hereD and hereD > 0 then
+          -- A PLATEAU, not an arrival (POK-153): the target is on another
+          -- map, yet no seam is strictly closer at town-map grain, so the
+          -- hunt had nothing to say and the bot paced here forever.  Head
+          -- for the ring's eye instead -- the user's own fallback ask --
+          -- and failing even that, any seam beats standing still.
+          dest = (dist and Bots.homeward(exits,
+                    function(m) return dist[m] end, nil, p.rng))
+            or exits[p.rng(1, #exits)]
+        end
+        if not dest then p.lastRoam = now return end
+      end
     elseif dist then
       -- holding still is only wisdom INSIDE the ring; outside it, the
       -- least-bad seam beats waiting for the fog
@@ -1884,21 +2241,31 @@ return function(mod)
   function BR:tickWalkUp()
     local w = self.walkUp
     if not w then return end
-    local function finish()
+    -- The walk ARRIVED: the callback opens the fight.
+    local function arrived()
       self.walkUp = nil
       if w.onDone then w.onDone() end
+    end
+    -- It did not.  POK-145: this used to call onDone too, so the moment the
+    -- match moved on the pending walk-up IMMEDIATELY opened a bot battle in
+    -- a finished world.  The callbacks clear BR.pending, so an abandon has
+    -- to clear it here or tryEngage is wedged on a challenge that will
+    -- never resolve.
+    local function abandon()
+      self.walkUp = nil
+      if self.pending and self.pending.to == w.id then self.pending = nil end
     end
     local p = self.players[w.id]
     local me = here()
     -- it died on the way, we left the map, or the match moved on
     if not (p and me and p.map == me.mapId and p.status == "alive"
-            and self.phase == "match") then return finish() end
+            and self.phase == "match") then return abandon() end
     local now = clock() or 0
     if (now - (w.at or 0)) < Bots.WALKUP_SECONDS then return end
     w.at = now
     -- re-aimed every step: you are free to move, and it follows
     local dir = Bots.approach(p, canWalk, { x = me.x, y = me.y })
-    if not dir or w.steps >= Bots.WALKUP_STEPS then return finish() end
+    if not dir or w.steps >= Bots.WALKUP_STEPS then return arrived() end
     w.steps = w.steps + 1
     local d = Bots.DELTA[dir]
     p.facing = dir
@@ -1934,13 +2301,143 @@ return function(mod)
     return hit
   end
 
+  -- The bot's persistent team (POK-158 M1).  Created lazily and
+  -- IDENTICALLY on every client -- Bots.newRecord derives the one drop
+  -- mon from the seed at the floor rung -- so no message is needed until
+  -- the record actually changes; every change after that arrives as a
+  -- botrec broadcast and replaces the copy wholesale.
+  function BR:botRecord(id)
+    local rec = self.botRecords[id]
+    if not rec then
+      rec = Bots.newRecord(self.matchSeed, id, self.game and self.game.data)
+      self.botRecords[id] = rec
+    end
+    if not rec.bag then
+      -- The bag is part of the record now (POK-158 M2): the authored
+      -- staples plus the seeded TM, derived identically everywhere like
+      -- the drop mon -- and then LIVED OUT OF: potions get drunk, looted
+      -- bags fold in.  Rows are copies: BOT_LOOT is shared authored data
+      -- and a bot drinking from it would drink for every bot at once.
+      local items = {}
+      for _, it in ipairs(BOT_LOOT.items) do
+        items[#items + 1] = { id = it.id, n = it.n }
+      end
+      local tm = Bots.lootTM(self.matchSeed, id)
+      local data = self.game and self.game.data
+      if tm and data and data.items and data.items[tm] then
+        items[#items + 1] = { id = tm, n = 1 }
+      end
+      rec.bag = { items = items, money = BOT_LOOT.money }
+    end
+    return rec
+  end
+
+  -- A grass dwell DOES the thing it used to pretend to (POK-158): the six
+  -- seconds standing in the grass are a catch roll against the map's own
+  -- encounter table.  Host only, like everything that moves a bot; the
+  -- catch rides a botrec broadcast so every client's copy of the team
+  -- grows together.
+  function BR:botCatch(id, p)
+    local data = self.game and self.game.data
+    local enc = data and data.encounters and data.encounters[p.map]
+    local slots = enc and enc.grass and enc.grass.slots
+    local rec = self:botRecord(id)
+    local caught = Bots.rollCatch(rec, Bots.recordCap(), slots, p.rng)
+    if caught then
+      log:say("CAUGHT: %s got %s (%d mons)", tostring(p.name),
+              tostring(caught), #rec)
+      if self.relay then self.relay:broadcast(Wire.botrec(id, rec)) end
+    end
+  end
+
+  -- A spill under a bot's feet joins its team (POK-158 M2).  The 1.5s
+  -- item dwell used to be pure theater; now the ball it stood on is
+  -- taken -- gone for everyone, exactly as if a player had pocketed it
+  -- -- and the mon inside joins the record, fresh the way a player's
+  -- pickup is.  Bags stay on the ground: a bot has no persistent bag
+  -- yet, and eating one would erase loot a player could still use.
+  function BR:botLoot(id, p)
+    local rec = self:botRecord(id)
+    local key = self.spills and self.spills:keyAt(p.map, p.x, p.y)
+    local ball = key and self.spills:get(key)
+    if not ball then return end
+    if ball.bag then
+      -- a fallen trainer's bag folds into the bot's own (POK-158 M2):
+      -- the potions get drunk later, the TMs get taught, the money rides
+      -- to whoever finally beats it
+      Bots.bagMerge(rec.bag, ball)
+      log:say("LOOTED: %s took %s's bag", tostring(p.name),
+              tostring(ball.name or "someone"))
+    elseif ball.species and #rec < Bots.recordCap() then
+      rec[#rec + 1] = { species = ball.species, hpFrac = 1 }
+      log:say("LOOTED: %s took %s (%d mons)", tostring(p.name),
+              tostring(ball.species), #rec)
+    else
+      return
+    end
+    self.spills:take(key)
+    if self.relay then
+      self.relay:broadcast(Wire.took(key))
+      self.relay:broadcast(Wire.botrec(id, rec))
+    end
+  end
+
+  -- The Centre serves bots too (POK-158 M2).  Walking to the door and
+  -- waiting the dwell out is the whole visit -- the interior trip is
+  -- abstracted, the way the fight against another bot is -- and the rule
+  -- is the player's own: no nurse in a fogged town (POK-117/140), which
+  -- pickBotGoal enforced when it offered the errand and this re-checks,
+  -- because the ring may have moved while the bot walked over.
+  function BR:botHeal(id, p)
+    if self:fogOver(p.map) then return end
+    local rec = self:botRecord(id)
+    local healed = false
+    for _, m in ipairs(rec) do
+      if (m.hpFrac or 0) < 1 then m.hpFrac = 1 healed = true end
+    end
+    if not healed then return end
+    log:say("HEALED: %s at the %s CENTER", tostring(p.name), tostring(p.map))
+    if self.relay then self.relay:broadcast(Wire.botrec(id, rec)) end
+  end
+
+  -- The cell in front of this map's POKeMON CENTER door, or nil.  Doors
+  -- all face south in Gen 1, so "in front" is one cell down; a door whose
+  -- step cell is not walkable is not offered (a bot grinding at a blocked
+  -- doorway forever is worse than one that never heals).  Cached: warps
+  -- cannot move during a match.
+  function BR:centerDoorOn(mapId)
+    self.centerDoorCache = self.centerDoorCache or {}
+    local hit = self.centerDoorCache[mapId]
+    if hit ~= nil then return hit or nil end
+    local data = self.game and self.game.data
+    local def = data and data.maps and data.maps[mapId]
+    local found = false
+    for _, w in ipairs((def and def.warps) or {}) do
+      if type(w.destMap) == "string" and w.destMap:find("POKECENTER", 1, true)
+         and canWalk(mapId, w.x, w.y + 1) then
+        found = { x = w.x, y = w.y + 1 }
+        break
+      end
+    end
+    self.centerDoorCache[mapId] = found
+    return found or nil
+  end
+
   -- What this bot is off to do, or nil to let the roam clock move it on.
-  function BR:pickBotGoal(p, now)
+  function BR:pickBotGoal(id, p, now)
+    local rec = self:botRecord(id)
     local g = Bots.chooseGoal(p, {
       -- the fog outranks every errand, as it does for a player.  Reuses
       -- the per-map question POK-140 needed for the CENTRE counters.
       inFog = self:fogOver(p.map),
-      items = self.spills and self.spills:cellsOn(p.map) or nil,
+      -- a wrecked team walks to the Centre (POK-158 M2), under the same
+      -- rule the player's nurse serves by: not once the fog has the town
+      heal = (Bots.wantsHeal(rec) and not self:fogOver(p.map))
+        and self:centerDoorOn(p.map) or nil,
+      -- loot is only an errand while something there can be taken: any
+      -- of it with room in the party, just the bags without
+      items = self.spills
+        and self.spills:cellsOn(p.map, #rec >= Bots.recordCap()) or nil,
       grass = self:grassOn(p.map),
       -- the floor under every other errand: a bot must always have
       -- somewhere it can walk HERE, or a town with no grass freezes it
@@ -1967,13 +2464,20 @@ return function(mod)
       if now and now < p.dwellUntil then return nil end
       p.dwellUntil = nil
       self:markBot(id, p, nil)
+      -- the dwell pays out as it ends: six seconds in the grass was a
+      -- hunt, a pause on a spill was picking it up, a wait at the Centre
+      -- door was the nurse (POK-158)
+      if p.dwellKind == "grass" then self:botCatch(id, p)
+      elseif p.dwellKind == "item" then self:botLoot(id, p)
+      elseif p.dwellKind == "heal" then self:botHeal(id, p) end
+      p.dwellKind = nil
     end
 
     local goal = p.goal
     local stale = not goal or goal.map ~= p.map
       or (now and (now - (goal.at or 0)) > Bots.GOAL_SECONDS)
     if stale then
-      p.goal, p.path = self:pickBotGoal(p, now), nil
+      p.goal, p.path = self:pickBotGoal(id, p, now), nil
       goal = p.goal
     end
     if not goal then return nil end
@@ -1982,6 +2486,7 @@ return function(mod)
       local dwell = Bots.DWELL[goal.kind] or 0
       if dwell > 0 then
         p.dwellUntil = (now or 0) + dwell
+        p.dwellKind = goal.kind
         -- What the room sees over their head while they stand there
         -- (POK-113's marks, POK-121's errands).  Grass reads as a FIGHT,
         -- because that is what standing in grass for six seconds is; a
@@ -2030,6 +2535,47 @@ return function(mod)
     return dir
   end
 
+  -- The stalk, at cell grain (POK-153).  Same-map prey used to get the
+  -- greedy Bots.wander(toward), and greedy is exactly what paces: two
+  -- blocked candidate directions at a ledge or a fence and the march
+  -- turns back into shuffling -- which a spectator at three-left watched
+  -- a bot do indefinitely.  A stalk deserves what errands already have:
+  -- a real BFS path, walked cell by cell, rebuilt when the prey moves.
+  function BR:stepBotHunt(id, p, prey)
+    -- a stalk interrupts an errand: the FIGHT/menu mark from a dwell must
+    -- not stay over its head while it walks somebody down
+    if p.busy then self:markBot(id, p, nil) end
+    p.dwellUntil = nil
+    -- adjacent is as close as a stalk gets; the eyelines do the rest
+    if math.abs(prey.x - p.x) + math.abs(prey.y - p.y) <= 1 then
+      p.huntPath, p.huntFor = nil, nil
+      return nil
+    end
+    if p.rng() < 0.2 then return nil end -- the wobble the wander had
+    local stale = not (p.huntPath and p.huntPath[1])
+      or p.huntMap ~= p.map
+      or not p.huntFor
+      or (math.abs(p.huntFor.x - prey.x) + math.abs(p.huntFor.y - prey.y)) > 2
+    if stale then
+      p.huntMap, p.huntFor = p.map, { x = prey.x, y = prey.y }
+      p.huntPath = Bots.path(function(x, y) return canWalk(p.map, x, y) end,
+                             { x = p.x, y = p.y },
+                             { x = prey.x, y = prey.y })
+      if not p.huntPath then
+        -- unreachable -- a Surf pocket, a ledge-locked hollow: the greedy
+        -- step is still better than standing down
+        return Bots.wander(p, p.rng, canWalk, prey)
+      end
+    end
+    local dir = table.remove(p.huntPath, 1)
+    local d = dir and Bots.DELTA[dir]
+    if not (d and canWalk(p.map, p.x + d[1], p.y + d[2])) then
+      p.huntPath = nil        -- somebody moved into us; repath next beat
+      return nil
+    end
+    return dir
+  end
+
   function BR:tickBots()
     if not (self.relay and self.relay:isHost() and self:inRound()) then return end
     local now = clock()
@@ -2038,9 +2584,20 @@ return function(mod)
     -- roster thins (POK-95) and every bot reads the same roster -- but the
     -- TIER half is per bot (POK-121), so the multiply happens inside.
     local alive = self:aliveCount()
+    -- self.players never holds the local player (the huntDistOf lesson),
+    -- so the host's own trainer was invisible to every same-map hunt: on a
+    -- solo match no bot ever walked at the player at all, and "hunt the
+    -- nearest trainer, bot or human" only ever meant remote humans.
+    local meHere = (self.phase == "match" and self.status == "alive")
+      and here() or nil
     for id, p in pairs(self.players) do
-      -- a bot on its way over is not also strolling somewhere (POK-85)
-      if p.bot and p.status == "alive" and p.map and id ~= striding then
+      -- a bot on its way over is not also strolling somewhere (POK-85),
+      -- and the one we are FIGHTING stands its ground (POK-154): walkUp is
+      -- cleared the moment the battle opens, so without this the opponent
+      -- resumed roaming behind the battle screen and its loot spilled
+      -- wherever it had wandered to by the end
+      if p.bot and p.status == "alive" and p.map and id ~= striding
+         and id ~= self.botFight then
         -- cached on the bot beside its rng, for the same reason: derived
         -- from (seed, id) and constant for the match
         p.tier = p.tier or Bots.tier(self.matchSeed, id)
@@ -2062,6 +2619,9 @@ return function(mod)
           -- (not in the Safari: nobody fights there, and a ghost body
           -- closing in on you is a wall in a phase with no way past it)
           local prey
+          if meHere and meHere.mapId == p.map then
+            prey = { x = meHere.x, y = meHere.y }
+          end
           for otherId, o in pairs(self.phase == "match" and self.players or {}) do
             if otherId ~= id and o.status == "alive" and o.map == p.map then
               if not prey or (math.abs(o.x - p.x) + math.abs(o.y - p.y))
@@ -2071,8 +2631,8 @@ return function(mod)
             end
           end
           -- Prey outranks any errand: a trainer on your map is what you
-          -- came for.  The hunt keeps Bots.wander, which is right for it --
-          -- a stalk should wobble.
+          -- came for.  The stalk walks a real path now (POK-153) -- see
+          -- stepBotHunt for why greedy wandering paced instead.
           --
           -- Everything else is an ERRAND now (POK-121).  The old version
           -- picked a far random walkable cell and biased wander toward it,
@@ -2083,8 +2643,10 @@ return function(mod)
           -- turned the march back into pacing, which is exactly what a
           -- watched bot must never do.
           local dir
-          if prey or self.phase ~= "match" then
-            dir = Bots.wander(p, p.rng, canWalk, prey)
+          if prey then
+            dir = self:stepBotHunt(id, p, prey)
+          elseif self.phase ~= "match" then
+            dir = Bots.wander(p, p.rng, canWalk, nil)
           else
             dir = self:stepBotErrand(id, p, now)
           end
@@ -2112,15 +2674,16 @@ return function(mod)
     return field and field.townMap and field.townMap.locations
   end
 
-  -- the named places worth closing the ring on
-  local function townList()
+  -- the named places worth closing the ring on; `all` widens it from the
+  -- fly towns to every outdoor map the Town Map can place (the routes)
+  local function townList(all)
     local locations = townLocations()
     local maps = BR.game and BR.game.data and BR.game.data.maps
     if not (locations and maps) then return {} end
     local Map = require("src.world.Map")
     local out = {}
     for id, def in pairs(maps) do
-      if Map.isOutdoor(def) and Map.isFlyTown(def) and locations[id] then
+      if Map.isOutdoor(def) and (all or Map.isFlyTown(def)) and locations[id] then
         out[#out + 1] = { id = id, x = locations[id].x, y = locations[id].y,
                           name = locations[id].name or id }
       end
@@ -2176,6 +2739,37 @@ return function(mod)
   -- until POK-82's exit runs there is a real window to stand in.
   function BR:inSession()
     return self:inRound() or self.phase == "over"
+  end
+
+  -- May a NEW battle open right now?  Distinct from inRound(), which is the
+  -- rules window (levels, bag, encounters).  This is about the screen, and
+  -- it is asked at the moment a battle OPENS rather than the moment it was
+  -- queued -- the gap between the two is where POK-145 lived: a walk-up
+  -- armed during the match arrived after the winner was named and opened a
+  -- fight in a finished world.
+  function BR:canOpenBattle()
+    return self.phase == "match" and self.status == "alive" and not self.battle
+  end
+
+  -- May a WILD encounter roll right now?  Narrower than inRound() and
+  -- WIDER than canOpenBattle(), by exactly one phase: the Safari's rule is
+  -- "no trainer fights", not "no wild encounters" -- catching is the whole
+  -- point of the phase, and a party caught there is what you drop with.
+  -- Everything else answers the same as canOpenBattle: "drop" is the
+  -- buzzer's own frame, "over" is a finished world, and a spectator or a
+  -- player already in a battle is in neither of them.
+  --
+  -- Scoping the grass to canOpenBattle() instead killed the Safari
+  -- outright, and the reason it is not merely cosmetic is the ENGINE's
+  -- chain: encounter.species is only called on a NON-NIL roll
+  -- (src/world/OverworldController.lua:3867-3871, and the same shape in
+  -- src/world/gen2/World.lua:3956-3959).  A nil here is not "the zone
+  -- rolls through the other hook", it is no zone at all -- two minutes of
+  -- empty grass and then tickDrop eliminating the whole room for catching
+  -- nothing.
+  function BR:canRollWild()
+    return (self.phase == "safari" or self.phase == "match")
+       and self.status == "alive" and not self.battle
   end
 
   -- Has the ring started closing?  Distinct from mod.exports.inFog, which
@@ -2289,12 +2883,31 @@ return function(mod)
     return towns
   end
 
-  -- host only: at the buzzer the bots are DEALT towns -- the deck, not the
-  -- dice (POK-43), so no two share one while towns remain and the drop
+  -- Where a BOT can be dealt at the buzzer: the fly towns AND the routes
+  -- (POK-147).  The player's picker stays towns-only -- a town is a place
+  -- you can name -- but a thirty-bot deal over eleven towns wraps into
+  -- guaranteed pairs standing in each other's sight-line at t=0, and the
+  -- roster was resolving itself before anybody met anybody.  Kanto has 34
+  -- placeable outdoor maps, so at Bots.MAX every bot starts a map of its
+  -- own and the early fights go back to being found, not dealt.
+  function BR:botDropSpots()
+    local spots = townList(true)
+    local maps = (self.game and self.game.data and self.game.data.maps) or {}
+    table.sort(spots, function(a, b)
+      local ia = maps[a.id] and maps[a.id].index or 0
+      local ib = maps[b.id] and maps[b.id].index or 0
+      if ia ~= ib then return ia < ib end
+      return a.id < b.id
+    end)
+    return spots
+  end
+
+  -- host only: at the buzzer the bots are DEALT drop maps -- the deck, not
+  -- the dice (POK-43), so no two share one while maps remain and the drop
   -- stops resolving itself in the first minute
   function BR:dropBots()
     if not (self.relay and self.relay:isHost()) then return end
-    local towns = self:dropTowns()
+    local towns = self:botDropSpots()
     if #towns == 0 then return end
     local now = clock() or 0
     local ids = {}
@@ -2327,40 +2940,73 @@ return function(mod)
   -- catching a team while everyone else was already picking a town.  That
   -- is the one thing the Safari clock exists to prevent.
   --
-  -- So: a throw already in flight gets BUZZER_BATTLE_GRACE seconds to land,
-  -- and then the battle is closed out from under it.  BattleState:finish is
-  -- the engine's own choke point for leaving a battle -- it restores the
-  -- map music, pops itself and emits battle.ended -- so the ghost lead is
-  -- still reclaimed (POK-21) and the return fade still plays.  It pops the
-  -- TOP of the stack, though, so anything the player parked above the
-  -- battle (the bag, a party screen) is backed out with B first -- never A,
-  -- which would choose something in there (the POK-66 rule).
-  function BR:closeBuzzedBattle()
-    if self.phase ~= "drop" then return end
+  -- So: a throw already in flight gets its grace seconds to land, and then
+  -- the battle is closed out from under it.  BattleState:finish is the
+  -- engine's own choke point for leaving a battle -- it restores the map
+  -- music, pops itself and emits battle.ended -- so the ghost lead is still
+  -- reclaimed (POK-21) and the return fade still plays.  It pops the TOP of
+  -- the stack, though, so anything the player parked above the battle (the
+  -- bag, a party screen) is backed out with B first -- never A, which would
+  -- choose something in there (the POK-66 rule).
+  --
+  -- Close a live local battle out from under whatever is happening in it.
+  -- `since` is the caller's own clock, `grace` how long a throw already in
+  -- flight gets to land.  Returns "none" | "waiting" | "closed".
+  function BR:closeLiveBattle(since, grace, why)
     local battle = self:liveLocalBattle()
-    if not battle then return end
+    if not battle then return "none" end
     local game, now = self.game, clock()
-    if not (game and now) then return end
-    self.buzzedAt = self.buzzedAt or now
-    if (now - self.buzzedAt) < BUZZER_BATTLE_GRACE then return end
-
+    if not (game and now and since) then return "waiting" end
+    if (now - since) < (grace or 0) then return "waiting" end
     if game.stack:top() ~= battle then
-      if self.lastBuzzB and (now - self.lastBuzzB) < 0.5 then return end
+      if self.lastBuzzB and (now - self.lastBuzzB) < 0.5 then return "waiting" end
       self.lastBuzzB = now
       if game.input and game.input.pressQueue then
         table.insert(game.input.pressQueue, "b")
       end
-      return
+      return "waiting"
     end
-
-    log:say("the buzzer closed a battle that was still open")
+    log:say("%s closed a battle that was still open", tostring(why or "something"))
     battle.result = battle.result or "run"
     local ok, err = pcall(battle.finish, battle)
     if not ok then
-      mod.log:warn("couldn't close the buzzed battle: %s", tostring(err))
-      return
+      mod.log:warn("couldn't close the battle: %s", tostring(err))
+      return "waiting"
     end
     self.localBattle = nil
+    return "closed"
+  end
+
+  function BR:closeBuzzedBattle()
+    if self.phase ~= "drop" then return end
+    self.buzzedAt = self.buzzedAt or clock()
+    self:closeLiveBattle(self.buzzedAt, BUZZER_BATTLE_GRACE, "the buzzer")
+  end
+
+  -- POK-155: the match ended while a fight was still open.  Waiting for it
+  -- to finish is the one thing that cannot happen -- checkWinner counts the
+  -- local player as a survivor on status ~= "out" and a route trainer
+  -- leaves status "alive", so the win lands mid-fight; the banner is queued
+  -- into a script runner nothing is updating; and the parade's gate can
+  -- never pass while a battle owns the top of the stack.  So the fight is
+  -- closed the way the buzzer closes one: B out of anything parked above
+  -- it, then BattleState:finish -- which restores the music, pops itself,
+  -- and emits battle.ended as a run.  Nobody collects: the npcDefeated
+  -- payout is gated on phase "match", which this is not.
+  --
+  -- A blackout is nearly, but not quite, impossible on the way out.
+  -- BattleState:finish upgrades ANY non-"lose" result to "lose" when the
+  -- party has nothing healthy left (src/battle/BattleState.lua:5293-5298),
+  -- so "a run raises no world.blacked_out" is not unconditional.  The
+  -- window is thin -- the champion normally has a healthy mon, and
+  -- fogBiteBattle floors the active at 1 HP rather than fainting it -- and
+  -- what comes through it is bounded: eliminate() refuses outright at
+  -- "over", and the blackout's own save is written into the throwaway world
+  -- this exit is about to discard.
+  function BR:closeOverBattle()
+    if self.phase ~= "over" then return end
+    self.overBattleAt = self.overBattleAt or clock()
+    self:closeLiveBattle(self.overBattleAt, BUZZER_BATTLE_GRACE, "the end of the match")
   end
 
   -- The buzzer's work, once we are standing on the overworld with no battle
@@ -2730,7 +3376,7 @@ return function(mod)
       for _, obj in ipairs((data.maps[mapId] and data.maps[mapId].objects) or {}) do
         if obj.trainerClass and obj.name then
           took = took + 1
-          pcall(function() mod.world:toggleObject(mapId, obj.name, false) end)
+          pcall(function() BR.despawns:hide(BR.game, mapId, obj.name) end)
           if self.relay then self.relay:broadcast(Wire.npcout(mapId, obj.name)) end
         end
       end
@@ -2767,6 +3413,21 @@ return function(mod)
     end
     self.localBattle = nil
     return nil
+  end
+
+  -- Nothing on screen but the world: the overworld is the top state, its
+  -- script runner is idle, and no battle is open.  The gate for anything
+  -- that takes the world away -- the parade (POK-47) and the exit that
+  -- follows it (POK-144).  StateStack:update runs the TOP state only
+  -- (src/core/StateStack.lua:60), so a screen pushed under a battle is
+  -- pushed somewhere nothing is updating, and a say queued under one is
+  -- accepted and then frozen (src/world/WorldAPI.lua:493).
+  function BR:screenIsQuiet()
+    local game = self.game
+    local ow = mod.world:overworld()
+    if not (game and ow and game.stack:top() == ow) then return false end
+    if ow.runner and ow.runner.isRunning and ow.runner:isRunning() then return false end
+    return self:liveLocalBattle() == nil
   end
 
   -- The other half of POK-31: the enemy's bench ticks like ours, and the
@@ -2947,7 +3608,8 @@ return function(mod)
         local data = self.game and self.game.data
         local bag = self:botBag(id)   -- the TM shows in the peek too (POK-62)
         self.peeked = { id = id, bot = true,
-                        party = Peek.botParty(Bots, self.matchSeed, id, data, self:level()),
+                        party = Peek.botParty(Bots, self.matchSeed, id, data,
+                                              self:level(), self:botRecord(id)),
                         items = bag.items, money = bag.money }
       end
       return
@@ -3209,6 +3871,26 @@ return function(mod)
     if not (q and q[1]) then return end
     local now = clock()
     if not now or now < q[1].at then return end
+    -- Never onto a screen that is not the overworld (POK-155).  queueScript
+    -- refuses only while the runner is RUNNING; under anything else on the
+    -- stack the runner is idle, so a say queued there is ACCEPTED and then
+    -- pushed somewhere StateStack:update never reaches
+    -- (src/core/StateStack.lua:60).  That is what the win banner did for
+    -- the two and a half seconds between onWinner's sayLater and
+    -- closeOverBattle's grace.
+    --
+    -- A battle was only the first screen it was found under, and gating on
+    -- liveLocalBattle alone would leave the rest of the class open: a say
+    -- due while Transition.battleReturn is on top (pushed by
+    -- BattleState:finish, src/battle/BattleState.lua:5327) freezes and
+    -- resurfaces later, and one due during the parade freezes and is then
+    -- dropped by resetMatch.  So the gate is the same predicate the parade
+    -- and the exit ask, which covers all three.
+    --
+    -- A queue can wait: it lands on the overworld whatever is on top
+    -- returns to -- or, if the match ends first, resetMatch drops it, which
+    -- is the right answer for a say about a match that is over.
+    if not self:screenIsQuiet() then return end
     if BRMenu.say(mod, q[1].text) then table.remove(q, 1) end
   end
 
@@ -3285,6 +3967,19 @@ return function(mod)
     -- BR:startBotFight).  A WILD encounter or one of Kanto's own trainers
     -- leaves it "alive", which is how this shipped.
     if self.status == "battle" or self:liveLocalBattle() then return end
+    -- ...and the guard above still left a window (the Discord report of a
+    -- party jumping 15 -> 30 against Brock): localBattle is set by
+    -- battle.started, which BattleState emits AFTER it is pushed -- the
+    -- BattleTransition flash before it is a second or two in which the
+    -- rung can land, and the fight then OPENS on freshly-jumped mons.
+    -- Sweep the stack for either state instead of trusting the event's
+    -- timing; same test startBotBattle applies before opening a fight.
+    local BattleTransition = require("src.render.BattleTransition")
+    for _, state in ipairs((self.game.stack and self.game.stack.states) or {}) do
+      if state.awardExp or getmetatable(state) == BattleTransition then
+        return
+      end
+    end
     local now = clock()
     if not now then return end
     if (now - (self.lastLevelTick or 0)) < 1 then return end
@@ -3317,6 +4012,17 @@ return function(mod)
   -- `cause` is for the log, not the player: the message on screen says
   -- it in Gen 1 English, this says it in one greppable word (POK-86).
   function BR:eliminate(message, cause)
+    -- The champion cannot be eliminated by their own win (POK-155).  Closing
+    -- a fight out at "over" pops it as a "run", not a loss, so nothing
+    -- should arrive here -- but the fog, a late blackout, or any future
+    -- widening of the guard below to inSession() (as the speedOverride
+    -- take-back and the START-menu guard both correctly do) would white out
+    -- the trainer who just won: the engine's blackout heals the party,
+    -- halves the money and warps them to a POKeMON CENTER, and with fellAt
+    -- nil and status "alive" the spectator return-warp never fires.  This
+    -- protection currently rests on "over" not being in inRound(), which is
+    -- an accident anyone could tidy away.  Now it is a decision.
+    if self.phase == "over" then return end
     if self.status == "out" or not self:inRound() then return end
     self.status = "out"
     -- Out of the match is out of the running for the room: a spectator can
@@ -3706,8 +4412,15 @@ return function(mod)
     if not now then return end
     local live = {}
     for id, p in pairs(self.players) do
-      if p.bot and p.status == "alive" and p.map
-         and (now - (p.lastFight or 0)) >= Bots.FIGHT_COOLDOWN then
+      -- the bot in OUR battle screen is not free to be jumped (POK-154).
+      -- The cooldown is a breather AFTER a fight; a bot that has never
+      -- fought owes nobody one.  (`or 0` here made it a clock-since-boot
+      -- gate: for the first twelve real seconds of the process no bot
+      -- could fight at all, which an accelerated driver sits entirely
+      -- inside.)
+      if p.bot and p.status == "alive" and p.map and id ~= self.botFight
+         and (not p.lastFight
+              or (now - p.lastFight) >= Bots.FIGHT_COOLDOWN) then
         live[#live + 1] = { id = id, p = p }
       end
     end
@@ -3717,12 +4430,26 @@ return function(mod)
         local a, b = live[i], live[j]
         if Bots.near(a.p, b.p) then
           a.p.lastFight, b.p.lastFight = now, now
-          -- a coin flip: both sides are one mon at the same rung, so there
-          -- is nothing to weigh.  When bots carry real teams this is where
-          -- the comparison goes.
-          local loser = (love.math.random() < 0.5) and a or b
-          local winner = (loser == a) and b or a
+          -- The RECORDS fight (POK-158 M3), not a coin: base-stat power
+          -- times what each team has left, an upset still possible, and
+          -- the winner walks away hurt.  The loser's record is what the
+          -- spill puts on the ground; the winner's scars ride a botrec so
+          -- every client carries them into its next fight.
+          local w = Bots.resolveFight(self:botRecord(a.id), self:botRecord(b.id),
+                                      self.game and self.game.data,
+                                      function() return love.math.random() end)
+          local winner = (w == "a") and a or b
+          local loser = (w == "a") and b or a
           self:eliminateBot(loser.id, loser.p, winner.p.name)
+          local wrec = self:botRecord(winner.id)
+          local drank = Bots.quaff(wrec, wrec.bag)
+          if drank then
+            log:say("POTION: %s used its %s", tostring(winner.p.name),
+                    tostring(drank))
+          end
+          if self.relay then
+            self.relay:broadcast(Wire.botrec(winner.id, wrec))
+          end
           return
         end
       end
@@ -3744,17 +4471,17 @@ return function(mod)
     self:checkWinner()
   end
 
-  -- A bot's bag: the authored staples plus its one seeded TM (POK-62),
-  -- the same answer for the spill on the ground and the spectator's peek
+  -- A bot's bag: what its RECORD is actually carrying by now (POK-158),
+  -- the same answer for the spill on the ground and the spectator's peek.
+  -- A copy, so the spill/peek plumbing (which decorates the table) never
+  -- writes into the record.
   function BR:botBag(id)
+    local bag = self:botRecord(id).bag or { items = {}, money = 0 }
     local items = {}
-    for _, it in ipairs(BOT_LOOT.items) do items[#items + 1] = it end
-    local tm = Bots.lootTM(self.matchSeed, id)
-    local data = self.game and self.game.data
-    if tm and data and data.items and data.items[tm] then
-      items[#items + 1] = { id = tm, n = 1 }
+    for _, it in ipairs(bag.items or {}) do
+      items[#items + 1] = { id = it.id, n = it.n }
     end
-    return { items = items, money = BOT_LOOT.money }
+    return { items = items, money = bag.money or 0 }
   end
 
   -- A bot's loot: its team as balls and its authored bag (botBag -- a
@@ -3764,7 +4491,9 @@ return function(mod)
   function BR:spillBot(id, p)
     local data = self.game and self.game.data
     if not (data and p and p.map and p.x and p.y) then return end
-    local party = Bots.party(self.matchSeed, id, data, self:level())
+    -- the team it actually built (POK-158), fainted included -- what hits
+    -- the ground is the record, not a synth
+    local party = Bots.spillRows(self:botRecord(id), self:level())
     local bag = self:botBag(id)
     bag.name = p.name
     local spill = Spills.build(id, p.map, p.x, p.y, party, function(x, y)
@@ -3776,7 +4505,53 @@ return function(mod)
     end
   end
 
+  -- Taught ahead of time (POK-158 M4).  A bot's bag has carried a seeded
+  -- TM since POK-62; now the moves inside actually reach its mons: at
+  -- fight build, each TM in the bag is offered to the first compatible
+  -- mon (the species' own tmhm list), whose default moveset gets its
+  -- oldest move swapped for it.  BattleState honours a party slot's
+  -- `moves` list, so this rides the engine's own seam.  The TM stays in
+  -- the bag for the winner -- the teaching happened "before the match",
+  -- and eating it would starve the TM economy POK-62 built.  Two teaches
+  -- at most: a team that is nothing but machine moves reads as a hack,
+  -- not an ace.
+  function BR:teachBotMoves(rows)
+    local data = self.game and self.game.data
+    local rec = self.botFight and self:botRecord(self.botFight)
+    local bag = rec and rec.bag
+    if not (data and bag) then return end
+    local Pokemon = require("src.pokemon.Pokemon")
+    local taught = 0
+    for _, it in ipairs(bag.items or {}) do
+      if taught >= 2 then break end
+      local moveId = Bots.tmMove(it.id)
+      if moveId and data.moves and data.moves[moveId] then
+        for _, row in ipairs(rows) do
+          if not row.moves
+             and Bots.canLearn(data.pokemon and data.pokemon[row.species], moveId) then
+            local okM, built = pcall(Pokemon.new, data, row.species, row.level)
+            local ids, dup = {}, false
+            for _, mv in ipairs((okM and built and built.moves) or {}) do
+              local mid = type(mv) == "table" and mv.id or mv
+              ids[#ids + 1] = mid
+              if mid == moveId then dup = true end
+            end
+            if not dup and #ids > 0 then
+              if #ids >= 4 then ids[1] = moveId else ids[#ids + 1] = moveId end
+              row.moves = ids
+              taught = taught + 1
+            end
+            break -- one attempt per TM: taught, or it already knew it
+          end
+        end
+      end
+    end
+  end
+
   function BR:startBotBattle(botId)
+    -- POK-145: asked HERE, at the moment the fight opens, and not at the
+    -- moment the walk-up that leads to it was armed.
+    if not self:canOpenBattle() then return end
     local bot = self.players[botId]
     local game = self.game
     if not (bot and bot.status == "alive" and game) then return end
@@ -3794,12 +4569,30 @@ return function(mod)
     self.status = "battle"
     self.botFight = botId
     self.botFightAt = clock()
+    -- Where the fight is happening, kept for the spill (POK-154).  On the
+    -- host the roam exclusion above freezes the bot anyway, but a non-host
+    -- client keeps receiving the host's steps for it, so by battle.ended
+    -- bot.map/x/y can be a seam away from where anybody fought.
+    self.botFightPos = { map = bot.map, x = bot.x, y = bot.y }
     self.pending = nil
     broadcastPlace()
 
     -- the party is handed to BattleState through the trainer.party hook
-    -- below, which is the engine's own seam for exactly this
-    self.botParty = Bots.party(self.matchSeed, botId, game.data, self:level())
+    -- below, which is the engine's own seam for exactly this.  The rows
+    -- come from the bot's RECORD (POK-158) -- the team it has actually
+    -- built and the wounds it is actually carrying -- not a fresh synth.
+    local rec = self:botRecord(botId)
+    local rows, idx = Bots.fightRows(rec, self:level())
+    if #rows == 0 then
+      -- cannot happen short of a desynced record (a wiped team is an
+      -- eliminated bot); heal it rather than opening an unwinnable fight
+      mod.log:warn("bot %s had no healthy mon; record reset", tostring(botId))
+      for _, m in ipairs(rec) do m.hpFrac = 1 end
+      rows, idx = Bots.fightRows(rec, self:level())
+    end
+    self.botParty = rows
+    self.botFightIdx = idx
+    self:teachBotMoves(rows)
     local look = self.players[botId]
     local class = (look and look.class) or BOT_TRAINER_CLASS
     local ok, battle = pcall(function()
@@ -3811,6 +4604,8 @@ return function(mod)
       mod.log:warn("couldn't start a bot battle: %s", tostring(battle))
       self.status = "alive"
       self.botFight = nil
+      self.botFightPos = nil
+      self.botFightIdx = nil
       return
     end
     -- Overlay the bot's own name on the class chassis, the engine's own
@@ -3874,18 +4669,44 @@ return function(mod)
   -- not enough on its own: the engine handed the loser a full team and put
   -- them back in the world, which is the exact opposite of party-as-health.
 
+  -- ...and nothing new opens once the match is over (POK-145).  Both hooks
+  -- ask inSession() first, so out of a session they stay invisible: a real
+  -- playthrough is untouched by the mod being installed.  Inside one they
+  -- ask DIFFERENT questions, and the difference is one phase: the Safari.
+  -- Its rule is "no trainer fights" (POK-21), not "no wild encounters" --
+  -- the two minutes in the zone are where the party comes from -- so the
+  -- grass asks canRollWild() and a trainer asks canOpenBattle().  Both
+  -- still refuse at "drop", the buzzer's own frame, and at "over".
   mod.hooks:wrap("encounter.roll", function(next, encDef, ctx)
     if BR.status == "out" then return nil end
+    -- NOT canOpenBattle(): the engine calls encounter.species only on a
+    -- non-nil roll (src/world/OverworldController.lua:3867-3871), so a nil
+    -- returned here does not hand the zone over to that hook -- it is the
+    -- zone's grass switched off, and with it the whole Safari opening.
+    if BR:inSession() and not BR:canRollWild() then return nil end
     return next(encDef, ctx)
   end)
 
   mod.hooks:wrap("trainer.before_battle", function(next, game, context, continue)
-    if BR.status == "out" then
+    -- Kanto's own trainers are in the match (POK-14) -- but only while
+    -- there IS one.  canOpenBattle() here rather than canRollWild(): the
+    -- Safari refuses trainers even though it welcomes wild rolls.  There
+    -- are no route trainers in the zone to notice, so this is a decision
+    -- about what the phase MEANS rather than an observable change.
+    if BR.status == "out" or (BR:inSession() and not BR:canOpenBattle()) then
       continue({ cancel = true })
       return true
     end
     return next(game, context, continue)
   end)
+
+  -- ...and the third route, which neither hook above can see: encounter.roll
+  -- is raised only by the grass-step roll and trainer.before_battle only by
+  -- trainer sight and talk, while a SCRIPT builds its BattleState itself and
+  -- pushes it past both.  That one is the script.command wrap, and it is NOT
+  -- registered here beside its two siblings: it is armed for the length of a
+  -- match and dropped at resetMatch (POK-155), so it lives up beside the
+  -- function that drops it.  See armScriptWrap.
 
   -- ------- the rules of a match
   --
@@ -3946,6 +4767,19 @@ return function(mod)
   mod.hooks:wrap("battle.style", function(next, battle)
     if inMatch() then return "set" end
     return next(battle)
+  end)
+
+  -- No level on any screen during a round (RFC 0019).  The rung makes the
+  -- number the same for everyone and moves it on a clock, so it reads as a
+  -- threat it is not -- a Lv37 opponent looks dangerous to a player who
+  -- has not worked out their own team is Lv37 too -- and the one time it
+  -- moves visibly (a shrink paying out between fights) it reads as a bug.
+  -- All four surfaces at once: levels are simply not a thing in a match.
+  -- On an engine without the seam the hook is never called and this wrap
+  -- costs nothing, so shipping it ahead of the engine is safe.
+  mod.hooks:wrap("pokemon.level_visible", function(next, mon, ctx)
+    if inMatch() then return false end
+    return next(mon, ctx)
   end)
 
   -- No EXP from ANY battle during a round (POK-74, widened by POK-139).
@@ -4074,8 +4908,18 @@ return function(mod)
   -- engine asks this hook AFTER its own link-play and --speed overrides, so
   -- a scripted run (POKEPORT_SPEED) still works and the touch skin's hold
   -- button is the one control this cannot reach.
+  --
+  -- ...and past the last elimination too (POK-144).  The other half of this
+  -- defence already used inSession() -- the speedOverride take-back in the
+  -- tick -- and its comment claimed to cover "over"; only that half did.
+  -- The clamp lifting the frame the winner is named is what made the Hall
+  -- of Fame blink past: Game:logicSpeed reads save.options AFTER this hook,
+  -- and a player who ever pressed the fast-forward key has speedOverworld
+  -- persisted in their global options.lua (Game:_cycleSpeed,
+  -- src/core/Game.lua:727).  inMatch() itself is NOT widened: its other
+  -- call sites are the rules window and are correctly scoped to the round.
   mod.hooks:wrap("core.logic_speed", function(next, game)
-    if inMatch() then return 1 end
+    if BR:inSession() then return 1 end
     return next(game)
   end)
 
@@ -4108,7 +4952,7 @@ return function(mod)
     -- the toggle store is the engine's own "this object is gone" switch; a
     -- reload mid-fade can refuse, and then the sprite lingers until the map
     -- is next entered, which is the acceptable failure
-    pcall(function() mod.world:toggleObject(npc.map, npc.obj, false) end)
+    pcall(function() BR.despawns:hide(BR.game, npc.map, npc.obj) end)
     if self.relay then
       self.relay:broadcast(Wire.npcout(npc.map, npc.obj))
       if spill then self.relay:broadcast(Wire.spill(spill.map, spill.mons)) end
@@ -4120,7 +4964,34 @@ return function(mod)
   -- BattleState says battle.started -- LinkBattle never emits it -- and
   -- PvP and bot fights hold tickFog off via status anyway.
   mod.events:on("battle.started", function(ev)
-    if BR:inRound() and ev and ev.battle then BR.localBattle = ev.battle end
+    -- inSession(), not inRound(): a battle that opens at "over" -- a
+    -- scripted one, which no phase guard the mod can reach refuses (see the
+    -- script.command wrap below) -- was invisible here, so liveLocalBattle
+    -- returned nil, closeOverBattle could never close it, screenIsQuiet
+    -- blocked until the deadline, and the exit popped the stack out from
+    -- under a live BattleState with no finish(): no music restore, no
+    -- battle.ended.  Every other reader of localBattle is safe at "over":
+    -- the fog is not ticking, and both watchdogs only ever hold OFF while
+    -- one is set.
+    if BR:inSession() and ev and ev.battle then BR.localBattle = ev.battle end
+    -- A bot walks in with the wounds it walked out with (POK-158).  The
+    -- engine builds the trainer party at full HP; the record says how much
+    -- of each mon is actually left, so clamp before the first turn.  Never
+    -- below 1: fightRows only sends healthy mons, and a mon at 1 HP is
+    -- exactly what "barely standing" should mean.
+    if BR.botFight and ev and ev.battle and ev.battle.enemyParty then
+      local rec = BR:botRecord(BR.botFight)
+      for k, recI in ipairs(BR.botFightIdx or {}) do
+        local mon = ev.battle.enemyParty[k]
+        local m = rec[recI]
+        if mon and m and (m.hpFrac or 1) < 1 then
+          local maxHp = (mon.stats and mon.stats.hp) or mon.maxHp or mon.hp
+          if maxHp and maxHp > 0 then
+            mon.hp = math.max(1, math.floor(maxHp * m.hpFrac + 0.5))
+          end
+        end
+      end
+    end
     -- a PvP lockstep battle: RUN on our side goes through the flee roll
     -- (POK-24); the other side only ever sees a run we actually submitted
     local opponent = BR.battle and BR.battle.opponentId
@@ -4217,25 +5088,53 @@ return function(mod)
     end
     local botId = BR.botFight
     if not botId then return end
-    BR.botFight = nil
+    local fightPos = BR.botFightPos
+    local fightIdx = BR.botFightIdx
+    BR.botFight, BR.botFightPos, BR.botFightIdx = nil, nil, nil
     if BR.status == "battle" then BR.status = "alive" end
+    if ev.result ~= "win" and not ev.skipped and ev.battle
+       and ev.battle.enemyParty then
+      -- The fight is over and the bot lived: it keeps its wounds
+      -- (POK-158).  Whoever fought it is the one client that knows the
+      -- outcome, so this client writes the scars and tells the room --
+      -- and the bot reaches for its own bag on the way out, the way a
+      -- player patches a lead before walking on.
+      local rec = BR:botRecord(botId)
+      Bots.scarRecord(rec, fightIdx, ev.battle.enemyParty)
+      local drank = Bots.quaff(rec, rec.bag)
+      if drank then
+        log:say("POTION: %s used its %s", tostring(BR.players[botId]
+          and BR.players[botId].name), tostring(drank))
+      end
+      if BR.relay then BR.relay:broadcast(Wire.botrec(botId, rec)) end
+    end
     if ev.result == "win" then
       local bot = BR.players[botId]
-      if bot then
-        bot.status = "out"
-        BR.ghosts:despawn(botId)
-        BR:spillBot(botId, bot)
+      -- `alive` guards the race where the host already put this bot out
+      -- while our battle screen was up -- eliminating it twice would spill
+      -- its loot twice
+      if bot and bot.status == "alive" then
+        -- the loot lands where the fight happened, beside the winner, not
+        -- wherever the tracked position drifted to mid-battle (POK-154)
+        if fightPos then
+          bot.map, bot.x, bot.y = fightPos.map, fightPos.x, fightPos.y
+        end
+        -- eliminateBot, not an inline copy of it: the copy had drifted to
+        -- omit the OUT log line, so the one elimination the player caused
+        -- was the one the log never showed
+        BR:eliminateBot(botId, bot, BR:playerName())
       end
-      if BR.relay then BR.relay:broadcast(Wire.botout(botId)) end
       if BR.stats then BR.stats.beats = BR.stats.beats + 1 end
       say(("You beat %s!"):format((bot and bot.name) or "them"))
-      BR:checkWinner()
     end
     broadcastPlace()
   end)
 
   function BR:beginBattle(opponentId, isHost, _nonce)
-    if self.battle then return end
+    -- POK-145: the `accept` message handler had no phase check at all, and
+    -- onChallenge's own is spent when the challenge ARRIVES, not when the
+    -- flash that follows it opens the fight.
+    if not self:canOpenBattle() then return end
     local channel = Channel.new(self.relay, opponentId, {
       onClose = function() BR:onBattleClosed(opponentId) end,
     })
@@ -4353,7 +5252,23 @@ return function(mod)
   end
 
   function BR:onWinner(id)
-    if self.phase == "over" then return end
+    -- Only a match can be won (POK-144).  "over" is the ordinary refusal --
+    -- a second `winner` for the same match -- but the phases UNDER a
+    -- session are the half that cost something.  A client whose `start` was
+    -- dropped sat in the LOBBY while the room played a whole match around
+    -- it, and the `winner` that ended that match was accepted there: phase
+    -- "over" from the lobby, and, because a phantom is allocated a spawn
+    -- and therefore can be the last one counted alive, recordWin() and a
+    -- saveCareer() of a match it never played -- a career win, possibly a
+    -- skin unlock, and YOU WIN! on the lobby face fifteen seconds later.
+    --
+    -- inRound() and not inSession(): "over" has to stay refused, and the
+    -- legitimate transition is always FROM a round, on the host through
+    -- checkWinner (itself gated on inRound) and on everyone else through
+    -- the wire.  A spectator is inside it -- eliminate leaves the phase
+    -- alone and only moves status -- so the watching half of the room still
+    -- sees the ending.
+    if not self:inRound() then return end
     self:setPhase("over", "a winner")
     self.winnerId = id
     self.ghosts:despawnAll()
@@ -4384,6 +5299,14 @@ return function(mod)
     else
       sayLater("The match is\nover.", 0.5)
     end
+    -- ...and the match ENDS for everybody, parade or no parade (POK-144).
+    -- Only the local winner ever armed pendingParade above, and everyone
+    -- else waited on a `fame` the champion sends -- so a bot winning, a
+    -- match nobody won, and a champion who never got to parade all left the
+    -- whole room standing in a world nothing tore down.  The tick defers to
+    -- a parade while one is armed or running, so this does not race it.
+    self:armEnding(id == self.myId and "you won"
+                   or (id and "another trainer won" or "nobody won"))
   end
 
   -- ------- outbound: local movement -> wire
@@ -4472,23 +5395,94 @@ return function(mod)
       end
     end
 
-    -- pending says deliver in every live phase -- the OVER banner included
+    -- Pending says deliver in every live phase -- the OVER banner included.
+    --
+    -- ABOVE THE EXIT BLOCK ON PURPOSE (POK-144), and that ordering is the
+    -- only reason the win banner survives at all: resetMatch clears
+    -- pendingSays, so the exit deletes anything still queued when it runs.
+    -- Delivered here first, the banner puts the script runner to work,
+    -- which makes screenIsQuiet() false, which is what defers the exit
+    -- below until the player has read it.  Move this call under that block
+    -- and the banner is silently dropped on the frame the match ends.
     if BR.phase ~= "off" then BR:tickSays() end
+    if BR.phase ~= "off" then
+      BR.despawns:drain(BR.game, mod.world:overworld(), BR:screenIsQuiet())
+    end
     -- the Champion's parade starts once the screen is quiet (POK-47)
     if BR.pendingParade and BR.phase == "over" then
       local nowP = clock()
-      local owP = mod.world:overworld()
-      if nowP and nowP >= BR.pendingParade and owP and game.stack:top() == owP
-         and not (owP.runner and owP.runner.isRunning and owP.runner:isRunning()) then
+      if nowP and nowP >= BR.pendingParade and BR:screenIsQuiet() then
         BR.pendingParade = nil
         -- the winner parades their own save; everyone else parades what
         -- the winner sent, so the room watches one ending (POK-107)
         local fame = BR.pendingFame
         BR.pendingFame = nil
-        game.stack:push(Fame.new(game,
-                                 (fame and fame.party) or game.save.party or {},
-                                 (fame and fame.stats) or BR:matchStats(),
-                                 function() BR:endRun() end))
+        -- the STATE, not a flag: the exit below has to be able to ask
+        -- whether this parade is still on the stack, and a boolean cannot
+        -- tell "running" from "was running once"
+        local parade = Fame.new(game,
+                                (fame and fame.party) or game.save.party or {},
+                                (fame and fame.stats) or BR:matchStats(),
+                                function()
+                                  BR.parading = nil
+                                  BR:endRun()
+                                end)
+        BR.parading = parade
+        game.stack:push(parade)
+      end
+    end
+    -- POK-144: every way a match can end reaches the lobby.  POK-155: a
+    -- fight still on screen when it ended is over too, and is closed out
+    -- here rather than waited on -- the parade's gate can never pass while
+    -- a battle owns the top of the stack.
+    --
+    -- BELOW tickSays, and deliberately: the exit this block takes runs
+    -- resetMatch, which clears pendingSays, so a banner queued but not yet
+    -- delivered would go out with it.  See the note on the tickSays call
+    -- above -- both ends of that ordering are documented because either one
+    -- alone reads like a free choice.
+    if BR.pendingEnd and BR.phase == "over" then
+      local nowE = clock() or 0
+      BR:closeOverBattle()
+      -- The deadline is a REAL backstop, not a clock that is pushed forever
+      -- (which is what "a parade that wedges still lands somewhere" used to
+      -- say while doing the opposite -- every frame reset it, so it could
+      -- never expire on the one route it exists for).  Three states:
+      --
+      --   a parade ON SCREEN owns the exit and endRun takes it when the last
+      --   page closes, so both clocks are pushed and nothing is ever yanked
+      --   out from under a player still reading the MATCH RECORD card (which
+      --   waits for A forever, lib/fame.lua, and tickAutoResolve's watchdog
+      --   cannot press it -- that is gated on the script runner, and the
+      --   runner is idle under Fame);
+      --
+      --   a parade ARMED but not yet started holds the exit off -- the grace
+      --   moves, the deadline does not -- because pendingParade is set 2.5s
+      --   ahead and a late `fame` can land after the four-second grace, and
+      --   a guest must not lose the ending by two tenths of a second;
+      --
+      --   anything else runs both clocks down.  `parading` set with no Fame
+      --   on the stack is the wedge itself, and this is the only thing that
+      --   can land it.
+      local expired = nowE >= BR.pendingEnd.deadline
+      if not expired then
+        if BR.parading and game.stack:top() == BR.parading then
+          BR.pendingEnd.earliest = nowE + END_GRACE_SECONDS
+          BR.pendingEnd.deadline = nowE + END_DEADLINE_SECONDS
+        elseif BR.pendingParade or BR.pendingFame then
+          BR.pendingEnd.earliest = nowE + END_GRACE_SECONDS
+        end
+      end
+      if expired
+         or (nowE >= BR.pendingEnd.earliest and BR:screenIsQuiet()) then
+        local why = BR.pendingEnd.why
+        -- cleared BEFORE the exit so endMatch's own teardown cannot see a
+        -- stale arm -- and put back when the exit did not happen, because
+        -- one shot at a teardown is not a funnel
+        BR.pendingEnd = nil
+        if not BR:endMatch(why) and BR.phase == "over" then
+          BR:armEnding(why)
+        end
       end
     end
     -- and neither they nor the engine's own lines may hold the match:
@@ -4531,7 +5525,10 @@ return function(mod)
           BR.spills:sync(h.mapId)
           -- nobody fights in the Safari (POK-21), nor at the gate on the
           -- way out of it
-          if BR.phase == "match" then BR:tryEngage() end
+          if BR.phase == "match" then
+            BR:tryEngage()
+            BR:tryBotEngage()
+          end
         end
       end
       -- the Safari opening: its clock, the buzzer's patience running out
@@ -5288,7 +6285,16 @@ return function(mod)
   mod.exports.join = function(code) return BR:join(code) end
   mod.exports.start = function() return BR:startMatch() end
   mod.exports.leave = function() return BR:teardown() end
-  mod.exports.playAgain = function() return BR:playAgain() end
+  -- PLAY AGAIN over the wire, exactly as a guest receives it (POK-144): the
+  -- exit ARMED at "over", and TAKEN by a client still standing in a match
+  -- the room has already left.  The row is gone from the match face and the
+  -- host's unlock moved into endMatch, so this is the whole of what the verb
+  -- still means -- and it is what the name says.  The PvP drivers used to
+  -- call this and then assert that the LOBBY came back, which the funnel did
+  -- for them; they assert the funnel by name now, so nothing in the repo
+  -- calls this.  It stays because it is the only handle a driver has on the
+  -- recovery half, which no other export can reach.
+  mod.exports.playAgain = function() return BR:onAgain() end
   mod.exports.setRelay = function(addr) return BR:setRelayAddress(addr) end
   mod.exports.setName = function(name) return BR:setName(name) end
   mod.exports.setSkin = function(id) return BR:setSkin(id) end
@@ -5391,10 +6397,36 @@ return function(mod)
   -- same from the environment).  Returns what it is now.
   mod.exports.setDebug = function(on) return BR:setDebug(on) end
   mod.exports.isDebug = function() return BR:isDebug() end
-  mod.exports.debugWin = function()
-    if not BR:inRound() then return nil, "not in a round" end
-    BR:onWinner(BR.myId)
+  -- `who`: nil = you, a bot id = that trainer, "nobody" = a match with no
+  -- survivors.  The last two are the routes that stranded every client
+  -- (POK-144) and neither can be reached by playing.
+  mod.exports.debugWin = function(who)
+    -- No guard of its own any more (POK-144).  onWinner is the thing under
+    -- test -- it now refuses from outside a round, because accepting from
+    -- the lobby is what crowned a phantom and saved a career win for a
+    -- match nobody played -- and a fixture that refuses first can only ever
+    -- prove itself.  The contract a driver sees is the same one, answered
+    -- by BR instead of by this function: nil and a reason when the call was
+    -- refused, the new phase when it was taken.  The one shift is a SECOND
+    -- call at "over", which now reports "over" rather than nil -- still
+    -- refused, and no driver in the tree asks twice.
+    BR:onWinner(who ~= "nobody" and (who or BR.myId) or nil)
+    if BR.phase ~= "over" then return nil, "not in a round" end
     return BR.phase
+  end
+
+  -- The way IN to a match, which nothing headless can otherwise reach: the
+  -- real route is a `start` from the host with a live game under it
+  -- (POK-144).  Applies the message exactly as the wire handler does and
+  -- reports the phase it left BR in, plus whatever the call threw.
+  --
+  -- A `start` carrying no drop for us is the shape a test can use: onStart
+  -- tears the last match down, finds no spawn of ours, says so and returns
+  -- -- which is past every line that teardown is about and short of the
+  -- first line that needs a game.
+  mod.exports.debugStart = function(msg)
+    local ok, err = pcall(BR.onStart, BR, msg or { seed = 1, spawns = {} })
+    return BR.phase, (not ok) and tostring(err) or nil
   end
   -- Whether this room is fightable, and what would have to change if not
   -- (POK-142).  Part of the same surface as the verbs above: a companion
@@ -5459,11 +6491,16 @@ return function(mod)
   end
   -- what the spill table has placed, and what it could not (for drivers)
   mod.exports.spillState = function()
-    local spawned, failed = {}, {}
+    local spawned, failed, balls = {}, {}, {}
     for key, npcId in pairs(BR.spills.spawned or {}) do spawned[key] = npcId end
     for key, why in pairs(BR.spills.failed or {}) do failed[key] = why end
-    return { spawned = spawned, failed = failed, here = mod.world:current(),
-             lastSync = BR.spills.lastSync }
+    -- where each ball actually sits, so a driver can assert a spill landed
+    -- where the fight happened and not where the bot drifted to (POK-154)
+    for key, ball in pairs(BR.spills.balls or {}) do
+      balls[key] = { map = ball.map, x = ball.x, y = ball.y }
+    end
+    return { spawned = spawned, failed = failed, balls = balls,
+             here = mod.world:current(), lastSync = BR.spills.lastSync }
   end
   mod.exports.openSpill = function(key) return BR:openSpill(key) end
   -- a test hook, like debugSpill: the host drops a bot at a cell, so a
@@ -5515,6 +6552,69 @@ return function(mod)
     BR.phase = p
     return BR.phase
   end
+
+  -- The other half of the same fixture (POK-145).  canOpenBattle is a
+  -- phase AND a status, and every real route into a status -- the drop, a
+  -- challenge, a whiteout -- needs a live game under it, so the truth table
+  -- could not be driven headlessly at all without this.  Same contract as
+  -- debugPhase: no side effects, no broadcast, only the names BR uses.
+  local STATUSES = { lobby = true, alive = true, battle = true, out = true }
+  mod.exports.debugStatus = function(s)
+    if not STATUSES[s] then return nil, "not a status" end
+    BR.status = s
+    return BR.status
+  end
+
+  -- ...and the PvP half of it.  canOpenBattle's third term guards the frame
+  -- between BR.battle being set and status following it, and nothing
+  -- headless can set it -- Channel.new needs a live relay.  A stub is
+  -- enough: no reader here cares what is in the record, only that there is
+  -- one.  peerGone is stubbed because resetMatch calls it on the way out.
+  mod.exports.debugPvp = function(on)
+    BR.battle = on and { opponentId = "fixture",
+                         channel = { peerGone = function() end } } or nil
+    return BR.battle ~= nil
+  end
+
+  -- ...and this match's zone.  The pool itself is pure -- Safari.pool(seed,
+  -- nil) needs no ROM and br_test already checks the rotation that way --
+  -- but the only route that puts one ON BR is onStart, which needs a spawn
+  -- of ours and a live game to start.  Without this seam the Safari's grass
+  -- can only be tested one hook at a time, and the two hooks in isolation
+  -- are exactly what hid the roll being switched off in the zone: the
+  -- engine chains encounter.roll into encounter.species, so a test has to
+  -- as well.  A fixture, like the four above: no broadcast, no clock, no
+  -- phase change.  nil clears it, the way leaving a match does.
+  mod.exports.debugSafariPool = function(seed)
+    if seed == nil then BR.safariPool = nil return nil end
+    BR.safariPool = Safari.pool(seed, BR.game and BR.game.data)
+    return BR.safariPool
+  end
+
+  -- The last fixture of the same family (POK-155).  The scripted-battle wrap
+  -- is armed by onStart and dropped by resetMatch, and neither runs
+  -- headlessly -- onStart needs a wire message and a live game under it.  So
+  -- the arm/disarm lifecycle, and any yielding command that has to survive
+  -- it, could not be driven at all without this.  It arms or drops the REAL
+  -- link, nothing else, and reports whether one is live.
+  mod.exports.debugScriptWrap = function(on)
+    if on then armScriptWrap() else disarmScriptWrap() end
+    return dropScriptWrap ~= nil
+  end
+
+  -- POK-144: the un-fakeable end-of-match signal.  A driver cannot read
+  -- "did the world go away" from a screenshot -- a title screen looks the
+  -- same however you got there -- so the mod says which match ended and how.
+  mod.exports.lastResult = function()
+    local r = BR.lastResult
+    if not r then return nil end
+    return { won = r.won, winnerId = r.winnerId, name = r.name, at = r.at }
+  end
+  mod.exports.ending = function()
+    local e = BR.pendingEnd
+    return e and { why = e.why, earliest = e.earliest, deadline = e.deadline } or nil
+  end
+  mod.exports.canOpenBattle = function() return BR:canOpenBattle() end
 
   -- POK-72: the tick runs behind ONE pcall, so a throw in any subsystem
   -- is swallowed and only warned once.  A driver needs to see that it
@@ -5572,6 +6672,51 @@ return function(mod)
                           -- a stalled sweep is diagnosable from outside
                           fogTicks = p.fogTicks or 0 }
       end
+    end
+    return out
+  end
+  -- why tickBotFights is or is not resolving, for drivers (POK-158)
+  mod.exports.debugFightProbe = function()
+    local now = clock() or 0
+    local out = { host = (BR.relay and BR.relay:isHost()) and true or false,
+                  phase = BR.phase, now = now, bots = {} }
+    for id, p in pairs(BR.players) do
+      if p.bot then
+        out.bots[#out.bots + 1] = {
+          id = id, status = p.status, map = p.map, x = p.x, y = p.y,
+          sinceFight = now - (p.lastFight or 0),
+        }
+      end
+    end
+    return out
+  end
+
+  -- a test hook, like debugPlaceBot: wound a bot's whole team to `frac`,
+  -- so a driver can stage "hurt enough to want the Centre" (POK-158 M2)
+  mod.exports.debugScarBot = function(id, frac)
+    if not (BR.matchSeed and BR.players[id]) then return false end
+    local rec = BR:botRecord(id)
+    for _, m in ipairs(rec) do
+      m.hpFrac = math.max(0, math.min(1, tonumber(frac) or 0))
+    end
+    if BR.relay then BR.relay:broadcast(Wire.botrec(id, rec)) end
+    return true
+  end
+  -- a bot's persistent team, for drivers (POK-158).  Reads through the
+  -- lazy accessor, so asking is the same as any client's first look.
+  mod.exports.botRecord = function(id)
+    local rec = BR.matchSeed and BR.players[id] and BR:botRecord(id)
+    if not rec then return nil end
+    local out = {}
+    for i, m in ipairs(rec) do
+      out[i] = { species = m.species, hpFrac = m.hpFrac }
+    end
+    if rec.bag then
+      local items = {}
+      for i, it in ipairs(rec.bag.items or {}) do
+        items[i] = { id = it.id, n = it.n }
+      end
+      out.bag = { items = items, money = rec.bag.money or 0 }
     end
     return out
   end

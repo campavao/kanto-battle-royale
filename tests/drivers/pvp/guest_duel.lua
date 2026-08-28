@@ -1,6 +1,7 @@
 -- POK-64 scenario "duel", guest side: join by the published code, walk
 -- into the host's eyeline in Pewter, WIN the lockstep duel, and assert
--- the loser's spill hit the ground and PLAY AGAIN brought the lobby back.
+-- the loser's spill hit the ground and the finished match brought the lobby
+-- back on its own (POK-144).
 local U = require("tests.drivers.util")
 local L = require("mods.battle_royale.tests.drivers.pvp.pvplib")
 
@@ -135,7 +136,7 @@ return function(game)
   if #sp < 1 then return C.fail("the loser spilled nothing") end
 
   if not L.mashUntil(C, function() return E.phase() == "lobby" end, 1200) then
-    return C.fail("PLAY AGAIN never reached the guest")
+    return C.fail("the finished match never returned the guest to the lobby")
   end
   U.log("PVP OK guest: duel won, spill seen, lobby again")
   love.event.quit(0)

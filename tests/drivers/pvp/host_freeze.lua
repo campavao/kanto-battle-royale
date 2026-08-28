@@ -96,10 +96,14 @@ return function(game)
   if not L.mashUntil(C, function() return E.phase() == "over" end, 600) then
     return C.fail("the match never ended after the forfeit")
   end
-  U.wait(300)
-  E.playAgain()
-  if not L.mashUntil(C, function() return E.phase() == "lobby" end, 900) then
-    return C.fail("PLAY AGAIN never returned this side to the lobby")
+  -- No button (POK-144).  There is nothing to press any more: every client
+  -- arms its own ending when the match ends and takes it once the screen is
+  -- quiet, so what this measures is the funnel, and it says so.  It said
+  -- "PLAY AGAIN never returned this side" while calling an export that
+  -- armed the same funnel a second time -- one thing measured, another
+  -- reported.
+  if not L.mashUntil(C, function() return E.phase() == "lobby" end, 1200) then
+    return C.fail("the finished match never returned this side to the lobby")
   end
   U.log("PVP OK host: froze, was clocked out anyway, lobby again")
   love.event.quit(0)
