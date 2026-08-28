@@ -80,6 +80,18 @@ function Spawn.walkable(maps, tilesets, mapId, x, y)
      and not Map.defIsWaterCell(def, tilesetDef, x, y)
 end
 
+-- Can a SURFING actor stand on this cell (POK-158 M4)?  Water tiles are
+-- NOT in the tileset's walkable list -- the engine's surf logic is what
+-- lets a player onto them -- so this is simply the in-bounds water test,
+-- the same `defIsWaterCell` trySurf asks before mounting.
+function Spawn.swimmable(maps, tilesets, mapId, x, y)
+  local def = maps and maps[mapId]
+  local tilesetDef = def and tilesets and tilesets[def.tileset]
+  if not (def and tilesetDef) then return false end
+  if x < 0 or y < 0 or x >= def.width * 2 or y >= def.height * 2 then return false end
+  return Map.defIsWaterCell(def, tilesetDef, x, y)
+end
+
 -- Walkable is not escapable (POK-23).  An island behind Surf water, a
 -- Cut-fenced pocket and a ledge-locked hollow all pass the walkable test,
 -- and all of them strand a Lv5 drop with no way off the map.  One

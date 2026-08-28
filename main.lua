@@ -250,6 +250,21 @@ return function(mod)
     end
   end
 
+  -- The move-scoring layer an ai-tier bot fights with (POK-160): a
+  -- record in the same ai_classes registry the vanilla three passes
+  -- live in, named from the trainer overlay in startBotBattle.  Inert
+  -- for every other battle -- nothing else's aiMods names it.  A
+  -- registry that will not take it degrades to the vanilla passes.
+  do
+    local ok, err = pcall(function()
+      mod.content.ai_classes:register("BR_BOT_MOVES", Bots.MOVE_LAYER)
+    end)
+    if not ok then
+      mod.log:warn("bot move layer not registered (%s); vanilla AI stands in",
+                   tostring(err))
+    end
+  end
+
   mod.options:define({
     { key = "relay", label = "RELAY", type = "text", default = DEFAULT_RELAY },
     -- seconds per ring, not minutes: a short game wants 30, a long one 300
@@ -2090,6 +2105,31 @@ return function(mod)
     return not Spawn.isWarp(maps, mapId, x, y)
   end
 
+  -- How THIS bot crosses a map (POK-158 M4): on foot, and over water
+  -- when the team it built carries a healthy SURF learner -- the same
+  -- capability test a player's party menu runs, read from the record.
+  -- Same signature as canWalk, so it drops into every path, step check
+  -- and wander a bot walks with; the surf answer is asked once per
+  -- closure (a BFS asks thousands of times).  Goals, spawns and roam
+  -- landings all stay on land -- water is TRANSIT: a route across a bay
+  -- to the prey or the errand on the far shore, not a place to live.
+  local function botCross(id)
+    local surf
+    return function(mapId, x, y)
+      if canWalk(mapId, x, y) then return true end
+      if surf == nil then
+        surf = (BR.matchSeed and Bots.canSurf(BR:botRecord(id),
+                                              BR.game and BR.game.data))
+          or false
+      end
+      if not surf then return false end
+      local data = BR.game and BR.game.data
+      return data ~= nil
+        and Spawn.swimmable(data.maps, data.tilesets, mapId, x, y)
+        and not Spawn.isWarp(data.maps, mapId, x, y)
+    end
+  end
+
   -- Fleeing is not free (POK-24, lib/flee.lua).  After a flee neither of
   -- the pair engages the other for a few seconds -- the head start a flee
   -- promises -- and the runner may not initiate on who they fled from for
@@ -2529,8 +2569,9 @@ return function(mod)
     -- ledge is walked AROUND.  Kept on the bot and rebuilt only when it
     -- runs out or a step is refused, because the host pays for this thirty
     -- times a beat.
+    local cross = botCross(id)
     if not (p.path and p.path[1]) then
-      p.path = Bots.path(function(x, y) return canWalk(p.map, x, y) end,
+      p.path = Bots.path(function(x, y) return cross(p.map, x, y) end,
                          { x = p.x, y = p.y }, { x = goal.x, y = goal.y })
       if not p.path then
         -- Unreachable, which is a REAL answer on these maps: walkable is
@@ -2547,7 +2588,7 @@ return function(mod)
         p.pathFails = (p.pathFails or 0) + 1
         if p.pathFails >= 2 then
           p.pathFails = 0
-          return Bots.wander(p, p.rng, canWalk, nil)
+          return Bots.wander(p, p.rng, cross, nil)
         end
         return nil
       end
@@ -2556,7 +2597,7 @@ return function(mod)
 
     local dir = table.remove(p.path, 1)
     local d = dir and Bots.DELTA[dir]
-    if not (d and canWalk(p.map, p.x + d[1], p.y + d[2])) then
+    if not (d and cross(p.map, p.x + d[1], p.y + d[2])) then
       p.path = nil          -- somebody moved into us; repath next beat
       return nil
     end
@@ -2580,24 +2621,27 @@ return function(mod)
       return nil
     end
     if p.rng() < 0.2 then return nil end -- the wobble the wander had
+    -- with SURF on the team, the path may cross the bay (POK-158 M4)
+    local cross = botCross(id)
     local stale = not (p.huntPath and p.huntPath[1])
       or p.huntMap ~= p.map
       or not p.huntFor
       or (math.abs(p.huntFor.x - prey.x) + math.abs(p.huntFor.y - prey.y)) > 2
     if stale then
       p.huntMap, p.huntFor = p.map, { x = prey.x, y = prey.y }
-      p.huntPath = Bots.path(function(x, y) return canWalk(p.map, x, y) end,
+      p.huntPath = Bots.path(function(x, y) return cross(p.map, x, y) end,
                              { x = p.x, y = p.y },
                              { x = prey.x, y = prey.y })
       if not p.huntPath then
-        -- unreachable -- a Surf pocket, a ledge-locked hollow: the greedy
-        -- step is still better than standing down
-        return Bots.wander(p, p.rng, canWalk, prey)
+        -- unreachable -- a Surf pocket the team cannot cross, a ledge-
+        -- locked hollow: the greedy step is still better than standing
+        -- down
+        return Bots.wander(p, p.rng, cross, prey)
       end
     end
     local dir = table.remove(p.huntPath, 1)
     local d = dir and Bots.DELTA[dir]
-    if not (d and canWalk(p.map, p.x + d[1], p.y + d[2])) then
+    if not (d and cross(p.map, p.x + d[1], p.y + d[2])) then
       p.huntPath = nil        -- somebody moved into us; repath next beat
       return nil
     end
@@ -4567,7 +4611,29 @@ return function(mod)
     local party = Bots.spillRows(self:botRecord(id), self:level())
     local bag = self:botBag(id)
     bag.name = p.name
-    local spill = Spills.build(id, p.map, p.x, p.y, party, function(x, y)
+    -- A surfing bot can die ON the water (the fog mid-crossing), and the
+    -- BAG hard-lands on the faller's own cell -- loot only a swimmer
+    -- could ever reach.  It washes ashore instead: the nearest land cell,
+    -- scanned outward, so the spill lands where anybody can walk to it.
+    local sx, sy = p.x, p.y
+    if Spawn.swimmable(data.maps, data.tilesets, p.map, sx, sy) then
+      local found
+      for r = 1, 12 do
+        for dy = -r, r do
+          for dx = -r, r do
+            if math.abs(dx) + math.abs(dy) == r
+               and canWalk(p.map, p.x + dx, p.y + dy) then
+              found = { x = p.x + dx, y = p.y + dy }
+              break
+            end
+          end
+          if found then break end
+        end
+        if found then break end
+      end
+      if found then sx, sy = found.x, found.y end
+    end
+    local spill = Spills.build(id, p.map, sx, sy, party, function(x, y)
       return spillCellFree(data, p.map, x, y)
     end, bag, function(x, y) return Spawn.isWarp(data.maps, p.map, x, y) end)
     if spill and self.relay then
@@ -4697,15 +4763,31 @@ return function(mod)
     local aiClass = Bots.fightAI(self.matchSeed, botId)
     if bp and (bp.name or aiClass) then
       local was = battle.trainer and battle.trainer.name
-      battle.trainer = setmetatable({ name = bp.name, aiClass = aiClass },
-                                    { __index = battle.trainer })
+      -- ...and an ai-tier bot also PICKS its moves (POK-160 item 3): the
+      -- face's own vanilla passes, plus the mod's BR_BOT_MOVES layer on
+      -- top.  A ROOKIE keeps whatever move choice its face class shipped
+      -- with -- no field, so the chassis answers through __index.
+      local aiMods
+      if aiClass then
+        aiMods = {}
+        for _, m in ipairs((battle.trainer and battle.trainer.aiMods) or {}) do
+          aiMods[#aiMods + 1] = m
+        end
+        aiMods[#aiMods + 1] = "BR_BOT_MOVES"
+      end
+      battle.trainer = setmetatable(
+        { name = bp.name, aiClass = aiClass, aiMods = aiMods },
+        { __index = battle.trainer })
       if bp.name and was and was ~= bp.name
          and type(battle.introText) == "string" then
         local pattern = was:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%1")
         battle.introText = battle.introText:gsub(pattern,
                                                  (bp.name:gsub("%%", "%%%%")), 1)
       end
+      -- both were baked from the face's class before the overlay existed
+      -- (newTrainer sets aiUses at construction, enemyAIMods at line ~812)
       battle.aiUses = battle:aiUsesFor()
+      battle.enemyAIMods = battle.trainer.aiMods
     end
     battle.onFinish = function(result) ow:afterBattle(result, battle) end
     ow:pushBattle(battle)
@@ -6994,6 +7076,17 @@ return function(mod)
     for _, m in ipairs(rec) do
       m.hpFrac = math.max(0, math.min(1, tonumber(frac) or 0))
     end
+    if BR.relay then BR.relay:broadcast(Wire.botrec(id, rec)) end
+    return true
+  end
+  -- a test hook: put a species on a bot's record, so a driver can stage
+  -- a capability the seed did not deal (a SURF learner, POK-158 M4)
+  mod.exports.debugBotMon = function(id, species)
+    if not (BR.matchSeed and BR.players[id] and type(species) == "string") then
+      return false
+    end
+    local rec = BR:botRecord(id)
+    rec[#rec + 1] = { species = species, hpFrac = 1 }
     if BR.relay then BR.relay:broadcast(Wire.botrec(id, rec)) end
     return true
   end

@@ -201,6 +201,55 @@ function Bots.fightAI(seed, id)
   return rng(1, 2) == 1 and "OPP_COOLTRAINER_M" or "OPP_COOLTRAINER_F"
 end
 
+-- The move an ai-tier bot actually clicks (POK-160 item 3, all mod-side).
+-- The engine's move choice dispatches battle.enemyAIMods through the
+-- MERGED ai_classes registry -- the vanilla three passes are just its
+-- first registrants -- so a mod layer slots into the same additive
+-- scoring the ROM ran: every usable move starts at 10, layers adjust,
+-- the MINIMUM wins.  This one plays the turn a person would: never an
+-- immune move, the biggest expected hit (power x full dual-type
+-- effectiveness x STAB -- the vanilla layer 3 only ever reads ONE
+-- matchup row) is encouraged past every vanilla nudge, and a resisted
+-- filler is discouraged.  Status moves are left at par: the vanilla
+-- passes already bury a dud, and an ACE that never clicked GROWL was
+-- the point where "skilled" tips into "robotic".
+--
+-- The expected-damage sweep runs once per selection and caches on the
+-- view, which chooseMove builds fresh for each pick.
+local TypeChart = require("src.battle.TypeChart")
+local function expectedHit(def, user, target)
+  if not def or not (def.power and def.power > 0) then return nil end
+  local eff = TypeChart.effectiveness(def.type, target.curTypes or {})
+  local stab = 10
+  for _, t in ipairs(user.curTypes or {}) do
+    if t == def.type then stab = 15 break end
+  end
+  return def.power * eff * stab, eff
+end
+
+Bots.MOVE_LAYER = {
+  kind = "layer",
+  score = function(view, def, score)
+    if not def then return score end
+    if view.brBest == nil then
+      local best = 0
+      for _, mv in ipairs(view.user.curMoves or {}) do
+        local exp = expectedHit(view.data.moves[mv.id], view.user, view.target)
+        if exp and exp > best then best = exp end
+      end
+      view.brBest = best
+    end
+    local exp, eff = expectedHit(def, view.user, view.target)
+    if not exp then return score end          -- status: the vanilla passes rule
+    if eff == 0 then return score + 10 end    -- an immune move is never the pick
+    if view.brBest > 0 and exp >= view.brBest then
+      return score - 3                        -- the biggest hit outbids any nudge
+    end
+    if eff < 10 then return score + 1 end     -- resisted filler waits its turn
+    return score
+  end,
+}
+
 local DIRS = { "up", "down", "left", "right" }
 local DELTA = { up = { 0, -1 }, down = { 0, 1 }, left = { -1, 0 }, right = { 1, 0 } }
 
@@ -913,6 +962,22 @@ end
 function Bots.canLearn(def, moveId)
   for _, m in pairs((def and def.tmhm) or {}) do
     if m == moveId then return true end
+  end
+  return false
+end
+
+-- Can this record cross water (POK-158 M4)?  The same rule the player
+-- lives by -- somebody on the team knows SURF -- read as capability
+-- from the team it built: a HEALTHY mon whose species takes HM03.  The
+-- "taught ahead of time" half of the goal; a fainted swimmer carries
+-- nobody, which is also the player's rule.
+function Bots.canSurf(record, data)
+  for _, m in ipairs(record or {}) do
+    if (m.hpFrac or 0) > 0
+       and Bots.canLearn(data and data.pokemon and data.pokemon[m.species],
+                         "SURF") then
+      return true
+    end
   end
   return false
 end

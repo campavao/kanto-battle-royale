@@ -233,7 +233,19 @@ return function(game)
     return C.fail(("aiUses %s but the %s brain deals %s -- baked off the face?")
       :format(tostring(battle.aiUses), brain, tostring(uses)))
   end
-  U.log(("PICKING OK: stood down hurt, hunted healed, fights as %s (aiUses %d)")
+  -- ...and the move layer is wired: last aiMods entry is the mod's own
+  -- scoring pass, and the merged registry resolves it to a score fn
+  local mods = battle.enemyAIMods or {}
+  if mods[#mods] ~= "BR_BOT_MOVES" then
+    return C.fail(("aiMods end with %s, not BR_BOT_MOVES -- baked off the face?")
+      :format(tostring(mods[#mods])))
+  end
+  local rec = battle.data and battle.data.ai_classes
+    and battle.data.ai_classes.BR_BOT_MOVES
+  if not (rec and type(rec.score) == "function") then
+    return C.fail("BR_BOT_MOVES is named but the registry cannot resolve it")
+  end
+  U.log(("PICKING OK: stood down hurt, hunted healed, fights as %s (aiUses %d) and picks its moves")
     :format(brain, uses))
   love.event.quit(0)
   U.wait(30)

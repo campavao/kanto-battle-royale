@@ -2010,6 +2010,77 @@ do
   else
     print("skip: Pewter corner pin (no generated Kanto data)")
   end
+
+  -- POK-158 M4: water is swimmable, not walkable, and a SURF team's path
+  -- crosses it.  Pallet's south strip is the pin: its pond leads out to
+  -- ROUTE_21 and has no land route across.
+  if okData and okTs and maps and tilesets and maps.PALLET_TOWN then
+    local Bots = require("mods.battle_royale.lib.bots")
+    local Map = require("src.world.Map")
+    local def = maps.PALLET_TOWN
+    local ts = tilesets[def.tileset]
+    local water
+    for y = 0, def.height * 2 - 1 do
+      for x = 0, def.width * 2 - 1 do
+        if Map.defIsWaterCell(def, ts, x, y) then
+          water = { x = x, y = y }
+          break
+        end
+      end
+      if water then break end
+    end
+    ok(water ~= nil, "Pallet has water")
+    ok(Spawn.swimmable(maps, tilesets, "PALLET_TOWN", water.x, water.y),
+       "a water cell is swimmable")
+    ok(not Spawn.walkable(maps, tilesets, "PALLET_TOWN", water.x, water.y),
+       "...and still not walkable")
+    ok(not Spawn.swimmable(maps, tilesets, "PALLET_TOWN", -1, water.y),
+       "out of bounds swims nowhere")
+    -- a shore cell one step up from the water, and a path onto the water
+    -- that exists only for a swimmer
+    local shore
+    for _, c in ipairs(Spawn.cellsOf(def, ts, maps, tilesets)) do
+      if Map.defIsWaterCell(def, ts, c.x, c.y + 1) then shore = c break end
+    end
+    ok(shore ~= nil, "Pallet has a reachable shore")
+    local walkOnly = function(x, y)
+      return Spawn.walkable(maps, tilesets, "PALLET_TOWN", x, y)
+    end
+    local swimToo = function(x, y)
+      return walkOnly(x, y)
+        or Spawn.swimmable(maps, tilesets, "PALLET_TOWN", x, y)
+    end
+    -- as far out to sea below the shore as the pond goes
+    local target = { x = shore.x, y = shore.y + 1 }
+    while Spawn.swimmable(maps, tilesets, "PALLET_TOWN",
+                          target.x, target.y + 1) do
+      target.y = target.y + 1
+    end
+    eq(Bots.path(walkOnly, shore, target), nil,
+       "no SURF, no path onto the water")
+    ok(Bots.path(swimToo, shore, target) ~= nil,
+       "a SURF team's path crosses the water")
+  else
+    print("skip: Pallet water pin (no generated Kanto data)")
+  end
+end
+
+-- POK-158 M4: the capability itself comes off the record, healthy mons
+-- only, by the species' own machine list
+do
+  local Bots = require("mods.battle_royale.lib.bots")
+  local data = { pokemon = {
+    PSYDUCK = { tmhm = { "SURF", "STRENGTH" } },
+    RATTATA = { tmhm = { "DIG" } },
+  } }
+  ok(Bots.canSurf({ { species = "PSYDUCK", hpFrac = 0.4 } }, data),
+     "a healthy SURF learner carries the team across")
+  ok(not Bots.canSurf({ { species = "PSYDUCK", hpFrac = 0 } }, data),
+     "a fainted swimmer carries nobody")
+  ok(not Bots.canSurf({ { species = "RATTATA", hpFrac = 1 } }, data),
+     "no SURF learner, no crossing")
+  ok(not Bots.canSurf({}, data), "an empty record stays ashore")
+  ok(not Bots.canSurf(nil, nil), "no record, no data, no crash")
 end
 
 -- ------- bots that hunt (POK-42, POK-43)
@@ -3628,6 +3699,51 @@ do
   ok(next(aiFaces) ~= nil, "an ai-tier bot can wear a non-cooltrainer face")
   ok(seenBrain.OPP_COOLTRAINER_M and seenBrain.OPP_COOLTRAINER_F,
      "both cooltrainer brains turn up across a roster")
+end
+
+-- POK-160 item 3: the move layer plays the turn a person would.  It
+-- rides the engine's own additive scoring (base 10, minimum wins), so
+-- these pins are exact scores, not tendencies.
+do
+  local Bots = require("mods.battle_royale.lib.bots")
+  local TypeChart = require("src.battle.TypeChart")
+  TypeChart.load({ type_chart = { types = {}, matchups = {
+    { attacker = "ELECTRIC", defender = "WATER",  multiplier = 20 },
+    { attacker = "ELECTRIC", defender = "GROUND", multiplier = 0 },
+    { attacker = "NORMAL",   defender = "ROCK",   multiplier = 5 },
+  } } })
+  local layer = Bots.MOVE_LAYER
+  eq(layer.kind, "layer", "the move layer is an ai_classes layer record")
+  local data = { moves = {
+    THUNDERBOLT = { power = 95, type = "ELECTRIC" },
+    TACKLE      = { power = 35, type = "NORMAL" },
+    GROWL       = { power = 0,  type = "NORMAL" },
+  } }
+  local user = { curTypes = { "ELECTRIC" }, curMoves = {
+    { id = "THUNDERBOLT", pp = 10 }, { id = "TACKLE", pp = 10 },
+    { id = "GROWL", pp = 10 } } }
+  local function fresh(targetTypes)
+    return { data = data, user = user, target = { curTypes = targetTypes } }
+  end
+  -- vs WATER: THUNDERBOLT is STAB and super-effective -- the pick
+  local v = fresh({ "WATER" })
+  eq(layer.score(v, data.moves.THUNDERBOLT, 10), 7,
+     "the biggest expected hit is encouraged past every vanilla nudge")
+  eq(layer.score(v, data.moves.TACKLE, 10), 10, "a lesser neutral hit sits at par")
+  eq(layer.score(v, data.moves.GROWL, 10), 10, "status is left to the vanilla passes")
+  -- vs GROUND: THUNDERBOLT is immune, TACKLE becomes the best hit
+  v = fresh({ "GROUND" })
+  eq(layer.score(v, data.moves.THUNDERBOLT, 10), 20, "an immune move is never the pick")
+  eq(layer.score(v, data.moves.TACKLE, 10), 7, "...and the best remaining hit takes over")
+  -- vs ROCK: TACKLE is resisted AND not the best -- discouraged
+  v = fresh({ "ROCK" })
+  eq(layer.score(v, data.moves.TACKLE, 10), 11, "resisted filler waits its turn")
+  -- a mon whose ONLY hit is resisted still swings it rather than sitting down
+  v = { data = data, user = { curTypes = { "NORMAL" },
+                              curMoves = { { id = "TACKLE", pp = 10 } } },
+        target = { curTypes = { "ROCK" } } }
+  eq(layer.score(v, data.moves.TACKLE, 10), 7,
+     "the best available hit is the pick even when resisted")
 end
 
 -- POK-85: the walk over.  Bots.wander is a roam; this is a stride.
