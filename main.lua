@@ -935,6 +935,10 @@ return function(mod)
     -- ("setPhase would log a teardown as a new match") and so does BR:reset,
     -- so a disarm inside setPhase would never fire on the way out.
     disarmScriptWrap()
+    -- ...and the route trainers get their sight lines back (POK-150):
+    -- emptying the live talk tables re-exposes vanilla engagement, and
+    -- the disarm is idempotent so the save-event net may call it too
+    self:disarmTrainerTalk()
     self.ghosts:despawnAll()
     self.spills:clear()
     if self.battle then
@@ -1335,6 +1339,9 @@ return function(mod)
     -- exit (POK-155).  Before setPhase, so no script can dispatch a row in
     -- the new phase ahead of the guard that reads it.
     armScriptWrap()
+    -- ...and route trainers go opt-in for the same window (POK-150):
+    -- their sight lines stand down, their talk still fights
+    self:armTrainerTalk()
     self:setPhase(safari > 0 and "safari" or "match",
                   safari > 0 and "the SAFARI opens" or "straight to the drop")
     self.status = "alive"
@@ -5707,6 +5714,170 @@ return function(mod)
     })
   end
 
+  -- ------- NPC trainers stop engaging on sight (POK-150)
+  --
+  -- "I had to get thru a gauntlet of trainers which I didn't want to do.
+  -- I think it actually hurts exploration."  For the length of a match a
+  -- route trainer is an OPT-IN resource: walking past one costs nothing,
+  -- talking to one still starts the vanilla fight -- the reward stays,
+  -- the toll goes.
+  --
+  -- The lever is the engine's own: checkTrainerSight skips any trainer
+  -- whose TEXT constant has a talk script (a scripted trainer runs its
+  -- own show), and talkTo hands a Lua talk handler the overworld and the
+  -- npc.  So every GENERIC trainer gets a handler that does exactly what
+  -- talkTo's own trainer branch does -- engage, or the after-text -- and
+  -- only the ambush is gone.  Trainers with a base talk script are left
+  -- alone: those are the set pieces, and gyms stay bosses (their leader
+  -- was always reached by talking).
+  --
+  -- The talk tables are LIVE and registered AT LOAD (the registry is
+  -- frozen after it): one empty table per map that has a trainer object,
+  -- filled at onStart and emptied at resetMatch, with
+  -- MapScripts.invalidate flushing the per-map view cache both ways.
+  -- Outside a session every contribution is an empty table, so vanilla
+  -- sight is untouched in real playthroughs.
+  local trainerTalk = {}   -- mapId -> the live talk table
+
+  -- ------- press A at the world (POK-141)
+  --
+  -- Gen 1 makes every field move a party-menu detour, and the fog charges
+  -- for each one.  Later generations ask at the obstacle instead -- walk
+  -- into the tree, "CUT it down?" -- so a match does too.  The engine's
+  -- side-effect-free checkers (useCutFieldMove / useSurfFieldMove) carry
+  -- the party menu's own gates, badges included, and tryCut / trySurf
+  -- play the vanilla scene; all this adds is the ask, on the map-script
+  -- onInteract seam, which the A-press dispatch consults after NPCs and
+  -- signs and before the bookshelves.  Out of a session it returns false
+  -- and vanilla is untouched -- faithfulness is only bent inside a match.
+  local function fieldMoveInteract(game, ow, fx, fy)
+    if not BR:inSession() or BR.status ~= "alive" then return false end
+    if BR.battle or BR.botFight or BR.pending then return false end
+    local move, go
+    if ow.useCutFieldMove and ow:useCutFieldMove() == "ok" then
+      move = "CUT"
+      go = function() ow:tryCut(fx, fy) end
+    elseif ow.useSurfFieldMove and ow:useSurfFieldMove() == "ok" then
+      move = "SURF"
+      go = function() ow:trySurf(fx, fy) end
+    end
+    if not move then return false end
+    local TextBox = require("src.render.TextBox")
+    local ask = move == "CUT" and "This tree can be\nCUT down.  Cut it?"
+      or "The water is calm.\nSURF across it?"
+    game.stack:push(TextBox.new(game, ask, nil, {
+      choice = function(yes)
+        if yes then go() end
+      end,
+    }))
+    return true
+  end
+
+  do
+    -- Data loads before mods, so the map roster is enumerable here (the
+    -- registry freezes after load); the per-TEXT talk choices wait for
+    -- arm time, when the base scripts are certainly attached.  Every map
+    -- gets the A-press field-move offer; maps with trainer objects also
+    -- get their live talk table.
+    local okD, EngineData = pcall(require, "src.core.Data")
+    for mapId, def in pairs((okD and EngineData and EngineData.maps) or {}) do
+      local contribution = { onInteract = fieldMoveInteract }
+      for _, o in ipairs(def.objects or {}) do
+        if o.trainerClass and o.text then
+          trainerTalk[mapId] = {}
+          contribution.talk = trainerTalk[mapId]
+          break
+        end
+      end
+      mod.content.map_scripts:register(mapId, contribution)
+    end
+  end
+
+  local function trainerTalkHandler(game, ow, npc, onDone)
+    local done = onDone or function() end
+    local d = npc and npc.def
+    if not (d and d.trainerClass) then return done() end
+    npc:facePlayer(ow.player)
+    if not ow:trainerDefeated(npc) then
+      return ow:engageTrainer(npc, done)
+    end
+    local header = game.data:trainerHeader(ow.map.def.label, d.index)
+    local after = header and header.after and game.data.text[header.after]
+    if not after then return done() end
+    local TextBox = require("src.render.TextBox")
+    game.stack:push(TextBox.new(game, after, done))
+  end
+
+  function BR:armTrainerTalk()
+    local data = self.game and self.game.data
+    if not data or not data.maps then return end
+    local okMS, MapScripts = pcall(require, "src.script.MapScripts")
+    if not okMS then return end
+    for mapId, T in pairs(trainerTalk) do
+      local touched = false
+      local def = data.maps[mapId]
+      for _, o in ipairs((def and def.objects) or {}) do
+        if o.trainerClass and o.text and not T[o.text]
+           and not MapScripts.baseTalk(mapId, o.text) then
+          T[o.text] = trainerTalkHandler
+          touched = true
+        end
+      end
+      if touched then MapScripts.invalidate(mapId) end
+    end
+  end
+
+  function BR:disarmTrainerTalk()
+    local okMS, MapScripts = pcall(require, "src.script.MapScripts")
+    for mapId, T in pairs(trainerTalk) do
+      if next(T) then
+        for k in pairs(T) do T[k] = nil end
+        if okMS then MapScripts.invalidate(mapId) end
+      end
+    end
+  end
+
+  -- The TOWN MAP flies during a match (POK-141's third ask).  The bag's
+  -- copy is read-only in vanilla; in a session, with FLY known and the
+  -- sky reachable (the party menu's own two gates), using it opens the
+  -- fly picker instead -- one press from the bag to the departure,
+  -- because the fog is running.  Anything short of both gates falls
+  -- through to the vanilla read-only map, as does every other item.
+  mod.hooks:wrap("item.use", function(next, game, battle, id, target, list,
+                                      moveIndex, picker)
+    if id == "TOWN_MAP" and not battle
+       and BR:inSession() and BR.status == "alive" then
+      local ow = mod.world:overworld()
+      local okM, Map = pcall(require, "src.world.Map")
+      local okF, FieldDefaults = pcall(require, "src.world.FieldDefaults")
+      if ow and okM and okF and ow:partyKnows("FLY")
+         and Map.isOutside(ow.map.def,
+                           FieldDefaults.field(game.data, "outsideTilesets")) then
+        if list and list.close then list:close() end
+        local ok = pcall(function()
+          require("src.ui.Screens").push(game, "TownMap", { fly = true,
+            onFly = function(mapId) ow:flyTo(mapId) end })
+        end)
+        if ok then return end
+      end
+    end
+    return next(game, battle, id, target, list, moveIndex, picker)
+  end)
+
+  -- Hold-to-scroll in the POKeDEX (POK-109).  ListMenu grew keyRepeat
+  -- exactly so a mod could turn it on per list kind; a 151-row list is
+  -- the list that needs it.  Session-gated like everything else: a real
+  -- playthrough's dex paces exactly as the cart did.
+  mod.hooks:wrap("ui.list_menu", function(next, opts, ctx)
+    local out = next(opts, ctx)
+    if BR:inSession() and ctx and ctx.kind == "POK\195\169DEX"
+       and type(out) == "table" then
+      if out.keyRepeat == nil then out.keyRepeat = true end
+      if out.pageJump == nil then out.pageJump = true end
+    end
+    return out
+  end)
+
   mod.hooks:wrap("world.talk", function(next, ow, npc)
     -- The Cable Club receptionist is the other door to the engine's link
     -- play (POK-84).  Same reason as the START row, so the same window:
@@ -5847,7 +6018,11 @@ return function(mod)
 
   mod.hooks:wrap("render.hud", function(next, game, viewport)
     local out = next(game, viewport)
-    if not (BR.ring and BR.phase == "match" and viewport) then return out end
+    if not (BR.phase == "match" and viewport) then return out end
+    -- the fog needs a ring; the last-trainers markers (POK-151) need only
+    -- a thin roster, which in a real match arrives ring in hand anyway
+    local lastFew = BR:aliveCount() <= 4
+    if not (BR.ring or lastFew) then return out end
     local top = game.stack and game.stack:top()
     if not top then return out end
     local okTM, TownMap = pcall(require, "src.ui.TownMap")
@@ -5863,37 +6038,67 @@ return function(mod)
     local sx = (viewport.gameWidth or 160) / 160
     local sy = (viewport.gameHeight or 144) / 144
     local ox, oy = viewport.gameX or 0, viewport.gameY or 0
-    local center, radius = BR.ring.center, BR.ring.radius
+    local center = BR.ring and BR.ring.center
+    local radius = BR.ring and BR.ring.radius
 
     local g = love.graphics
     g.push("all")
-    -- one shaded square per town-map cell the fog has taken.  Walking the
-    -- grid rather than the location table: several maps share a square, and
-    -- shading it once per map would stack the alpha into a solid black blot.
-    local all = Fog.coversAll(radius)
-    g.setColor(0.25, 0.15, 0.35, 0.55)
-    -- the LOCATION grid is 16x16, but the town map SCREEN is 20x18 tiles
-    -- and the art runs to its edges -- shading only the location grid left
-    -- a bright strip down the right and along the bottom, glaring once the
-    -- fog covered everything.  A cell past the grid can never be inside the
-    -- ring, so walking the whole screen is correct in every phase.
-    for gy = 0, 17 do
-      for gx = 0, 19 do
-        local dx, dy = gx - center.x, gy - center.y
-        if all or (dx * dx + dy * dy) > (radius * radius) then
-          g.rectangle("fill", ox + gx * GRID * sx, oy + gy * GRID * sy,
-                      GRID * sx, GRID * sy)
+    if BR.ring then
+      -- one shaded square per town-map cell the fog has taken.  Walking
+      -- the grid rather than the location table: several maps share a
+      -- square, and shading it once per map would stack the alpha into a
+      -- solid black blot.
+      local all = Fog.coversAll(radius)
+      g.setColor(0.25, 0.15, 0.35, 0.55)
+      -- The LOCATION grid is 16x16, but the town map SCREEN is 20x18
+      -- tiles and the art runs to its edges -- shading only the location
+      -- grid left a bright strip down the right and along the bottom,
+      -- glaring once the fog covered everything.  A cell past the grid
+      -- can never be inside the ring, so walking the whole screen is
+      -- correct in every phase.  Fog.shadesTile owns the
+      -- screen-vs-location offset (POK-146): comparing raw screen tiles
+      -- against the ring's centre drew the safe region a town up and to
+      -- the left of the one the fog announced.
+      for gy = 0, 17 do
+        for gx = 0, 19 do
+          if Fog.shadesTile(center, radius, gx, gy) then
+            g.rectangle("fill", ox + gx * GRID * sx, oy + gy * GRID * sy,
+                        GRID * sx, GRID * sy)
+          end
         end
       end
+      -- and a box round the eye of it, so the safe place is named as well
+      -- as merely un-shaded.  Not once the fog has taken the eye too: a
+      -- box round a shaded square would promise a safety that is not there.
+      if not all then
+        g.setColor(1, 1, 1, 0.9)
+        g.setLineWidth(math.max(1, sx))
+        g.rectangle("line", ox + (center.x + Fog.MAP_OX) * GRID * sx,
+                    oy + (center.y + Fog.MAP_OY) * GRID * sy,
+                    GRID * sx, GRID * sy)
+      end
     end
-    -- and a box round the eye of it, so the safe place is named as well as
-    -- merely un-shaded.  Not once the fog has taken the eye too: a box round
-    -- a shaded square would promise a safety that is not there.
-    if not all then
-      g.setColor(1, 1, 1, 0.9)
-      g.setLineWidth(math.max(1, sx))
-      g.rectangle("line", ox + center.x * GRID * sx, oy + center.y * GRID * sy,
-                  GRID * sx, GRID * sy)
+    -- The last trainers standing, on the map (POK-151).  At four or fewer
+    -- alive, every OTHER living trainer -- bot or human, they are all
+    -- trainers to the roster -- gets a mark on their map's square, blinking
+    -- so it reads as live intel rather than art.  Your own square is what
+    -- the map's native cursor already shows.  Several trainers on one
+    -- square draw once: the mark says "somebody is here", and the count box
+    -- says how many are left.  An interior has no square; its trainer
+    -- simply is not on the map, which is Gen 1's own answer for buildings.
+    if lastFew and (math.floor((clock() or 0) * 2) % 2 == 0) then
+      g.setColor(1, 0.2, 0.2, 0.95)
+      local marked = {}
+      for _, p in pairs(BR.players) do
+        local loc = p.status == "alive" and p.map and locations[p.map]
+        if loc and not marked[loc.x .. ":" .. loc.y] then
+          marked[loc.x .. ":" .. loc.y] = true
+          g.rectangle("fill",
+            ox + ((loc.x + Fog.MAP_OX) * GRID + 2) * sx,
+            oy + ((loc.y + Fog.MAP_OY) * GRID + 2) * sy,
+            (GRID - 4) * sx, (GRID - 4) * sy)
+        end
+      end
     end
     g.pop()
     return out
@@ -6031,9 +6236,14 @@ return function(mod)
     local g = gbCanvas(viewport)
     g.setColor(1, 1, 1, 1)
 
-    -- top-right: the count
+    -- Top-right: the count -- dropped a row while the SAFARI clock is up
+    -- (POK-152).  The clock box is 13 tiles wide and the count up to 9 on
+    -- a 20-tile row, so they overlapped on tiles 11-12, and the clock
+    -- painted second: a full lobby read "1 LEFT" with the 3 underneath
+    -- the clock's border.  The other top-left boxes (FOG!, the watched
+    -- name) are 9 tiles at most, so row 0 is safe everywhere else.
     local left = ("%d LEFT"):format(BR:aliveCount())
-    hudBox(left, 20 - (#left + 2), 0)
+    hudBox(left, 20 - (#left + 2), BR.phase == "safari" and 3 or 0)
 
     -- top-left: the fog, or who you are watching
     if BR.status == "out" then
@@ -6211,6 +6421,7 @@ return function(mod)
     if not BR.arming then
       BR.matchWorld = false
       BR:unsuspendMods()
+      BR:disarmTrainerTalk()
     end
   end)
 
@@ -6218,6 +6429,7 @@ return function(mod)
   mod.events:on("save.loaded", function()
     BR.matchWorld = false
     BR:unsuspendMods()
+    BR:disarmTrainerTalk()
   end)
 
   -- Pick up the game handle early, and rescue a career written before

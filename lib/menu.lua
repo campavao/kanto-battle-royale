@@ -189,7 +189,11 @@ function Menu.items(mod, BR, game)
       -- room nobody can arrive, so it would only ever be a second, more
       -- confusing way to say BOTS.
       if not BR.solo then
-        setting(BR.fillTo > 0 and ("FILL TO: " .. BR.fillTo) or "FILL TO: OFF",
+        -- "TRAINERS", spelled out (POK-148): FILL TO counts the whole
+        -- roster, humans included, and the bare number read as a bot cap
+        -- -- a host saw "31" and reported the 30-bot clamp broken
+        setting(BR.fillTo > 0 and ("FILL: " .. BR.fillTo .. " TRAINERS")
+                  or "FILL: OFF",
                 function() BR:setFill(BR:nextFill()) end)
         row("TRAINERS: " .. (#relay.members + BR:botsAtStart()))
       end

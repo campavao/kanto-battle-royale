@@ -240,4 +240,25 @@ function Fog.immune(mon, data)
   return false
 end
 
+-- ------- the town map overlay's geometry (POK-146)
+--
+-- The ring lives on the LOCATION grid (16x16 nybbles), but the town map
+-- ART places that grid 2 tiles in and 1 tile down on its 20x18 screen --
+-- pokered's TownMapCoordsToOAMCoords, mirrored by TownMap's markerXY
+-- (`loc.x * 8 + 16, loc.y * 8 + 8`).  The overlay walks SCREEN tiles, so
+-- it has to undo that offset before comparing against the ring's centre;
+-- subtracting raw screen coordinates shifted the whole safe region two
+-- tiles left and one up -- the fog announced PEWTER CITY and the bright
+-- square sat over INDIGO PLATEAU, which is exactly the town that lives
+-- at Pewter's unshifted coordinates.
+Fog.MAP_OX, Fog.MAP_OY = 2, 1
+
+-- is the fog over this SCREEN tile of the town map?
+function Fog.shadesTile(center, radius, gx, gy)
+  if Fog.coversAll(radius) then return true end
+  local dx = (gx - Fog.MAP_OX) - center.x
+  local dy = (gy - Fog.MAP_OY) - center.y
+  return (dx * dx + dy * dy) > (radius * radius)
+end
+
 return Fog

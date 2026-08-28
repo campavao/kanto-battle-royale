@@ -790,6 +790,32 @@ do
   ok(Fog.isSafe(locations, "NOWHERE", center, 1.5),
      "a map with no square is never punished")
 
+  -- ------- the town map overlay's own geometry (POK-146)
+  --
+  -- The location grid sits 2 tiles in and 1 down on the 20x18 screen
+  -- (pokered TownMapCoordsToOAMCoords; TownMap.markerXY).  Comparing raw
+  -- screen tiles against the ring's centre drew the safe region a town up
+  -- and left: the fog announced PEWTER CITY (2,3) and the bright square
+  -- sat over INDIGO PLATEAU (0,2) -- whose SCREEN cell is exactly (2,3).
+  do
+    -- Pewter as the eye: its own screen cell is clear, Indigo's is not
+    local pewter = { x = 2, y = 3 }
+    ok(not Fog.shadesTile(pewter, 2, 2 + Fog.MAP_OX, 3 + Fog.MAP_OY),
+       "the announced eye's own screen square stays bright")
+    ok(Fog.shadesTile(pewter, 2, 2, 3),
+       "the square the bug used to brighten (Indigo's) is shaded")
+    -- the 2026-08-27 log's known-good ring: eye LAVENDER TOWN (14,5)
+    local lavender = { x = 14, y = 5 }
+    ok(not Fog.shadesTile(lavender, 9, 14 + Fog.MAP_OX, 5 + Fog.MAP_OY),
+       "Lavender's screen square is bright when Lavender is the eye")
+    ok(Fog.shadesTile(lavender, 9, 0, 0),
+       "the far corner is fog")
+    ok(Fog.shadesTile(lavender, Fog.EVERYWHERE, 14 + Fog.MAP_OX, 5 + Fog.MAP_OY),
+       "a closed ring shades even the eye")
+    ok(not Fog.shadesTile(lavender, Fog.NOWHERE, 0, 0),
+       "the opening radius shades nothing on screen")
+  end
+
   -- ------- which map the ring is asked about, indoors (POK-140)
   --
   -- The counter in a POKeMON CENTER shuts when the fog reaches THAT town,
@@ -2637,7 +2663,7 @@ do
     BR.startsIn = function() return 12 end
     items = BRMenu.items({}, BR, {})
     eq(labels(items),
-       "CODE ABCDEF|- RED*|- BLUE|OPEN: NO|BOTS: 3|FOG: 120s|SAFARI: 120s|DEBUG LOG: OFF|SEND STATS: ON|FILL TO: OFF|TRAINERS: 5|START MATCH (12)|LEAVE",
+       "CODE ABCDEF|- RED*|- BLUE|OPEN: NO|BOTS: 3|FOG: 120s|SAFARI: 120s|DEBUG LOG: OFF|SEND STATS: ON|FILL: OFF|TRAINERS: 5|START MATCH (12)|LEAVE",
        "hosting: code, roster, OPEN, BOTS, the clocks, FILL TO, the total, the countdown")
 
     -- a guest waits
