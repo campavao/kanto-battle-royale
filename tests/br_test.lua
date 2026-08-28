@@ -3604,6 +3604,30 @@ do
   eq(thin and thin.walk, only.walk, "a thin build falls back to what it has")
   eq(Bots.look(7, Bots.idFor(3), { sprites = {}, trainers = {} }), nil,
      "and a build with none of them says so")
+
+  -- POK-160: the brain rides the tier, not the face.  An ai-tier bot may
+  -- wear any of the ten faces now, and its fight brain comes from
+  -- Bots.fightAI instead -- a cooltrainer ai_classes record for REGULAR
+  -- and ACE, nothing (GenericAI) for a ROOKIE.
+  local COOL = { OPP_COOLTRAINER_M = true, OPP_COOLTRAINER_F = true }
+  local aiFaces, seenBrain = {}, {}
+  for i = 1, 60 do
+    local id = Bots.idFor(i)
+    local tier = Bots.tier(4242, id)
+    local brain = Bots.fightAI(4242, id)
+    eq(brain, Bots.fightAI(4242, id), "a bot's brain is stable")
+    if tier.ai then
+      ok(brain and COOL[brain], tier.id .. " fights with a cooltrainer brain")
+      seenBrain[brain] = true
+      local e = Bots.look(4242, id)
+      if e and not COOL[e.class] then aiFaces[e.class] = true end
+    else
+      eq(brain, nil, "a ROOKIE fights on GenericAI")
+    end
+  end
+  ok(next(aiFaces) ~= nil, "an ai-tier bot can wear a non-cooltrainer face")
+  ok(seenBrain.OPP_COOLTRAINER_M and seenBrain.OPP_COOLTRAINER_F,
+     "both cooltrainer brains turn up across a roster")
 end
 
 -- POK-85: the walk over.  Bots.wander is a roam; this is a stride.

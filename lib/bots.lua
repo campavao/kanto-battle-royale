@@ -157,9 +157,11 @@ Bots.LOOKS = {
   { walk = "SPRITE_BIKER",         class = "OPP_BIKER" },
   { walk = "SPRITE_BEAUTY",        class = "OPP_BEAUTY" },
   { walk = "SPRITE_SWIMMER",       class = "OPP_SWIMMER" },
-  -- the two with real battle AI (X ATTACK; HYPER POTION and a switch)
-  { walk = "SPRITE_COOLTRAINER_M", class = "OPP_COOLTRAINER_M", ai = true },
-  { walk = "SPRITE_COOLTRAINER_F", class = "OPP_COOLTRAINER_F", ai = true },
+  -- the two whose CLASS carries real battle AI (X ATTACK; HYPER POTION
+  -- and a switch) -- since POK-160 the brain rides the tier, not the
+  -- face, so these are just two more faces (see Bots.fightAI)
+  { walk = "SPRITE_COOLTRAINER_M", class = "OPP_COOLTRAINER_M" },
+  { walk = "SPRITE_COOLTRAINER_F", class = "OPP_COOLTRAINER_F" },
   { walk = "SPRITE_GAMBLER",       class = "OPP_GAMBLER" },
   { walk = "SPRITE_SCIENTIST",     class = "OPP_SCIENTIST" },
   { walk = "SPRITE_ROCKER",        class = "OPP_ROCKER" },
@@ -169,30 +171,34 @@ Bots.LOOKS = {
 -- with species.  nil means this build has none of them, and the caller
 -- keeps whatever default it had.
 function Bots.look(seed, id, data)
-  local tier = Bots.tier(seed, id)
-  local pool, all = {}, {}
+  local pool = {}
   for _, e in ipairs(Bots.LOOKS) do
     local haveWalk = not (data and data.sprites) or data.sprites[e.walk]
     local haveClass = not (data and data.trainers) or data.trainers[e.class]
     if haveWalk and haveClass then
-      all[#all + 1] = e
-      -- The tier picks the CLASS, and the class IS the AI: the pic and the
-      -- AI temperament come together (see BOT_TRAINER_CLASS in main.lua).
-      -- Only COOLTRAINER_M/F have an entry in data/scripts/ai_classes.lua;
-      -- the other eight fall through to GenericAI, which never uses an
-      -- item and never switches.  So a cooltrainer is the dangerous one --
-      -- true in Gen 1, and a signal a player can learn to read on sight.
-      if (e.ai == true) == (tier.ai == true) then pool[#pool + 1] = e end
+      pool[#pool + 1] = e
     end
   end
-  -- a build with none of the tier's classes falls back to any face rather
-  -- than to no face
-  if #pool == 0 then pool = all end
   if #pool == 0 then return nil end
   -- a stream of its own: sharing the name's or the party's would tie a
   -- bot's face to its team, and every FISHER would lead the same mon
   local rng = Bots.rng((tonumber(seed) or 1) + 104729, id)
   return pool[rng(1, #pool)]
+end
+
+-- Which ai_classes record this bot FIGHTS with (POK-160).  The face used
+-- to be the AI: an ai-tier bot had to wear a cooltrainer's sprite because
+-- the trainer class carried both the pic and the brain, so eight of ten
+-- faces meant GenericAI -- no items, no switches -- and the dangerous
+-- bots were two faces deep in monotony.  The engine's own seam splits
+-- them: TrainerAI.classFor reads `trainer.aiClass` before `trainer.id`,
+-- so any face can fight with any brain.  nil for a tier that fights on
+-- GenericAI; its own stream, like the tier's and the look's, so the
+-- brain follows the bot and not its face.
+function Bots.fightAI(seed, id)
+  if not Bots.tier(seed, id).ai then return nil end
+  local rng = Bots.rng((tonumber(seed) or 1) + 131071, id)
+  return rng(1, 2) == 1 and "OPP_COOLTRAINER_M" or "OPP_COOLTRAINER_F"
 end
 
 local DIRS = { "up", "down", "left", "right" }

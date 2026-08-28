@@ -88,10 +88,14 @@ return function(game)
   end
 
   -- Watch it come.  BOT_STEP_SECONDS is well under a second, so even with
-  -- the wobble the whole walk is half a minute; three minutes is a pace
-  -- verdict, not a patience problem.
+  -- the wobble the whole walk is under half a REAL minute; ninety real
+  -- seconds is a pace verdict, not a patience problem.  Budgeted on
+  -- love.timer, not frames: the bot's clocks run on real time, and at an
+  -- uncapped frame rate a frame-counted loop starves the walk of the
+  -- seconds it was designed around (the POK-160 driver lesson).
   local closest, arrived = far.d, false
-  for _ = 1, 360 do
+  local t0 = love.timer.getTime()
+  while love.timer.getTime() - t0 < 90 do
     U.wait(30)
     if E.status() == "battle" or E.walkUp() then arrived = true break end
     local b = botAt()

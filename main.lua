@@ -2041,8 +2041,14 @@ return function(mod)
                    y = player.cellY, facing = player.facing, moving = false,
                    status = "alive", busy = false } }
     for id, p in pairs(self.players) do
+      -- A bot that wants the nurse does not call fights (POK-160): the
+      -- record every client derives (and botrec keeps in step) says when
+      -- a team is wrecked, and a wrecked bot walking up to a healthy
+      -- trainer was the engine of its own elimination.  One-way on
+      -- purpose -- the PLAYER may still jump a wounded bot via tryEngage,
+      -- which is what wounds are for.
       if Bots.isBot(id) and p.status == "alive" and p.map == map.id
-         and not avoid[id] then
+         and not avoid[id] and not Bots.wantsHeal(self:botRecord(id)) then
         -- its GHOST's cell, never its wire cell, for the same reason
         -- tryEngage asks the screen (POK-96): a bot this client has not
         -- drawn cannot call a fight
@@ -2433,14 +2439,29 @@ return function(mod)
   -- What this bot is off to do, or nil to let the roam clock move it on.
   function BR:pickBotGoal(id, p, now)
     local rec = self:botRecord(id)
+    -- a wrecked team walks to the Centre (POK-158 M2), under the same
+    -- rule the player's nurse serves by: not once the fog has the town
+    local door = not self:fogOver(p.map) and self:centerDoorOn(p.map) or nil
+    -- The bag where there is no nurse (POK-160).  quaff only ran as a
+    -- winner's swig after a bot-vs-bot fight, so a bot wounded any other
+    -- way -- a lost trade, the fog -- sat on a bag of potions while it
+    -- hiked toward a Centre it might never reach.  Now a hurt bot on a
+    -- map with no (unfogged) Centre drinks when it stops to think, one
+    -- sip per goal pick, and the errand below is chosen off the healed
+    -- record.  Where the nurse IS an option she wins: she is free and
+    -- heals everything, and the potions keep for the road.
+    if Bots.wantsHeal(rec) and not door then
+      local drank = Bots.quaff(rec, rec.bag)
+      if drank then
+        log:say("POTION: %s used its %s", tostring(p.name), tostring(drank))
+        if self.relay then self.relay:broadcast(Wire.botrec(id, rec)) end
+      end
+    end
     local g = Bots.chooseGoal(p, {
       -- the fog outranks every errand, as it does for a player.  Reuses
       -- the per-map question POK-140 needed for the CENTRE counters.
       inFog = self:fogOver(p.map),
-      -- a wrecked team walks to the Centre (POK-158 M2), under the same
-      -- rule the player's nurse serves by: not once the fog has the town
-      heal = (Bots.wantsHeal(rec) and not self:fogOver(p.map))
-        and self:centerDoorOn(p.map) or nil,
+      heal = Bots.wantsHeal(rec) and door or nil,
       -- loot is only an errand while something there can be taken: any
       -- of it with room in the party, just the bags without
       items = self.spills
@@ -2609,13 +2630,45 @@ return function(mod)
         -- from (seed, id) and constant for the match
         p.tier = p.tier or Bots.tier(self.matchSeed, id)
         local roamEvery = Bots.roamSeconds(alive, p.tier)
-        -- every so often, walk a seam into a connected map
-        if now and (now - (p.lastRoam or 0)) >= roamEvery then
+        -- every so often, walk a seam into a connected map -- but not out
+        -- from under a walk to the nurse (POK-160): the endgame roam pull
+        -- (huntDistOf) could drag a wrecked bot off the one map with a
+        -- Centre on it, arriving at the last trainers half-dead, which is
+        -- the "pre-heal, then hunt" beat backwards.  An unreachable door
+        -- clears the goal (stepBotErrand's path failure), so this cannot
+        -- pin a bot to a map it can never heal on.
+        local nursing = (p.goal and p.goal.kind == "heal")
+          or p.dwellKind == "heal"
+        -- ...nor out from under a STALK (POK-160): the roam clock kept
+        -- running while a bot walked prey down, so every 15-25s the hunt
+        -- was teleported into a connected map and all the closing was
+        -- thrown away -- on a big map the stalk could never finish.
+        -- Roam exists so bots MEET trainers; a bot sharing a map with
+        -- one has already met theirs.
+        -- (the fog still outranks the hunt, as it does every errand:
+        -- deferring roam on a fogged map would let prey bait a bot into
+        -- the fog and camp there while it burned)
+        local preyHere = false
+        if self.phase == "match" and p.map and not self:fogOver(p.map)
+           and not Bots.wantsHeal(self:botRecord(id)) then
+          if meHere and meHere.mapId == p.map then preyHere = true end
+          if not preyHere then
+            for otherId, o in pairs(self.players) do
+              if otherId ~= id and o.status == "alive" and o.map == p.map then
+                preyHere = true
+                break
+              end
+            end
+          end
+        end
+        if now and not nursing and not preyHere
+           and (now - (p.lastRoam or 0)) >= roamEvery then
           roamBot(id, p, now)
         end
         local due = now == nil or (now - (p.lastStep or 0)) >= BOT_STEP_SECONDS
         if due then
           p.lastStep = now or 0
+          p.dueBeats = (p.dueBeats or 0) + 1
           -- one stream per bot, kept on the bot so its walk does not depend
           -- on how many other bots are in the table or what order pairs()
           -- happens to hand them back
@@ -2625,15 +2678,25 @@ return function(mod)
           -- opposite ends of it forever
           -- (not in the Safari: nobody fights there, and a ghost body
           -- closing in on you is a wall in a phase with no way past it)
+          -- ...unless ITS OWN team says no (POK-160).  A bot picks its
+          -- fights now: wrecked -- the same wantsHeal line the Centre
+          -- errand runs on -- means the stalk stands down and the errand
+          -- system takes over, whose heal goal outranks everything else
+          -- on the map.  Healed (nurse or quaff), the hunt resumes on its
+          -- own the next beat.  tickBotFights stays ungated: two bots
+          -- that blunder into each other still fight, or nobody thins
+          -- the roster.
           local prey
-          if meHere and meHere.mapId == p.map then
-            prey = { x = meHere.x, y = meHere.y }
-          end
-          for otherId, o in pairs(self.phase == "match" and self.players or {}) do
-            if otherId ~= id and o.status == "alive" and o.map == p.map then
-              if not prey or (math.abs(o.x - p.x) + math.abs(o.y - p.y))
-                 < (math.abs(prey.x - p.x) + math.abs(prey.y - p.y)) then
-                prey = o
+          if not Bots.wantsHeal(self:botRecord(id)) then
+            if meHere and meHere.mapId == p.map then
+              prey = { x = meHere.x, y = meHere.y }
+            end
+            for otherId, o in pairs(self.phase == "match" and self.players or {}) do
+              if otherId ~= id and o.status == "alive" and o.map == p.map then
+                if not prey or (math.abs(o.x - p.x) + math.abs(o.y - p.y))
+                   < (math.abs(prey.x - p.x) + math.abs(prey.y - p.y)) then
+                  prey = o
+                end
               end
             end
           end
@@ -2661,6 +2724,7 @@ return function(mod)
             local d = Bots.DELTA[dir]
             p.facing = dir
             p.x, p.y = p.x + d[1], p.y + d[2]
+            p.stepsTaken = (p.stepsTaken or 0) + 1
             self.relay:broadcast(Wire.step(dir, p.x, p.y, p.map, id))
             self.ghosts:pushStep(id, dir) -- our own copy walks it too
           end
@@ -4624,15 +4688,24 @@ return function(mod)
     -- swap the baked-in class for the name rather than reformatting the
     -- string, which would drop whatever localisation Strings applied.
     local bp = self.players[botId]
-    if bp and bp.name then
+    -- The brain rides the overlay too (POK-160).  TrainerAI.classFor
+    -- reads trainer.aiClass before trainer.id, so an ai-tier bot fights
+    -- with a cooltrainer's item-and-switch AI whatever face it wears --
+    -- the face stopped being the brain in Bots.look the same ticket.
+    -- aiUses (wAICount) was already baked from the face's class at
+    -- newTrainer time, so it is re-asked once the overlay is on.
+    local aiClass = Bots.fightAI(self.matchSeed, botId)
+    if bp and (bp.name or aiClass) then
       local was = battle.trainer and battle.trainer.name
-      battle.trainer = setmetatable({ name = bp.name },
+      battle.trainer = setmetatable({ name = bp.name, aiClass = aiClass },
                                     { __index = battle.trainer })
-      if was and was ~= bp.name and type(battle.introText) == "string" then
+      if bp.name and was and was ~= bp.name
+         and type(battle.introText) == "string" then
         local pattern = was:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%1")
         battle.introText = battle.introText:gsub(pattern,
                                                  (bp.name:gsub("%%", "%%%%")), 1)
       end
+      battle.aiUses = battle:aiUsesFor()
     end
     battle.onFinish = function(result) ow:afterBattle(result, battle) end
     ow:pushBattle(battle)
@@ -6887,6 +6960,9 @@ return function(mod)
     end
     return out
   end
+  -- the match's seed, so a driver can derive what every client derives
+  -- from it -- a bot's tier, look, or fight brain (POK-160)
+  mod.exports.matchSeed = function() return BR.matchSeed end
   -- why tickBotFights is or is not resolving, for drivers (POK-158)
   mod.exports.debugFightProbe = function()
     local now = clock() or 0
@@ -6897,6 +6973,13 @@ return function(mod)
         out.bots[#out.bots + 1] = {
           id = id, status = p.status, map = p.map, x = p.x, y = p.y,
           sinceFight = now - (p.lastFight or 0),
+          -- what it is doing with its feet, for POK-160's probes
+          goal = p.goal and p.goal.kind or nil,
+          hunting = (p.huntFor and true) or false,
+          pathLeft = p.huntPath and #p.huntPath or nil,
+          beats = p.dueBeats or 0, steps = p.stepsTaken or 0,
+          dwell = (p.dwellUntil and p.dwellUntil > now)
+            and (p.dwellUntil - now) or nil,
         }
       end
     end
