@@ -12,8 +12,11 @@
 //
 // Client -> server
 //   {type:"host_room", name}           -> room_hosted {code, id}, then a roster
-//   {type:"join_room", code, name}     -> room_joined {code, id, host}, or
-//                                         room_error {reason}
+//   {type:"join_room", code, name,     -> room_joined {code, id, host}, or
+//         spectate?}                      room_error {reason}; spectate:true
+//                                        enters a LOCKED room as a watcher
+//                                        who is seated when it unlocks
+//                                        (POK-133)
 //   {type:"stat", id, v, solo, since}   how much play there has been: a random
 //                                      install id, the mod version, solo matches
 //                                      since the last one, and a first-seen date.
@@ -22,6 +25,8 @@
 //                                      connection it already had (POK-124).
 //   {type:"lock_room", locked}         host only: refuse new joiners (a match
 //                                      in progress)
+//   {type:"kick", id}                  host only: remove a member and refuse
+//                                      their IP for the room's life (POK-130)
 //   {type:"leave_room"}
 //   {type:"can_host", ok}             may this client be promoted to host
 //                                     if the current one drops (POK-116)
@@ -29,10 +34,15 @@
 //   {type:"all", m}                    m to every other member
 //   {type:"ping"}                      -> pong
 // Server -> client
-//   {type:"roster", code, host, members:[{id,name}]}   on every change
+//   {type:"roster", code, host, members:[{id,name,spectate?}]}  on every change
 //   {type:"recv", from, m}
 //   {type:"room_closed", reason}       the host left and nobody could take
-//                                      the room over
+//                                      the room over -- or, reason
+//                                      "removed", the host showed YOU out
+//   {type:"match_in_progress", code, members}  quick_join's third answer
+//                                      (POK-133): nothing joinable, but a
+//                                      match is running -- watch it and
+//                                      play the next one
 //
 // Ids are small integers handed out per room, never reused within it; the
 // host is whoever created the room.  Codes use the same 0/O/1/I/L-free
@@ -115,6 +125,12 @@ class Room {
     // an open room is one quick_join is allowed to hand strangers; a room
     // is private until its host says otherwise
     this.open = false;
+    // IPs the host has removed (POK-130).  Per-room and in-memory, like
+    // everything else here: a removal lasts as long as the room does.  IP
+    // is the only identity a connection has -- coarse (a shared NAT goes
+    // together), but the alternative is a removed guest quick-joining
+    // straight back in, which makes the REMOVE row a revolving door.
+    this.banned = new Set();
   }
 
   add(conn) {
@@ -131,7 +147,10 @@ class Room {
 
   roster() {
     const members = [];
-    for (const m of this.members.values()) members.push({ id: m.id, name: m.name });
+    for (const m of this.members.values()) {
+      members.push({ id: m.id, name: m.name,
+                     spectate: m.spectator || undefined });
+    }
     return { type: "roster", code: this.code, host: this.host.id,
              open: this.open, members };
   }
@@ -307,13 +326,21 @@ export function createRelay(options = {}) {
         const code = typeof msg.code === "string" ? msg.code.toUpperCase() : "";
         const room = rooms.get(code);
         if (!room) { conn.send({ type: "room_error", reason: "not_found" }); return; }
-        if (room.locked) { conn.send({ type: "room_error", reason: "locked" }); return; }
+        if (room.banned.has(conn.ip)) { conn.send({ type: "room_error", reason: "removed" }); return; }
+        // A spectator's door opens where a player's is barred (POK-133):
+        // lock_room exists to stop competitors joining a running match,
+        // and somebody who asks to WATCH is not one.  The flag rides the
+        // roster so every client knows who is a guest of the next match
+        // rather than a trainer in this one.
+        const spectate = msg.spectate === true;
+        if (room.locked && !spectate) { conn.send({ type: "room_error", reason: "locked" }); return; }
         if (room.members.size >= limits.members) { conn.send({ type: "room_error", reason: "full" }); return; }
         conn.name = cleanName(msg.name);
+        conn.spectator = spectate || undefined;
         room.add(conn);
         conn.send({ type: "room_joined", code: room.code, id: conn.id, host: room.host.id });
         room.broadcast(room.roster());
-        log(`room ${room.code}: ${conn.name}#${conn.id} joined`);
+        log(`room ${room.code}: ${conn.name}#${conn.id} ${spectate ? "spectates" : "joined"}`);
         return;
       }
 
@@ -325,11 +352,31 @@ export function createRelay(options = {}) {
         if (conn.room) { conn.send({ type: "room_error", reason: "already_in_room" }); return; }
         let best = null;
         for (const room of rooms.values()) {
-          if (!room.open || room.locked) continue;
+          if (!room.open || room.locked || room.banned.has(conn.ip)) continue;
           if (room.members.size >= limits.members) continue;
           if (!best || room.members.size > best.members.size) best = room;
         }
-        if (!best) { conn.send({ type: "no_open_rooms" }); return; }
+        if (!best) {
+          // Nothing joinable -- but is something RUNNING?  (POK-133.)  A
+          // locked open room is a match in progress, and "no open rooms"
+          // used to be the answer even while one was live -- the arrival
+          // hosted their own bot game one wall away from the only other
+          // human online.  Name the fullest one instead; the client may
+          // join it as a spectator and be seated in the next match.
+          let running = null;
+          for (const room of rooms.values()) {
+            if (!room.open || !room.locked || room.banned.has(conn.ip)) continue;
+            if (room.members.size >= limits.members) continue;
+            if (!running || room.members.size > running.members.size) running = room;
+          }
+          if (running) {
+            conn.send({ type: "match_in_progress", code: running.code,
+                        members: running.members.size });
+            return;
+          }
+          conn.send({ type: "no_open_rooms" });
+          return;
+        }
         conn.name = cleanName(msg.name);
         best.add(conn);
         conn.send({ type: "room_joined", code: best.code, id: conn.id, host: best.host.id });
@@ -351,6 +398,16 @@ export function createRelay(options = {}) {
         const room = conn.room;
         if (!room || room.host !== conn) return;
         room.locked = msg.locked !== false;
+        // The door reopening seats the watchers (POK-133): a spectator is
+        // a player of the NEXT match, and the unlock at match end is where
+        // the next match's lobby begins.
+        if (!room.locked) {
+          let seated = false;
+          for (const m of room.members.values()) {
+            if (m.spectator) { m.spectator = undefined; seated = true; }
+          }
+          if (seated) room.broadcast(room.roster());
+        }
         return;
       }
 
@@ -360,6 +417,27 @@ export function createRelay(options = {}) {
       case "can_host":
         conn.canHost = msg.ok !== false;
         return;
+
+      // The host shows somebody the door (POK-130).  The room had eleven
+      // message types and not one of them could do this, so an open room
+      // was a one-way valve: set_open false stops NEW joins, and lock_room
+      // starts the match -- neither is a way out once somebody is in.
+      // The removed client is told the room closed, which its POK-115 exit
+      // already handles cleanly; its connection stays up (it may want to
+      // host or quick-play elsewhere), but this room will not take its IP
+      // back for the life of the room.
+      case "kick": {
+        const room = conn.room;
+        if (!room || room.host !== conn) return;
+        const target = room.members.get(Number(msg.id));
+        if (!target || target === conn) return;
+        room.banned.add(target.ip);
+        room.remove(target);
+        target.send({ type: "room_closed", reason: "removed" });
+        room.broadcast(room.roster());
+        log(`room ${room.code}: ${target.name}#${target.id} removed by host`);
+        return;
+      }
 
       case "leave_room":
         leaveRoom(conn, "left");

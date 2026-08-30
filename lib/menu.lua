@@ -35,6 +35,10 @@ function Menu.view(BR)
   -- in a lobby and leaves the room, so by the time it is read there is no
   -- relay left to be open -- but a match already running outranks it.
   if BR.refused then return "refused" end
+  -- quick_join found a match already running (POK-133): the offer face.
+  -- Cleared the moment it is taken or the connection goes, so this never
+  -- shadows a lobby.
+  if BR.runningMatch then return "running" end
   if relay and relay:isOpen() then return "lobby" end
   if relay and relay.status == "connecting" then return "connecting" end
   return "menu"
@@ -127,9 +131,34 @@ function Menu.items(mod, BR, game)
       -- a flagged host read "- HOSTA !", the mark floating a space away
       -- from the name it belongs to.  Caught in a screenshot from the
       -- two-client `door` run, which is the only place it could be.
+      -- a stale arm dies with the member it pointed at
+      if BR.armKick then
+        local still = false
+        for _, m in ipairs(relay.members) do
+          if m.id == BR.armKick then still = true break end
+        end
+        if not still then BR.armKick = nil end
+      end
       for _, m in ipairs(relay.members) do
-        row("- " .. m.name .. (BR:buildTrouble(m.id) and "!" or "")
-            .. ((m.id == relay.hostId) and "*" or ""))
+        local label = "- " .. m.name .. (BR:buildTrouble(m.id) and "!" or "")
+            .. ((m.id == relay.hostId) and "*" or "")
+            -- a watcher of this match, a player of the next (POK-133)
+            .. (m.spectate and " NEXT" or "")
+        -- keyed on hostId, not our own id: only the host sees these
+        -- settings, and the one row that must never arm is their own
+        if host and m.id ~= relay.hostId then
+          -- The way out of an open room (POK-130): A on a guest arms the
+          -- question, A again removes them -- two presses, so a slip of
+          -- the thumb never ejects a friend.  Their IP stays out for the
+          -- life of the room, so this is not a revolving door.
+          if BR.armKick == m.id then
+            setting("REMOVE " .. m.name .. "?", function() BR:kick(m.id) end)
+          else
+            setting(label, function() BR.armKick = m.id end)
+          end
+        else
+          row(label)
+        end
       end
       -- ...and, under the live roster, whoever the door turned away.  On
       -- the host this is the only trace of them: a refused guest is out of
@@ -208,9 +237,33 @@ function Menu.items(mod, BR, game)
         label = countdown and (start .. " (" .. countdown .. ")") or start,
         onSelect = function() BR:startMatch() end,
       }
+    elseif BR.isSpectating and BR:isSpectating() then
+      -- the POK-133 seat: the match is running without us, and the relay
+      -- makes us a player the moment it ends and the room unlocks
+      row("MATCH RUNNING")
+      row("YOU PLAY NEXT")
     else
       row("WAIT FOR HOST")
     end
+    items[#items + 1] = { label = "LEAVE", onSelect = function() BR:teardown() end }
+
+  elseif view == "running" then
+    -- Quick Play found humans -- mid-match (POK-133).  The choice is the
+    -- player's: wait for that room's next match (3-6 minutes on measured
+    -- match lengths), or a bot game right now.  Never a toll gate.
+    row("MATCH IN PROGRESS")
+    local n = BR.runningMatch and BR.runningMatch.members
+    if n then row(n .. (n == 1 and " TRAINER IN IT" or " TRAINERS IN IT")) end
+    setting("JOIN NEXT MATCH", function()
+      if not BR:watchNext() then
+        say(mod, "Couldn't reach\nthat game.")
+      end
+    end)
+    setting("SOLO VS BOTS", function()
+      BR.runningMatch = nil
+      local ok, err = BR:hostSolo()
+      if not ok then say(mod, err or "Couldn't start\na solo game.") end
+    end)
     items[#items + 1] = { label = "LEAVE", onSelect = function() BR:teardown() end }
 
   elseif view == "refused" then

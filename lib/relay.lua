@@ -28,6 +28,7 @@ local SILENT_FOR = 25.0
 local CONTROL = {
   room_hosted = true, room_joined = true, room_error = true, roster = true,
   recv = true, room_closed = true, pong = true, no_open_rooms = true,
+  match_in_progress = true,
 }
 
 local ERRORS = {
@@ -35,6 +36,8 @@ local ERRORS = {
   full = "That game is\nfull.",
   locked = "That game has\nalready started.",
   already_in_room = "Already in a\ngame.",
+  -- the host showed you out (POK-130); the room will not take you back
+  removed = "The host removed\nyou from that\ngame.",
   -- the relay is at its room ceiling: not the player's fault, and
   -- SOLO VS BOTS still works, so say something that points at the way out
   server_full = "That server is\nbusy. Try SOLO\nor try again\nlater.",
@@ -136,6 +139,20 @@ end
 
 function Relay:join(code, name)
   return self:_open({ type = "join_room", code = code, name = name })
+end
+
+-- Enter a LOCKED room as a watcher who plays the next match (POK-133).
+-- Sent raw, not through _open: the one caller already holds the live
+-- connection quick_join answered on.
+function Relay:spectate(code, name)
+  return self:_raw({ type = "join_room", code = code, name = name,
+                     spectate = true })
+end
+
+-- Show a member the door (POK-130).  Host only, and the relay enforces
+-- that too; their IP stays out for the life of the room.
+function Relay:kick(id)
+  return self:_raw({ type = "kick", id = id })
 end
 
 function Relay:isOpen() return self.status == "lobby" end
@@ -262,7 +279,10 @@ local function cleanMembers(list)
   for _, m in ipairs(type(list) == "table" and list or {}) do
     if type(m) == "table" and type(m.id) == "number" then
       out[#out + 1] = { id = math.floor(m.id),
-                        name = type(m.name) == "string" and m.name or "PLAYER" }
+                        name = type(m.name) == "string" and m.name or "PLAYER",
+                        -- a watcher of this match, a player of the next
+                        -- one (POK-133); cleared by the relay at unlock
+                        spectate = m.spectate == true or nil }
     end
   end
   return out
@@ -283,6 +303,11 @@ function Relay:_receive(msg)
   elseif t == "no_open_rooms" then
     -- not an error: nobody is hosting yet, so the caller gets to be first
     self:_fire("noopen", self)
+  elseif t == "match_in_progress" then
+    -- quick_join's third answer (POK-133): nothing joinable, but a match
+    -- is live -- the caller may enter it as a spectator and play the next
+    self:_fire("running", self, msg.code,
+                type(msg.members) == "number" and msg.members or nil)
   elseif t == "roster" then
     if type(msg.host) == "number" then self.hostId = msg.host end
     if type(msg.open) == "boolean" then self.open = msg.open end

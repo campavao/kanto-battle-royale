@@ -43,6 +43,10 @@ SCENARIOS = {
     # parked on the MATCH RECORD card.  The guest has to boot into
     # match 2 instead of becoming a phantom survivor.
     "again": ("host_again.lua", "guest_again.lua"),
+    # The cold-start batch (POK-129/130/133): a hosted room is open from
+    # birth, a quick-play during a running match is offered the watcher's
+    # seat and plays the next one, and a removed guest stays removed.
+    "coldstart": ("host_coldstart.lua", "guest_coldstart.lua"),
 }
 
 

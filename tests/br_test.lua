@@ -2742,6 +2742,50 @@ do
     items = BRMenu.items({}, BR, {})
     eq(labels(items), "CODE ABCDEF|- RED*|- BLUE|WAIT FOR HOST|LEAVE", "a guest waits for the host")
 
+    -- POK-130: the host's roster rows arm, then remove
+    BR.relay = room(true)
+    BR.kicked = nil
+    BR.kick = function(self, id) self.kicked = id self.armKick = nil return true end
+    items = BRMenu.items({}, BR, {})
+    find(items, "- BLUE").onSelect()
+    eq(BR.armKick, 2, "A on a guest arms the question")
+    items = BRMenu.items({}, BR, {})
+    ok(find(items, "REMOVE BLUE?") ~= nil, "which the next frame asks")
+    find(items, "REMOVE BLUE?").onSelect()
+    eq(BR.kicked, 2, "and A again removes them")
+    ok(find(BRMenu.items({}, BR, {}), "REMOVE") == nil, "the question is gone")
+    find(BRMenu.items({}, BR, {}), "- RED*").onSelect()
+    ok(BR.armKick ~= 1, "the host's own row never arms")
+    BR.armKick = 2
+    BR.relay = room(true, { members = { { id = 1, name = "RED" } } })
+    BRMenu.items({}, BR, {})
+    eq(BR.armKick, nil, "an arm on somebody who left is dropped")
+
+    -- POK-133: the offer face, and the seated watcher
+    BR.relay = room(true, { status = "connecting",
+                            isOpen = function() return false end })
+    BR.runningMatch = { code = "ABCDEF", members = 3 }
+    items, view = BRMenu.items({}, BR, {})
+    eq(view, "running", "a running match is its own face")
+    eq(labels(items),
+       "MATCH IN PROGRESS|3 TRAINERS IN IT|JOIN NEXT MATCH|SOLO VS BOTS|LEAVE",
+       "the offer: watch-and-play-next, or bots right now")
+    for _, it in ipairs(items) do
+      ok(#it.label <= 17, ("offer row fits (%d): %s"):format(#it.label, it.label))
+    end
+    BR.runningMatch = nil
+
+    -- ...and the watcher's lobby says what they are waiting for
+    BR.relay = room(false, { members = { { id = 1, name = "RED" },
+                                         { id = 2, name = "LATE", spectate = true } } })
+    BR.isSpectating = function() return true end
+    items = BRMenu.items({}, BR, {})
+    eq(labels(items),
+       "CODE ABCDEF|- RED*|- LATE NEXT|MATCH RUNNING|YOU PLAY NEXT|LEAVE",
+       "a spectator knows the deal, and the roster marks them")
+    BR.isSpectating = nil
+    BR.relay = room(false)
+
     -- the match report, with the Safari clock while it runs
     BR.phase = "safari"
     BR.status = "alive"

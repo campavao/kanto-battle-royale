@@ -84,10 +84,19 @@ local SOLO_BOTS = 8
 -- QUICK PLAY aims at this many trainers and lets bots make up the shortfall
 local QUICK_FILL = 8
 -- ...and starts on its own after this long, so a newcomer who quick-plays
--- into an empty relay is playing rather than staring at a roster of one
-local QUICK_START_SECONDS = 30
--- somebody arriving late deserves a moment to see the lobby before the drop
-local QUICK_START_GRACE = 10
+-- into an empty relay is playing rather than staring at a roster of one.
+-- Sixty seconds, not thirty (POK-131): thirty meant the room was locked
+-- before anybody arriving even a minute behind could see it.  Not longer,
+-- either -- four days of relay logs hold exactly one three-minute near-
+-- miss, so a two-minute wait would tax every solo arrival (which is
+-- nearly all of them) for an overlap the timer almost never buys.  The
+-- levers that actually reach are POK-133's spectate-and-seat and a
+-- stated play time (POK-161).
+local QUICK_START_SECONDS = 60
+-- somebody arriving late deserves a moment to see the lobby before the
+-- drop -- and now a real one (POK-131): ten seconds bumped a joiner
+-- straight into a match they never saw the lobby of
+local QUICK_START_GRACE = 30
 
 -- The trainer class a bot fights as when it has no look of its own -- a
 -- build missing every sheet in Bots.LOOKS.  The class supplies the pic
@@ -701,7 +710,15 @@ return function(mod)
     self:reset()
     local relay = Relay.new({ address = self:relayAddress(), log = mod.log })
     wireRelay(relay)
-    local ok, err = relay:host(myName())
+    -- Open from birth (POK-129).  A hosted room used to be private by
+    -- default, which made HOST a trap: quick_join skips private rooms, so
+    -- the host waited in a lobby nobody could discover and left -- three
+    -- players bounced inside 17 seconds on 2026-08-26, another inside 8
+    -- on 2026-08-28, and none of them ever played.  The lobby's OPEN row
+    -- is the opt-out for a private game with friends, and POK-130's
+    -- REMOVE row is the way out if the open door lets somebody in you
+    -- did not want.
+    local ok, err = relay:host(myName(), { open = true })
     if not ok then return false, err end
     self.relay = relay
     return true
@@ -752,12 +769,45 @@ return function(mod)
     relay:on("noopen", function()
       relay:host(myName(), { open = true })
     end)
+    -- quick_join's third answer (POK-133): nothing joinable, but a match
+    -- is RUNNING.  Held as an offer rather than acted on -- the player
+    -- chooses between waiting for that room's next match and a bot game
+    -- right now, because spectating must never become a toll gate on the
+    -- way to playing.
+    relay:on("running", function(_, code, members)
+      BR.runningMatch = { code = code, members = members }
+    end)
     local ok, err = relay:quickJoin(myName())
     if not ok then return false, err end
     self.relay = relay
     self.fillTo = QUICK_FILL
     self.quick = true
     return true
+  end
+
+  -- Take the POK-133 offer: enter the running room as a watcher, to be
+  -- seated by the relay when its match ends and the door reopens.
+  function BR:watchNext()
+    local rm = self.runningMatch
+    if not (rm and self.relay) then return false end
+    self.runningMatch = nil
+    return self.relay:spectate(rm.code, myName())
+  end
+
+  -- Are WE the watcher?  The roster is the truth: the relay marks a
+  -- spectator on arrival and clears the mark at the unlock that seats
+  -- them, so this flips to false exactly when the next lobby begins.
+  function BR:isSpectating()
+    local relay = self.relay
+    local m = relay and relay.id and relay:member(relay.id)
+    return (m and m.spectate) == true
+  end
+
+  -- Show a member the door (POK-130); the REMOVE row's second press.
+  function BR:kick(id)
+    if not (self.relay and self.relay:isHost()) then return false end
+    self.armKick = nil
+    return self.relay:kick(id)
   end
 
   function BR:setOpen(open)
@@ -1028,6 +1078,15 @@ return function(mod)
 
   function BR:reset()
     self:resetMatch()
+    -- A connection a previous face left open -- the POK-133 offer, a
+    -- fallen-through join -- is closed here without the closed-handler
+    -- theatrics: reset IS the exit, and firing "closed" into endMatch
+    -- mid-reset would tear down the very thing being built.  Idempotent
+    -- for every caller that already left properly.
+    if self.relay then
+      self.relay.handlers = {}
+      pcall(self.relay.leave, self.relay)
+    end
     self.relay = nil
     self.solo = false
     self.quick = false
@@ -1036,6 +1095,8 @@ return function(mod)
     self.phase = "off"
     self.myId = nil
     self.wasHost = false
+    self.runningMatch = nil   -- the POK-133 offer dies with the connection
+    self.armKick = nil
   end
 
   function BR:teardown(message)
@@ -7109,6 +7170,21 @@ return function(mod)
     return out
   end
   mod.exports.code = function() return BR.relay and BR.relay.code end
+  -- the cold-start batch's handles (POK-129/130/133), for drivers
+  mod.exports.kick = function(id) return BR:kick(id) end
+  mod.exports.watchNext = function() return BR:watchNext() end
+  mod.exports.isSpectating = function() return BR:isSpectating() end
+  mod.exports.runningMatch = function()
+    local rm = BR.runningMatch
+    return rm and { code = rm.code, members = rm.members } or nil
+  end
+  mod.exports.members = function()
+    local out = {}
+    for _, m in ipairs((BR.relay and BR.relay.members) or {}) do
+      out[#out + 1] = { id = m.id, name = m.name, spectate = m.spectate }
+    end
+    return out
+  end
   mod.exports.lastError = function() return BR.relay and BR.relay.error end
   mod.exports.memberCount = function()
     return BR.relay and #BR.relay.members or 0

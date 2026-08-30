@@ -360,12 +360,30 @@ test("quick_join skips private, locked and full rooms", async () => {
     await shut.until("room_hosted");
     shut.send({ type: "lock_room", locked: true });
 
+    // ...but an open room that is LOCKED is a match in progress, and since
+    // POK-133 that is its own answer: the seeker is not seated, but they
+    // are told where to watch.
     const seeker = await connect(port);
     seeker.send({ type: "quick_join", name: "SEEK" });
-    assert.equal((await seeker.next()).type, "no_open_rooms");
+    const answer = await seeker.next();
+    assert.equal(answer.type, "match_in_progress");
+    assert.equal(typeof answer.code, "string");
 
     priv.end(); shut.end(); seeker.end();
   }, { members: 2 });
+});
+
+test("quick_join with nothing open and nothing running says no_open_rooms", async () => {
+  await withRelay(async (port) => {
+    const priv = await connect(port);
+    priv.send({ type: "host_room", name: "PRIV" });   // private, unlocked
+    await priv.until("room_hosted");
+    const seeker = await connect(port);
+    seeker.send({ type: "quick_join", name: "SEEK" });
+    // a private lobby is not a match in progress: it is invisible, full stop
+    assert.equal((await seeker.next()).type, "no_open_rooms");
+    priv.end(); seeker.end();
+  });
 });
 
 test("quick_join gathers strangers into the fullest room, not the first", async () => {
@@ -528,5 +546,96 @@ test("a stat needs no room, which is the whole point", async () => {
     assert.equal((await a.next()).type, "pong");
     assert.equal(stats().statSolo, before.statSolo + 12, "counted without a room");
     a.end();
+  });
+});
+
+// ------- POK-130: the host can show somebody the door
+
+// the roster arrives once per change, so a test that hosted then joined has
+// two of them queued; wait for the one that matches
+async function rosterWhere(client, pred) {
+  for (;;) {
+    const roster = await client.until("roster");
+    if (pred(roster)) return roster;
+  }
+}
+
+test("kick removes a member, tells them, and their IP stays out", async () => {
+  await withRelay(async (port) => {
+    const host = await connect(port);
+    host.send({ type: "host_room", name: "HOST", open: true });
+    const code = (await host.until("room_hosted")).code;
+    const guest = await connect(port);
+    guest.send({ type: "join_room", code, name: "GUEST" });
+    const joined = await guest.until("room_joined");
+    await host.until("roster");
+
+    host.send({ type: "kick", id: joined.id });
+    const closed = await guest.until("room_closed");
+    assert.equal(closed.reason, "removed");
+    const roster = await rosterWhere(host, (r) => r.members.length === 1);
+    assert.equal(roster.members[0].name, "HOST", "the roster is the host alone");
+
+    // the same IP cannot come back through either door
+    guest.send({ type: "join_room", code, name: "GUEST" });
+    assert.equal((await guest.until("room_error")).reason, "removed");
+    const again = await connect(port);   // a fresh connection, same IP
+    again.send({ type: "quick_join", name: "GUEST" });
+    assert.equal((await again.next()).type, "no_open_rooms");
+
+    host.end(); guest.end(); again.end();
+  });
+});
+
+test("only the host kicks, and never themselves", async () => {
+  await withRelay(async (port, relay) => {
+    const host = await connect(port);
+    host.send({ type: "host_room", name: "HOST", open: true });
+    const code = (await host.until("room_hosted")).code;
+    const guest = await connect(port);
+    guest.send({ type: "join_room", code, name: "GUEST" });
+    await guest.until("room_joined");
+    await host.until("roster");
+
+    // a guest asking is ignored; so is a host aiming at their own id
+    guest.send({ type: "kick", id: 1 });
+    await guest.settled();
+    host.send({ type: "kick", id: 1 });
+    await host.settled();
+    assert.equal(relay.rooms.get(code).members.size, 2, "nobody went anywhere");
+
+    host.end(); guest.end();
+  });
+});
+
+// ------- POK-133: watch the running match, play the next one
+
+test("a spectator enters a locked room and is seated at the unlock", async () => {
+  await withRelay(async (port) => {
+    const host = await connect(port);
+    host.send({ type: "host_room", name: "HOST", open: true });
+    const code = (await host.until("room_hosted")).code;
+    host.send({ type: "lock_room", locked: true });
+
+    // a player is barred; a watcher is not
+    const player = await connect(port);
+    player.send({ type: "join_room", code, name: "LATE" });
+    assert.equal((await player.until("room_error")).reason, "locked");
+    const watcher = await connect(port);
+    watcher.send({ type: "join_room", code, name: "LATE", spectate: true });
+    await watcher.until("room_joined");
+    let roster = await rosterWhere(host,
+      (r) => r.members.some((m) => m.name === "LATE"));
+    const seat = roster.members.find((m) => m.name === "LATE");
+    assert.equal(seat.spectate, true, "the roster marks the watcher");
+
+    // the match ends, the room unlocks, the watcher becomes a player
+    host.send({ type: "lock_room", locked: false });
+    roster = await rosterWhere(watcher,
+      (r) => r.members.some((m) => m.name === "LATE" && !m.spectate));
+    const seated = roster.members.find((m) => m.name === "LATE");
+    assert.equal(seated.spectate, undefined, "the unlock seats them");
+
+    host.end(); player.end(); watcher.end();
   });
 });
