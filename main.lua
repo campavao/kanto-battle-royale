@@ -93,6 +93,9 @@ local QUICK_FILL = 8
 -- levers that actually reach are POK-133's spectate-and-seat and a
 -- stated play time (POK-161).
 local QUICK_START_SECONDS = 60
+-- the DAILY GAME fills the whole roster (POK-161): thirty trainers,
+-- humans first, bots for the shortfall -- an official match is full
+local DAILY_FILL = 30
 -- somebody arriving late deserves a moment to see the lobby before the
 -- drop -- and now a real one (POK-131): ten seconds bumped a joiner
 -- straight into a match they never saw the lobby of
@@ -687,6 +690,16 @@ return function(mod)
       if BR:inRound() then BR:checkWinner() end
     end)
     relay:on("message", function(fromId, m) BR:onMessage(fromId, m) end)
+    -- The DAILY GAME arms its own start from the server's clock
+    -- (POK-161): every info poll re-derives the deadline, so drift never
+    -- accumulates, and a promoted heir picks the clock up on their next
+    -- poll without being told anything.
+    relay:on("info", function(_, info)
+      if BR.dailyLobby and relay:isHost() and BR.phase == "lobby"
+         and info and info.daily then
+        BR.autoStartAt = love.timer.getTime() + info.daily.secs
+      end
+    end)
     relay:on("closed", function(reason)
       -- A room that closes under us is an exit like any other, and it has
       -- to leave the throwaway world the same way a deliberate LEAVE does.
@@ -783,6 +796,41 @@ return function(mod)
     self.fillTo = QUICK_FILL
     self.quick = true
     return true
+  end
+
+  -- THE DAILY GAME (POK-161): one scheduled match a day.  Everyone who
+  -- presses the row lands in the same relay-side room; whoever arrived
+  -- first hosts it, and the host's start clock is armed from the
+  -- server's own seconds-until (the info handler in wireRelay), so the
+  -- match begins AT the hour whether or not anybody presses anything.
+  -- The roster fills to thirty trainers with bots, and the clocks are
+  -- the stock ones -- an official game is the same game for everyone.
+  -- Pressing the row while the daily match is RUNNING gets the POK-133
+  -- offer instead: watch it, play the next.
+  function BR:dailyPlay()
+    self:reset()
+    local relay = Relay.new({ address = self:relayAddress(), log = mod.log })
+    wireRelay(relay)
+    relay:on("running", function(_, code, members)
+      BR.runningMatch = { code = code, members = members }
+    end)
+    local ok, err = relay:dailyJoin(myName())
+    if not ok then return false, err end
+    self.relay = relay
+    self.dailyLobby = true
+    self.fillTo = DAILY_FILL
+    return true
+  end
+
+  -- Seconds until the daily hour, from the last info answer the server
+  -- gave; nil until it has said.  Everyone in the room computes this the
+  -- same way -- the host's autoStartAt is armed from the same numbers.
+  function BR:dailyStartsIn()
+    local info = self.relay and self.relay.serverInfo
+    local d = info and info.daily
+    if not d then return nil end
+    return math.max(0, math.floor(
+      d.secs - (love.timer.getTime() - (d.at or 0))))
   end
 
   -- Take the POK-133 offer: enter the running room as a watcher, to be
@@ -1097,6 +1145,7 @@ return function(mod)
     self.wasHost = false
     self.runningMatch = nil   -- the POK-133 offer dies with the connection
     self.armKick = nil
+    self.dailyLobby = nil
   end
 
   function BR:teardown(message)
@@ -3194,7 +3243,26 @@ return function(mod)
     if self.phase ~= "drop" then return end
     local game = self.game
     local ow = mod.world:overworld()
-    if not (game and ow and game.stack:top() == ow and not ow.transitioning) then return end
+    if not (game and ow) then return end
+    -- THE BUZZER OUTRANKS YOUR MENU (found by POK-161's smoke mashing A
+    -- into the POKeDEX at time's-up): everything below waits for the
+    -- overworld on top, so a player idling in the dex or the START menu
+    -- at the buzzer never dropped -- their match stalled in the Safari
+    -- until they happened to back out.  The buzzer already runs out of
+    -- patience with BATTLES (POK-92); after the same kind of grace it
+    -- closes menus too, one screen a tick.  Gated on `buzzed` still
+    -- pending, so the times-up text and the town picker -- which come
+    -- AFTER it is consumed -- are never eaten; a dialog gets its five
+    -- seconds for tickAutoResolve to press through first, and a live
+    -- battle or a transition is left alone as ever.
+    if self.buzzed and game.stack:top() ~= ow
+       and not self:liveLocalBattle() and not ow.transitioning
+       and not (ow.runner and ow.runner.isRunning and ow.runner:isRunning())
+       and self.buzzedAt and (clock() or 0) - self.buzzedAt >= 6 then
+      game.stack:pop()
+      return
+    end
+    if not (game.stack:top() == ow and not ow.transitioning) then return end
     if self:liveLocalBattle() then return end
     local save = game.save
     if self.buzzed then
@@ -3327,6 +3395,9 @@ return function(mod)
   -- The FOG option: what a match started from here would run at.  The
   -- lobby row and the option cyclers all mean this one.
   function BR:fogSeconds()
+    -- the DAILY GAME plays the stock clocks (POK-161): an official match
+    -- is the same match for everyone, whatever this host's options say
+    if self.dailyLobby then return Fog.DEFAULT_PHASE_SECONDS end
     return tonumber(mod.options:get("fog")) or Fog.DEFAULT_PHASE_SECONDS
   end
 
@@ -3340,6 +3411,7 @@ return function(mod)
   end
 
   function BR:safariSeconds()
+    if self.dailyLobby then return DEFAULT_SAFARI_SECONDS end
     local n = tonumber(mod.options:get("safari"))
     if n == nil then return DEFAULT_SAFARI_SECONDS end
     return math.max(0, math.floor(n))
@@ -7170,6 +7242,13 @@ return function(mod)
     return out
   end
   mod.exports.code = function() return BR.relay and BR.relay.code end
+  -- what the server said about itself (POK-161), for drivers and the menu
+  mod.exports.serverInfo = function()
+    return BR.relay and BR.relay.serverInfo or nil
+  end
+  mod.exports.dailyPlay = function() return BR:dailyPlay() end
+  mod.exports.dailyStartsIn = function() return BR:dailyStartsIn() end
+  mod.exports.isDailyLobby = function() return BR.dailyLobby == true end
   -- the cold-start batch's handles (POK-129/130/133), for drivers
   mod.exports.kick = function(id) return BR:kick(id) end
   mod.exports.watchNext = function() return BR:watchNext() end

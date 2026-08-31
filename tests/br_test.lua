@@ -2688,14 +2688,8 @@ do
     local BR = fakeBR()
     local items, view = BRMenu.items({ version = "9.9.9" }, BR, {})
     eq(view, "menu", "no room is the first face")
-    eq(labels(items), "QUICK PLAY|SOLO VS BOTS|HOST GAME|JOIN BY CODE|NAME: RED|SKIN: RED|SERVER...|v9.9.9",
-       "the first face, in order")
-    -- the stamp is read off the loader's own mod.version, never written
-    -- here, so it cannot drift from the manifest
-    eq(labels(BRMenu.items({ version = "1.2.3" }, fakeBR(), {})):match("[^|]+$"),
-       "v1.2.3", "the row reports whatever version the loader handed the mod")
-    eq(labels(BRMenu.items({}, fakeBR(), {})):match("[^|]+$"), "v?",
-       "and says so plainly when there is no version to read")
+    eq(labels(items), "QUICK PLAY|DAILY GAME|SOLO VS BOTS|HOST GAME|JOIN BY CODE|NAME: RED|SKIN: RED",
+       "the first face, in order -- no SERVER row, no version row (POK-161)")
     local allOpen = true
     for _, it in ipairs(items) do if not it.keepOpen then allOpen = false end end
     ok(allOpen, "and every row keeps the screen open")
@@ -2784,6 +2778,35 @@ do
        "CODE ABCDEF|- RED*|- LATE NEXT|MATCH RUNNING|YOU PLAY NEXT|LEAVE",
        "a spectator knows the deal, and the roster marks them")
     BR.isSpectating = nil
+
+    -- POK-161 v2: the DAILY GAME lobby is a card, not a control panel
+    BR.relay = room(true, { serverInfo = { daily = { secs = 7500,
+                                                     label = "7PM CENTRAL",
+                                                     at = 0 } } })
+    BR.dailyLobby = true
+    BR.dailyStartsIn = function() return 2 * 3600 + 5 * 60 end
+    items = BRMenu.items({}, BR, {})
+    local card = labels(items)
+    eq(card, "STARTS IN 2H05M|- RED*|- BLUE|LEAVE",
+       "the daily lobby: countdown first, then players, then the way out")
+    ok(find(items, "OPEN:") == nil and find(items, "CODE") == nil
+       and find(items, "FOG:") == nil and find(items, "START MATCH") == nil,
+       "...no code, no rules rows, nothing pressable: the clock starts it")
+    -- information is not a control: plain rows carry the dead mark the
+    -- cursor slides past, and the actionable rows never do
+    ok(find(items, "STARTS IN").dead == true, "the countdown is not a cursor stop")
+    ok(find(items, "LEAVE").dead == nil, "...and LEAVE is")
+    for _, it in ipairs(items) do
+      ok(#it.label <= 17,
+         ("daily row fits the box (%d): %s"):format(#it.label, it.label))
+    end
+    BR.dailyStartsIn = function() return 154 end
+    ok(labels(BRMenu.items({}, BR, {})):find("STARTS IN 2:34", 1, true) ~= nil,
+       "under an hour the countdown ticks in minutes and seconds")
+    BR.dailyStartsIn = nil
+    ok(labels(BRMenu.items({}, BR, {})):find("AWAITING TIME...", 1, true) ~= nil,
+       "no schedule from the server yet reads as waiting, not as broken")
+    BR.dailyLobby = nil
     BR.relay = room(false)
 
     -- the match report, with the Safari clock while it runs
@@ -2858,25 +2881,21 @@ do
     --
     -- The version here is the WIDEST this mod can realistically stamp, not
     -- a round "9.9.9": the folded row is "YOU LOST v" plus the version, so
-    -- the fixture is what decides whether the 17-character assertion below
-    -- means anything at all.  "0.36.10" makes it exactly 17 -- the last one
-    -- that fits.  One more character and fit() sizes the box to 21 tiles on
-    -- a 20-tile canvas and clips the build number off the right, which is
-    -- the whole reason the row exists.
-    local WIDEST = "0.36.10"
+    -- the version row is gone (POK-161), so the result gets a row of its
+    -- own -- the eighth, free exactly when there is a result to say
     BR.lastResult = { won = false, name = "SAM", at = 0 }
-    items, view = BRMenu.items({ version = WIDEST }, BR, {})
+    items, view = BRMenu.items({ version = "0.36.10" }, BR, {})
     eq(view, "menu", "no room left is the first face")
     eq(labels(items),
-       "QUICK PLAY|SOLO VS BOTS|HOST GAME|JOIN BY CODE|NAME: RED|SKIN: RED|SERVER...|YOU LOST v0.36.10",
-       "the result rides ON the version row, and the winner's name is dropped")
+       "MATCH OVER|QUICK PLAY|DAILY GAME|SOLO VS BOTS|HOST GAME|JOIN BY CODE|NAME: RED|SKIN: RED",
+       "the result leads the first face on its own row")
     ok(#items <= BRMenu.maxRows(2),
        ("the first face still fits with a result on it (%d/%d)")
        :format(#items, BRMenu.maxRows(2)))
     BR.lastResult = { won = true, at = 0 }
-    items = BRMenu.items({ version = WIDEST }, BR, {})
-    ok(labels(items):find("YOU WIN! v0.36.10", 1, true),
-       "a win reads as a win on the same row")
+    items = BRMenu.items({ version = "0.36.10" }, BR, {})
+    ok(labels(items):find("YOU WIN!", 1, true),
+       "a win reads as a win")
     eq(#items, BRMenu.maxRows(2), "...still eight rows, not nine")
     for _, it in ipairs(items) do
       ok(#it.label <= 17,
@@ -3743,6 +3762,24 @@ do
   ok(next(aiFaces) ~= nil, "an ai-tier bot can wear a non-cooltrainer face")
   ok(seenBrain.OPP_COOLTRAINER_M and seenBrain.OPP_COOLTRAINER_F,
      "both cooltrainer brains turn up across a roster")
+end
+
+-- POK-161 v2: the info event carries (relay, info) -- the daily smoke
+-- caught it firing with info alone while the one consumer that arms the
+-- start clock read the second argument, so the hour sailed past.
+do
+  local Relay = require("mods.battle_royale.lib.relay")
+  local r = Relay.new({ transport = { closed = false, send = function() end } })
+  local got
+  r:on("info", function(rl, info) got = { rl = rl, info = info } end)
+  r:_receive({ type = "info", motd = { "X" }, rooms = 1, conns = 2,
+               daily = { secs = 120, label = "TEST GAME" } })
+  ok(got ~= nil, "the info event fires")
+  eq(got.rl, r, "with the relay first")
+  eq(got.info and got.info.daily and got.info.daily.secs, 120,
+     "...and the parsed info second, daily seconds included")
+  eq(r.serverInfo.daily.label, "TEST GAME", "the cache holds the daily")
+  ok(r.serverInfo.daily.at ~= nil, "with a receipt clock for the countdown")
 end
 
 -- POK-160 item 3: the move layer plays the turn a person would.  It

@@ -28,8 +28,14 @@ local SILENT_FOR = 25.0
 local CONTROL = {
   room_hosted = true, room_joined = true, room_error = true, roster = true,
   recv = true, room_closed = true, pong = true, no_open_rooms = true,
-  match_in_progress = true,
+  match_in_progress = true, info = true,
 }
+
+-- how often a connected client re-asks for the server's info line
+-- (POK-161): the motd never changes mid-session, but `conns` is the
+-- "somebody else is online" signal and it should not go stale in the
+-- lobby where it matters
+local INFO_EVERY = 15.0
 
 local ERRORS = {
   not_found = "That code wasn't\nfound.",
@@ -139,6 +145,13 @@ end
 
 function Relay:join(code, name)
   return self:_open({ type = "join_room", code = code, name = name })
+end
+
+-- The one shared DAILY GAME room (POK-161): join it, or become its host.
+-- The relay answers room_joined or room_hosted, both already handled; a
+-- daily match already running answers match_in_progress like quick play.
+function Relay:dailyJoin(name)
+  return self:_open({ type = "daily_join", name = name })
 end
 
 -- Enter a LOCKED room as a watcher who plays the next match (POK-133).
@@ -269,6 +282,12 @@ function Relay:update()
     self.pingSentAt = t
     self:_raw({ type = "ping", t = t })
   end
+  -- the info line rides the same cadence machinery (POK-161); an old
+  -- relay ignores the unknown type and serverInfo simply stays nil
+  if self.status == "lobby" and t - (self.lastInfo or 0) >= INFO_EVERY then
+    self.lastInfo = t
+    self:_raw({ type = "info" })
+  end
   if t - self.lastHeard >= SILENT_FOR then
     self:_close("Lost the relay.")
   end
@@ -322,6 +341,33 @@ function Relay:_receive(msg)
                 or "The host\ndisconnected.")
   elseif t == "pong" then
     if self.pingSentAt then self.rtt = now() - self.pingSentAt end
+  elseif t == "info" then
+    -- the server's own line (POK-161): the motd rows come pre-bounded,
+    -- but a client trusts nothing it renders into a 17-cell box
+    local rows = {}
+    for _, l in ipairs(type(msg.motd) == "table" and msg.motd or {}) do
+      if type(l) == "string" and l ~= "" then
+        rows[#rows + 1] = l:sub(1, 17)
+        if #rows >= 3 then break end
+      end
+    end
+    local daily
+    if type(msg.daily) == "table" and tonumber(msg.daily.secs) then
+      -- the receipt clock rides along so a countdown can be computed
+      -- without another round trip (POK-161)
+      daily = { secs = tonumber(msg.daily.secs),
+                label = type(msg.daily.label) == "string"
+                  and msg.daily.label:sub(1, 17) or nil,
+                at = now() }
+    end
+    self.serverInfo = { motdRows = rows,
+                        rooms = tonumber(msg.rooms) or 0,
+                        conns = tonumber(msg.conns) or 0,
+                        daily = daily }
+    -- (relay, info), like "running": the daily smoke caught this firing
+    -- with info alone while its one consumer read the second argument --
+    -- the start clock was never armed and the hour sailed past
+    self:_fire("info", self, self.serverInfo)
   end
 end
 

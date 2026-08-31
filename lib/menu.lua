@@ -51,7 +51,11 @@ function Menu.items(mod, BR, game)
   local items = {}
   local view = Menu.view(BR)
   local function row(label)
-    items[#items + 1] = { label = label, keepOpen = true, onSelect = function() end }
+    -- information, not a control: `dead` keeps the cursor off it (the
+    -- build wrapper slides past), so browsing a face only ever stops on
+    -- rows that do something
+    items[#items + 1] = { label = label, dead = true, keepOpen = true,
+                          onSelect = function() end }
   end
   -- a row that changes a setting stays open; its label is rebuilt next frame
   local function setting(label, onPress)
@@ -115,7 +119,27 @@ function Menu.items(mod, BR, game)
     -- and nobody to keep seats for, so it shows the two things that
     -- actually decide the match and nothing else.
     if not BR.solo then
-      row("CODE " .. tostring(relay.code))
+      -- THE DAILY GAME's lobby is three things, in this order (POK-161,
+      -- the user's spec): how long until it starts, who is here, the way
+      -- out.  No code -- the DAILY GAME row is the one door in -- no
+      -- label, no rules rows, nothing settable, no START: the clock
+      -- starts it, for host and guest alike.
+      if BR.dailyLobby then
+        local left = BR.dailyStartsIn and BR:dailyStartsIn()
+        if left then
+          local h = math.floor(left / 3600)
+          if h > 0 then
+            row(("STARTS IN %dH%02dM"):format(h,
+                math.floor((left % 3600) / 60)))
+          else
+            row(("STARTS IN %d:%02d"):format(math.floor(left / 60), left % 60))
+          end
+        else
+          row("AWAITING TIME...")
+        end
+      else
+        row("CODE " .. tostring(relay.code))
+      end
       -- A "!" against anyone the door flagged (POK-142): their engine
       -- release, or their copy of this mod, is not ours -- so the room
       -- works, the ghosts walk, and the FIGHT is the one thing that will
@@ -184,14 +208,16 @@ function Menu.items(mod, BR, game)
           if mine.engine then row("GAME v" .. tostring(mine.engine)) end
         end
       end
-      if host then
+      if host and not BR.dailyLobby then
         -- an open room is one strangers can QUICK PLAY into without ever
-        -- being told the code
+        -- being told the code (a DAILY room's openness is not a choice)
         setting("OPEN: " .. (BR:isOpen() and "YES" or "NO"),
                 function() BR:setOpen(not BR:isOpen()) end)
       end
     end
-    if host then
+    if BR.dailyLobby then
+      -- (the countdown already leads the face, above the roster)
+    elseif host then
       -- steps the ladder 0,1,2,3,5,8,...,30 and wraps
       setting("BOTS: " .. tostring(BR.botCount),
               function() BR.botCount = BR:nextBotCount() end)
@@ -291,8 +317,21 @@ function Menu.items(mod, BR, game)
     --
     -- first, because it is the one that asks least of a newcomer: no
     -- code from a friend, no server of their own, no decision
+    -- The result of the match that sent a player here (POK-144) -- which
+    -- is where a relay that closed mid-match lands them -- gets its own
+    -- row now: the face is seven rows against maxRows(2) == 8, so the
+    -- eighth is free exactly when there is a result to say.
+    if BR.lastResult then
+      row(BR.lastResult.won and "YOU WIN!" or "MATCH OVER")
+    end
     setting("QUICK PLAY", function()
       local ok, err = BR:quickPlay()
+      if not ok then say(mod, err or "Couldn't reach\nthe relay.") end
+    end)
+    -- the official match (POK-161): one shared room for everybody who
+    -- presses this, starting at the server's stated hour
+    setting("DAILY GAME", function()
+      local ok, err = BR:dailyPlay()
       if not ok then say(mod, err or "Couldn't reach\nthe relay.") end
     end)
     setting("SOLO VS BOTS", function()
@@ -334,49 +373,13 @@ function Menu.items(mod, BR, game)
         onPick = function(id) BR:setSkin(id) end,
       }))
     end)
-    -- the relay address is a mod option; this row surfaces it and lets
-    -- you point at a different server without editing files
-    setting("SERVER...", function()
-      game.stack:push(Entry.new(game, {
-        title = "RELAY HOST:PORT",
-        shape = Entry.ADDRESS,
-        default = BR:relayAddress(),
-        onDone = function(addr)
-          if addr and addr ~= "" then BR:setRelayAddress(addr) end
-        end,
-      }))
-    end)
-    -- Which build this actually is.  Everyone in a match has to be on the
-    -- same one, and "check your version" is a useless thing to say to
-    -- somebody with no way to read it -- the launcher's MODS tab knows,
-    -- but that is outside the game.  Read from mod.version (the loader
-    -- hands each mod its own manifest version) rather than written here,
-    -- so it cannot drift from the manifest the way a hand-kept copy would.
-    --
-    -- The ENGINE release is the other half of the answer (POK-142), and it
-    -- is NOT here: this face has to fit one screen without scrolling
-    -- (POK-104) and it is already full.  It shows up in the lobby, where
-    -- the question is actually asked -- and only when the door has found
-    -- something, which is the only time anyone needs to read it out.
-    --
-    -- "Already full" is the literal truth: eight rows against
-    -- Menu.maxRows(2) == 8.  So the result of the match that sent a player
-    -- here -- which is where a relay that closed mid-match lands them
-    -- (POK-144) -- rides ON this row rather than above it.  A ninth row
-    -- would push the build number off the bottom behind a scroll arrow, on
-    -- the one line a refused player is asked to read out.
-    --
-    -- Shorter wording than the other faces' "YOU WIN!" / "MATCH OVER"
-    -- because the two share seventeen characters here: at eight each they
-    -- still fit beside a two-digit patch version.  The winner's name does
-    -- not fit at all and is dropped -- with no room left there is nobody to
-    -- play again with, so who won is the least of what this face is for.
-    local build = "v" .. tostring(mod.version or "?")
-    if BR.lastResult then
-      row((BR.lastResult.won and "YOU WIN!" or "YOU LOST") .. " " .. build)
-    else
-      row(build)
-    end
+    -- No SERVER... row and no version row any more (POK-161): the first
+    -- face was eight rows against maxRows(2) == 8, DAILY GAME earns a
+    -- seat more than either, and the user's call was that the menu had
+    -- bloated.  The relay address is still a mod option (edit it in the
+    -- launcher's mod options); the version still shows in the launcher's
+    -- MODS tab, and the lobby door still names both builds when a
+    -- mismatch actually matters (POK-142).
   end
 
   return items, view
@@ -456,7 +459,28 @@ function Menu.build(mod, BR)
           self.index = math.max(1, #fresh)
         end
         fit(mod, self)
-        return baseUpdate(self, dt)
+        local before = self.index
+        local r = baseUpdate(self, dt)
+        -- The cursor never rests on a dead row (information is not a
+        -- control): slide it onward in the direction it was travelling --
+        -- downward after a face change or when it did not move -- wrapping
+        -- until a selectable row.  Every face keeps at least one (LEAVE
+        -- at minimum), and the guard stops a hypothetical all-dead face
+        -- from spinning forever.
+        local n = #self.items
+        if n > 0 and self.items[self.index] and self.items[self.index].dead then
+          local down = self.index == before
+            or self.index == before + 1
+            or (before == n and self.index == 1)
+          local step = down and 1 or -1
+          for _ = 1, n do
+            self.index = ((self.index - 1 + step) % n) + 1
+            local it = self.items[self.index]
+            if not (it and it.dead) then break end
+          end
+          self:clampScroll()
+        end
+        return r
       end
       return menu
     end,

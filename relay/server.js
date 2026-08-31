@@ -33,6 +33,16 @@
 //   {type:"to", id, m}                 unicast m to one member
 //   {type:"all", m}                    m to every other member
 //   {type:"ping"}                      -> pong
+//   {type:"info"}                      -> info {motd, rooms, conns, daily?}:
+//                                      BR_MOTD as bounded rows, live counts,
+//                                      and daily {secs, label} -- seconds
+//                                      until the next BR_DAILY wall-clock
+//                                      time (POK-161)
+//   {type:"daily_join", name}          -> the one shared DAILY GAME room:
+//                                      joins it, creates it as its host, or
+//                                      answers match_in_progress while its
+//                                      match runs.  quick_join never seats
+//                                      anyone in a daily room.
 // Server -> client
 //   {type:"roster", code, host, members:[{id,name,spectate?}]}  on every change
 //   {type:"recv", from, m}
@@ -96,6 +106,59 @@ function human(bytes) {
   if (bytes < 1048576) return (bytes / 1024).toFixed(1) + "KB";
   if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + "MB";
   return (bytes / 1073741824).toFixed(2) + "GB";
+}
+
+// The message of the day, served to any client that asks (POK-161): the
+// official game time, authored as the BR_MOTD env var so changing the
+// schedule edits one Railway variable and never ships a mod release.
+// Bounded here, not trusted there: the Gen 1 text box is 17 cells wide
+// and three rows is all the lobby can spare, and an env var is still
+// input.  Rows split on real newlines or a literal backslash-n, since
+// env editors rarely take the real thing.
+export function cleanMotd(text) {
+  if (typeof text !== "string" || !text) return [];
+  const rows = [];
+  for (const line of text.split(/\\n|\n/)) {
+    const clean = line.replace(/[^ -~]/g, "").trim().slice(0, 17);
+    if (clean) rows.push(clean);
+    if (rows.length >= 3) break;
+  }
+  return rows;
+}
+
+// The DAILY GAME (POK-161 v2): one scheduled match a day, at a wall-clock
+// time the server owns.  BR_DAILY is "HH:MM|IANA timezone|label", e.g.
+// "19:00|America/Chicago|7PM CENTRAL".  The relay never starts anything --
+// it serves the seconds until the next occurrence and the daily room's
+// host client arms its own start clock from that.
+export function parseDaily(text) {
+  if (typeof text !== "string" || !text) return null;
+  const [time, tz, label] = text.split("|");
+  const m = /^(\d{1,2}):(\d{2})$/.exec(time || "");
+  if (!m || !tz) return null;
+  const hour = Number(m[1]) % 24;
+  const minute = Number(m[2]) % 60;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+  } catch {
+    return null;
+  }
+  return { hour, minute, tz, label: cleanMotd(label || "")[0] || "" };
+}
+
+// Seconds until the next HH:MM in tz.  Reads the wall clock THERE via
+// Intl, so DST is the zone's problem, not ours; the one soft spot is the
+// transition night itself, where this can be off by the shifted hour.
+export function dailySecondsUntil(daily, from = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: daily.tz, hour12: false,
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }).formatToParts(from);
+  const get = (type) => Number(parts.find((p) => p.type === type).value);
+  const nowSecs = (get("hour") % 24) * 3600 + get("minute") * 60 + get("second");
+  let d = daily.hour * 3600 + daily.minute * 60 - nowSecs;
+  if (d <= 0) d += 86400;
+  return d;
 }
 
 function cleanName(name) {
@@ -238,6 +301,8 @@ class Conn {
 export function createRelay(options = {}) {
   const limits = { ...DEFAULT_LIMITS, ...(options.limits || {}) };
   const log = options.log || (() => {});
+  const motd = cleanMotd(options.motd ?? process.env.BR_MOTD);
+  const daily = parseDaily(options.daily ?? process.env.BR_DAILY);
   const rooms = new Map();
   const conns = new Set();
   const perIp = new Map();
@@ -299,6 +364,61 @@ export function createRelay(options = {}) {
         conn.send({ type: "pong", t: msg.t });
         return;
 
+      // "Is anybody out there?" answered honestly (POK-161): the motd
+      // (the official game time) and the live counts.  Presence beats
+      // any schedule line, so both travel together and the client picks.
+      case "info":
+        conn.send({ type: "info", motd, rooms: rooms.size, conns: conns.size,
+                    daily: daily ? { secs: dailySecondsUntil(daily),
+                                     label: daily.label } : undefined });
+        return;
+
+      // The DAILY GAME's one door (POK-161 v2): everyone who presses the
+      // row lands in the SAME room.  First in becomes its host; a locked
+      // daily room is the official match running, which is the POK-133
+      // spectate answer; and quick_join never seats anyone here, because
+      // a lobby that starts at 7pm is the opposite of "a game right now".
+      case "daily_join": {
+        if (conn.room) { conn.send({ type: "room_error", reason: "already_in_room" }); return; }
+        let open = null, running = null;
+        for (const room of rooms.values()) {
+          if (!room.daily || room.banned.has(conn.ip)) continue;
+          if (room.members.size >= limits.members) continue;
+          if (room.locked) { running = running || room; continue; }
+          open = open || room;
+        }
+        if (open) {
+          conn.name = cleanName(msg.name);
+          open.add(conn);
+          conn.send({ type: "room_joined", code: open.code, id: conn.id, host: open.host.id });
+          open.broadcast(open.roster());
+          log(`room ${open.code}: ${conn.name}#${conn.id} joined the daily`);
+          return;
+        }
+        if (running) {
+          conn.send({ type: "match_in_progress", code: running.code,
+                      members: running.members.size });
+          return;
+        }
+        if (rooms.size >= limits.rooms) {
+          traffic.rejected += 1;
+          conn.send({ type: "room_error", reason: "server_full" });
+          return;
+        }
+        conn.name = cleanName(msg.name);
+        const room = new Room(makeCode(rooms), conn);
+        room.daily = true;
+        room.open = true;   // discoverable for spectate; quick_join skips it
+        rooms.set(room.code, room);
+        room.add(conn);
+        traffic.roomsOpened += 1;
+        if (rooms.size > traffic.peakRooms) traffic.peakRooms = rooms.size;
+        conn.send({ type: "room_hosted", code: room.code, id: conn.id });
+        conn.send(room.roster());
+        log(`room ${room.code} hosted by ${conn.name}#${conn.id} (daily)`);
+        return;
+      }
+
       case "host_room": {
         if (conn.room) { conn.send({ type: "room_error", reason: "already_in_room" }); return; }
         if (rooms.size >= limits.rooms) {
@@ -352,7 +472,9 @@ export function createRelay(options = {}) {
         if (conn.room) { conn.send({ type: "room_error", reason: "already_in_room" }); return; }
         let best = null;
         for (const room of rooms.values()) {
-          if (!room.open || room.locked || room.banned.has(conn.ip)) continue;
+          // a daily room waits for its hour; quick play wants a game NOW
+          if (!room.open || room.locked || room.daily
+              || room.banned.has(conn.ip)) continue;
           if (room.members.size >= limits.members) continue;
           if (!best || room.members.size > best.members.size) best = room;
         }

@@ -639,3 +639,96 @@ test("a spectator enters a locked room and is seated at the unlock", async () =>
     host.end(); player.end(); watcher.end();
   });
 });
+
+// ------- POK-161: the official game time, served not shipped
+
+test("info answers with the bounded motd and live counts", async () => {
+  const { createRelay: mk } = await import("./server.js");
+  const relay = mk({ motd: "GAME NIGHT DAILY\n7PM CENTRAL" });
+  const addr = await relay.listen(0, "127.0.0.1");
+  try {
+    const a = await connect(addr.port);
+    a.send({ type: "info" });
+    const info = await a.until("info");
+    assert.deepEqual(info.motd, ["GAME NIGHT DAILY", "7PM CENTRAL"]);
+    assert.equal(info.conns, 1);
+    assert.equal(info.rooms, 0);
+    // needs no room, like stat: the empty lobby is exactly who asks
+    a.send({ type: "host_room", name: "A" });
+    await a.until("room_hosted");
+    a.send({ type: "info" });
+    const again = await a.until("info");
+    assert.equal(again.rooms, 1);
+    a.end();
+  } finally {
+    await relay.close();
+  }
+});
+
+test("the motd is bounded: 17 cells, 3 rows, printable only", async () => {
+  const { cleanMotd } = await import("./server.js");
+  assert.deepEqual(cleanMotd(undefined), []);
+  assert.deepEqual(cleanMotd(""), []);
+  assert.deepEqual(cleanMotd("A ROW THAT RUNS FAR PAST THE BOX"),
+    ["A ROW THAT RUNS F"]);
+  assert.deepEqual(cleanMotd("ONE\nTWO\nTHREE\nFOUR"),
+    ["ONE", "TWO", "THREE"]);
+  assert.deepEqual(cleanMotd("G\u00c9M\u00c9  SOIR\u00c9E  "), ["GM  SOIRE"]);
+});
+
+// ------- POK-161 v2: the DAILY GAME
+
+test("daily config parses, bounds, and counts down", async () => {
+  const { parseDaily, dailySecondsUntil } = await import("./server.js");
+  assert.equal(parseDaily(undefined), null);
+  assert.equal(parseDaily("nonsense"), null);
+  assert.equal(parseDaily("19:00|Not/AZone|X"), null);
+  const d = parseDaily("19:00|America/Chicago|7PM CENTRAL");
+  assert.equal(d.hour, 19);
+  assert.equal(d.label, "7PM CENTRAL");
+  const secs = dailySecondsUntil(d);
+  assert.ok(secs > 0 && secs <= 86400, "within a day: " + secs);
+  // a label past the box is trimmed like any motd row
+  assert.equal(parseDaily("07:30|UTC|A LABEL THAT RUNS PAST THE BOX").label,
+    "A LABEL THAT RUNS");
+});
+
+test("daily_join shares one room, and quick_join never seats there", async () => {
+  const relay = createRelay({ daily: "19:00|America/Chicago|7PM CENTRAL" });
+  const addr = await relay.listen(0, "127.0.0.1");
+  try {
+    const a = await connect(addr.port);
+    a.send({ type: "info" });
+    const info = await a.until("info");
+    assert.ok(info.daily && info.daily.secs > 0, "info carries the schedule");
+    assert.equal(info.daily.label, "7PM CENTRAL");
+
+    // first press creates it, second press joins the SAME room
+    a.send({ type: "daily_join", name: "EARLY" });
+    const hosted = await a.until("room_hosted");
+    const b = await connect(addr.port);
+    b.send({ type: "daily_join", name: "ALSO" });
+    assert.equal((await b.until("room_joined")).code, hosted.code);
+
+    // quick play walks straight past the waiting daily room
+    const q = await connect(addr.port);
+    q.send({ type: "quick_join", name: "NOW" });
+    assert.equal((await q.next()).type, "no_open_rooms");
+
+    // ...but once its match runs, it is the POK-133 answer for everyone
+    a.send({ type: "lock_room", locked: true });
+    await a.settled();
+    const late = await connect(addr.port);
+    late.send({ type: "daily_join", name: "LATE" });
+    const running = await late.next();
+    assert.equal(running.type, "match_in_progress");
+    assert.equal(running.code, hosted.code);
+    const q2 = await connect(addr.port);
+    q2.send({ type: "quick_join", name: "NOW2" });
+    assert.equal((await q2.until("match_in_progress")).code, hosted.code);
+
+    a.end(); b.end(); q.end(); late.end(); q2.end();
+  } finally {
+    await relay.close();
+  }
+});
