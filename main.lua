@@ -1358,9 +1358,11 @@ return function(mod)
     local safari = self:safariSeconds()
     local drops, err
     if safari > 0 then
-      drops, err = Spawn.pickIn(data.maps, data.tilesets, SAFARI_MAP, #ids, rng)
+      drops, err = Spawn.pickIn(data.maps, data.tilesets, SAFARI_MAP, #ids, rng,
+                                data.field and data.field.ledges)
     else
-      drops, err = Spawn.pick(data.maps, data.tilesets, #ids, rng)
+      drops, err = Spawn.pick(data.maps, data.tilesets, #ids, rng,
+                              data.field and data.field.ledges)
     end
     if not drops then
       say("Couldn't start:\n" .. tostring(err))
@@ -2267,7 +2269,8 @@ return function(mod)
     local def = data and data.maps[mapId]
     if not def then return {} end
     local cells = Spawn.cellsOf(def, data.tilesets[def.tileset],
-                                data.maps, data.tilesets)
+                                data.maps, data.tilesets,
+                                data.field and data.field.ledges)
     cellCache[mapId] = cells
     return cells
   end
@@ -3379,7 +3382,8 @@ return function(mod)
     local data = game and game.data
     if not (mapId and data) then return end
     local rng = Spawn.rng(love.math.random(1, 2 ^ 30))
-    local spot = Spawn.pickIn(data.maps, data.tilesets, mapId, 1, rng)
+    local spot = Spawn.pickIn(data.maps, data.tilesets, mapId, 1, rng,
+                              data.field and data.field.ledges)
     local cell = spot and spot[1]
     if not cell then return end
     local save = game.save

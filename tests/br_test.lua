@@ -1413,6 +1413,48 @@ do
     ok(not Spawn.isWarp(maps, "NOT_A_MAP", 1, 1), "an unknown map has no warps")
     ok(not Spawn.isWarp(nil, "VIRIDIAN_CITY", 23, 25), "nor does no map table")
 
+    -- escapable across the seams, not merely off the map.  Vermilion's
+    -- fenced sign pocket (24..39 x 0..2, behind the town sign at 27,3)
+    -- exits only onto ROUTE_6's own walled-off corner (11..19 x 33..35),
+    -- whose only exit is back into the pocket -- each map's edge check
+    -- vouched for the other and a player really spawned there, softlocked
+    -- behind the sign they could only read from the wrong side.  The world
+    -- flood seeds at doors, so neither half may hold a spawn cell.
+    local okField, fieldData = pcall(dofile, "data/generated/field.lua")
+    local ledges = okField and type(fieldData) == "table" and fieldData.ledges or nil
+    local sets = Spawn.escapableSets(maps, tilesets, ledges)
+    ok(next(sets["VERMILION_CITY"] or {}) ~= nil, "Vermilion has an escapable region")
+    ok(not sets["VERMILION_CITY"][2 * 4096 + 27],
+       "the cell behind the town sign is not escapable")
+    ok(not sets["ROUTE_6"][34 * 4096 + 15],
+       "nor is ROUTE_6's walled-off corner it exits onto")
+    ok(sets["VERMILION_CITY"][14 * 4096 + 20], "the road through town is")
+    local verm = Spawn.cellsOf(maps.VERMILION_CITY,
+      tilesets[maps.VERMILION_CITY.tileset], maps, tilesets, ledges)
+    local pocket = 0
+    for _, c in ipairs(verm) do
+      if (c.y <= 2 and c.x >= 24)              -- behind the sign fence
+         or (c.y <= 12 and c.x >= 35) then     -- the strip down the east wall
+        pocket = pocket + 1
+      end
+    end
+    eq(pocket, 0, "no spawn cell survives in the sign pocket")
+    ok(#verm > 300, "Vermilion still has plenty of floor (" .. #verm .. ")")
+    -- ROUTE_13 has not a single door: every escapable cell it has arrived
+    -- across the ROUTE_12 seam, so the world flood really crosses maps
+    ok(#((maps.ROUTE_13 or {}).warps or {}) == 0 and next(sets["ROUTE_13"]) ~= nil,
+       "doorless ROUTE_13 is seeded across the seam")
+    -- and a ledge plateau escapes DOWN its ledge: ROUTE_9's west shelf
+    -- floods only once hops are credited
+    if ledges then
+      local noHops = Spawn.escapableSets(maps, tilesets, nil)
+      local hops = Spawn.escapableSets(maps, tilesets, ledges)
+      local function count(set) local n = 0 for _ in pairs(set) do n = n + 1 end return n end
+      ok(count(hops["ROUTE_9"]) > count(noHops["ROUTE_9"]),
+         "ledge hops open ROUTE_9's shelves ("
+         .. count(noHops["ROUTE_9"]) .. " -> " .. count(hops["ROUTE_9"]) .. ")")
+    end
+
     -- the placement search must route around a door rather than stack on
     -- it: aim a four-ball spill right at one and check none of them land
     local door = doors[1]
