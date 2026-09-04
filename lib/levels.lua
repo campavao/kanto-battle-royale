@@ -48,4 +48,57 @@ function Levels.carryHp(oldMax, oldHp, newMax)
   return math.max(1, newMax - math.max(0, oldMax - hp))
 end
 
+-- The level-up moves between two rungs, learned the way a trainer would
+-- want them learned (POK-172).  Pokemon.learnMovesFromDayCare drops the
+-- OLDEST slot for every new move, which on an automatic level-up threw
+-- away moves the trainer had spent a TM on -- the whole reason a TM is
+-- loot (POK-62).  Provenance is inferred rather than bookkept: a move the
+-- species learns by level at or below the level it HAD is a level-up
+-- move; anything else was taught (a TM, an HM, a pre-evolution's
+-- learnset) and is never displaced.  An empty slot is filled first; then
+-- the oldest level-up move gives way; if every slot is taught, the rung's
+-- move is skipped.  A move learned this rung counts as level-up for the
+-- next.  Returns the ids learned and the ids forgotten, in order.
+function Levels.learn(data, mon, def, from, to)
+  local learned, forgot = {}, {}
+  if not (def and def.learnset and mon) then return learned, forgot end
+  mon.moves = mon.moves or {}
+  local natural = {}
+  -- the level-1 moves live beside the learnset, not in it (Pokemon.movesAtLevel)
+  for _, m in ipairs(def.level1Moves or {}) do natural[m] = true end
+  for _, e in ipairs(def.learnset) do
+    if e.level <= from then natural[e.move] = true end
+  end
+  for _, e in ipairs(def.learnset) do
+    if e.level > to then break end
+    if e.level > from then
+      local known = false
+      for _, mv in ipairs(mon.moves) do
+        if mv.id == e.move then known = true break end
+      end
+      if not known then
+        local mdef = data and data.moves and data.moves[e.move]
+        local slot = { id = e.move, pp = mdef and mdef.pp or 0 }
+        if #mon.moves < 4 then
+          mon.moves[#mon.moves + 1] = slot
+          learned[#learned + 1] = e.move
+        else
+          local victim
+          for i, mv in ipairs(mon.moves) do
+            if natural[mv.id] then victim = i break end
+          end
+          if victim then
+            forgot[#forgot + 1] = mon.moves[victim].id
+            table.remove(mon.moves, victim)
+            mon.moves[#mon.moves + 1] = slot
+            learned[#learned + 1] = e.move
+          end
+        end
+      end
+      natural[e.move] = true
+    end
+  end
+  return learned, forgot
+end
+
 return Levels

@@ -20,10 +20,20 @@
 local Spills = {}
 Spills.__index = Spills
 
--- A ball is a runtime object with the engine's own item-ball sprite, solid
--- and still, exactly like the item balls Kanto is littered with.  You walk
--- up and press A, which is the interaction every Gen 1 player already knows.
+-- A ball is a runtime object with the engine's own item-ball sprite, still,
+-- exactly like the item balls Kanto is littered with.  You press A facing
+-- it, which is the interaction every Gen 1 player already knows -- or
+-- standing ON it (POK-175): a pile of thirty trainers' loot used to be a
+-- wall, and a player who walked into a spill found every way out blocked
+-- by the very things they came for.  The balls are passable now, the way
+-- the ghosts are, so a spill is something you wade through and pick over.
 local BALL_SPRITE = "SPRITE_POKE_BALL"
+
+-- Drawn a pixel high.  The overworld sorts its sprites by py and breaks a
+-- tie however the sort falls, so a ball on the player's own cell could
+-- flicker over their sprite; one pixel up puts it under their feet every
+-- frame, and nobody can see a pixel.
+Spills.UNDERFOOT = 1
 
 -- The BAG (POK-25) is the mod's own 16x16 sheet, drawn in the item ball's
 -- four shades and registered by main.lua; until that has happened -- or if
@@ -144,6 +154,24 @@ end
 
 function Spills:get(key) return self.balls[key] end
 
+-- Whose ball this was (POK-179): the key's first segment is the owner
+-- Spills.build was given -- a relay id, a bot id (Bots.ID_BASE and up),
+-- "npc" for Kanto's own trainers, 999 for a driver's debugSpill.  A drop
+-- key ("7:drop:2") belongs to 7 the same way.
+function Spills.ownerOf(key)
+  if type(key) ~= "string" then return nil end
+  return key:match("^([^:]+):")
+end
+
+-- Did WE drop this?  A trade evolution rides a change of hands, and
+-- releasing your own KADABRA to make room and picking it straight back
+-- up is not one.  Compared as text, because relay ids are numbers and
+-- keys are strings.
+function Spills.isOwn(key, myId)
+  local owner = Spills.ownerOf(key)
+  return owner ~= nil and myId ~= nil and owner == tostring(myId)
+end
+
 -- The ball on this very cell, if any (POK-75): the talk path asks by the
 -- FACED CELL when the engine's pick answered an NPC standing on a ball.
 function Spills:keyAt(mapId, x, y)
@@ -201,6 +229,33 @@ function Spills:take(key)
   self.balls[key] = nil
 end
 
+-- Part of a bag is gone (POK-176): `n` of `item` left it, and the money
+-- too when `cash`.  Every client applies the same message, so the bag on
+-- the ground reads the same everywhere; the piece itself goes only when
+-- nothing is left in it.  Returns "gone" then, true for a lighter bag,
+-- false when there was no such bag or no such item in it.
+function Spills:takeItem(key, item, n, cash)
+  local ball = self.balls[key]
+  local bag = ball and ball.bag
+  if not bag then return false end
+  local hit = false
+  for i, it in ipairs(bag.items or {}) do
+    if it.id == item then
+      hit = true
+      it.n = it.n - (n or it.n)
+      if it.n <= 0 then table.remove(bag.items, i) end
+      break
+    end
+  end
+  if cash then bag.money = 0 end
+  if not hit and not cash then return false end
+  if #(bag.items or {}) == 0 and (bag.money or 0) <= 0 then
+    self:take(key)
+    return "gone"
+  end
+  return true
+end
+
 function Spills:despawnAll()
   for key in pairs(self.spawned) do self:despawn(key) end
   self.spawned = {}
@@ -241,6 +296,15 @@ function Spills:sync(mapId)
       end)
       if ok and npcId then
         self.spawned[key] = npcId
+        -- walkable (POK-175), and under the feet of whoever stands on it
+        local handle = self.mod.world.npc
+          and (self.mod.world:npc(mapId, npcId)) or nil
+        if handle then
+          if handle.setPassable then handle:setPassable(true) end
+          if handle.npc and handle.npc.py then
+            handle.npc.py = handle.npc.py - Spills.UNDERFOOT
+          end
+        end
       else
         self.failed = self.failed or {}
         if not self.failed[key] then

@@ -137,4 +137,31 @@ function Engage.answer(me, fromId, pending, avoid)
   return "accept"
 end
 
+-- A challenge is not held forever (POK-162).  BR.pending gates every
+-- battle path on a client -- the eyeline, a bot's sight, a walk-up talk,
+-- even a field move -- so one reply that never lands used to wedge that
+-- client for the rest of the match, and the bots, hunting the nearest
+-- live trainer, hunted the two nobody could beat.  Past this many seconds
+-- with no answer the challenge is dropped and the other side told.
+--
+-- Longer than Events.HOLD_SECONDS by a margin that covers the flash and
+-- the relay both ways: the side holding the challenge must still be
+-- holding it when the deferred answer lands, or an accept opens a battle
+-- nobody joins.
+Engage.PENDING_SECONDS = 12
+
+-- ...and neither is a lockstep nobody joined.  LinkState says hello the
+-- moment it opens, so a peer silent this long is never coming and the
+-- battle is closed the way a pulled cable closes one.  Wider than the
+-- two above put together, since it is the net under them.
+Engage.LINK_OPEN_SECONDS = 20
+
+-- Has a pending challenge outlived its answer?  `at` is when it was
+-- made; one made before anybody was counting (no `at`) is not stale --
+-- the caller stamps it and asks again next tick.
+function Engage.stale(pending, now, limit)
+  if not (pending and pending.at and now) then return false end
+  return (now - pending.at) >= (limit or Engage.PENDING_SECONDS)
+end
+
 return Engage

@@ -87,7 +87,7 @@ local Wire = {}
 -- 10: botrec -- a bot's persistent team (POK-158).  Two clients that
 --    disagree about a bot's record disagree about who wins a fight with
 --    it, so the message is load-bearing, not cosmetic.
-Wire.PROTOCOL = 10
+Wire.PROTOCOL = 11
 
 Wire.DIRS = { up = true, down = true, left = true, right = true }
 Wire.STATUS = { lobby = true, alive = true, battle = true, out = true }
@@ -226,7 +226,18 @@ function Wire.spill(map, mons, bag)
   end
   return out
 end
-function Wire.took(key) return { t = "took", key = key } end
+-- Something on the ground is gone (D8), or PART of a bag is (POK-176):
+-- with `item` and `n`, that many of that item left the bag and the rest
+-- is still there; `cash` says the money went too.  A bare key is the
+-- whole piece -- a ball, or a bag a bot swallowed whole.  PROTOCOL 11.
+function Wire.took(key, item, n, cash)
+  local out = { t = "took", key = key }
+  if item then
+    out.item, out.n = item, n
+    if cash then out.cash = true end
+  end
+  return out
+end
 
 -- one of Kanto's own trainers has been beaten: the sprite goes away for
 -- everyone, and only its balls (a separate spill message) stay
@@ -506,7 +517,17 @@ decoders.took = function(m)
   if type(m.key) ~= "string" or m.key == "" or #m.key > MAX_ID then
     return nil, "bad key"
   end
-  return { t = "took", key = m.key }
+  local out = { t = "took", key = m.key }
+  if m.item ~= nil then
+    if type(m.item) ~= "string" or m.item == "" or #m.item > MAX_ID then
+      return nil, "bad item"
+    end
+    local n = tonumber(m.n)
+    if not n or n < 1 or n ~= math.floor(n) or n > 99 then return nil, "bad count" end
+    out.item, out.n = m.item, n
+    out.cash = m.cash == true or nil
+  end
+  return out
 end
 
 local function isCoord(v)

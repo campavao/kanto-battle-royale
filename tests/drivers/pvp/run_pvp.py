@@ -47,6 +47,10 @@ SCENARIOS = {
     # birth, a quick-play during a running match is offered the watcher's
     # seat and plays the next one, and a removed guest stays removed.
     "coldstart": ("host_coldstart.lua", "guest_coldstart.lua"),
+    # POK-162: the guest is in a menu, then reading a sign, in the host's
+    # eyeline.  The eyeline must hold off the menu; a challenge that lands
+    # mid-dialog must queue and open the lockstep once the dialog closes.
+    "held": ("host_held.lua", "guest_held.lua"),
 }
 
 
@@ -82,7 +86,8 @@ def main():
     for name in ("code.txt", "posted.txt", "joined.txt", "hostdone.txt",
                  "guestdone.txt", "inplace.txt", "host.plog", "guest.plog",
                  "guestready.txt", "guestm1.txt", "guestcard.txt",
-                 "m2.txt", "m2go.txt"):
+                 "m2.txt", "m2go.txt", "menu.txt", "facedaway.txt",
+                 "reading.txt", "challenged.txt"):
         p = os.path.join(workdir, name)
         if os.path.exists(p):
             os.remove(p)

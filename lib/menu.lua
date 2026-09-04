@@ -98,7 +98,17 @@ function Menu.items(mod, BR, game)
       -- where the fog is, and whether you are standing in it
       local ring = BR.ring
       if ring and ring.phase and ring.phase > 1 then
-        row("FOG: " .. tostring((ring.center and ring.center.name) or "CLOSING"))
+        -- The grid is twenty tiles and the box is the widest row plus
+        -- three (fit(), below), so a label may be seventeen at most:
+        -- "FOG: VERMILION CITY" is nineteen and ran off the right edge
+        -- (POK-171).  The long names go under their label instead.
+        local where = tostring((ring.center and ring.center.name) or "CLOSING")
+        if #("FOG: " .. where) > Menu.MAX_LABEL then
+          row("FOG:")
+          row(where)
+        else
+          row("FOG: " .. where)
+        end
       end
     end
     -- No PLAY AGAIN row here any more (POK-144): every client leaves the
@@ -259,10 +269,24 @@ function Menu.items(mod, BR, game)
       -- has to learn that the room they are looking at is the one they
       -- just played in.
       local start = BR.lastResult and "PLAY AGAIN" or "START MATCH"
-      items[#items + 1] = {
-        label = countdown and (start .. " (" .. countdown .. ")") or start,
-        onSelect = function() BR:startMatch() end,
-      }
+      if BR.quick and BR.lastResult and not countdown then
+        -- READY UP (POK-167): a quick room's second match is ARMED, not
+        -- started.  The first lobby counted itself down because Quick
+        -- Play promised a game now; the match after it is the one nobody
+        -- asked for, so the host says so, and the sixty seconds that
+        -- follow are every guest's window to read the result, check the
+        -- party, or leave.  Once armed this row is PLAY AGAIN (N) again,
+        -- and pressing it starts now.
+        items[#items + 1] = {
+          label = "READY UP",
+          onSelect = function() BR:readyUp() end,
+        }
+      else
+        items[#items + 1] = {
+          label = countdown and (start .. " (" .. countdown .. ")") or start,
+          onSelect = function() BR:startMatch() end,
+        }
+      end
     elseif BR.isSpectating and BR:isSpectating() then
       -- the POK-133 seat: the match is running without us, and the relay
       -- makes us a player the moment it ends and the room unlocks
@@ -416,6 +440,10 @@ end
 -- How many rows fit on screen at a given row step (2 is Menu's default and
 -- the original's double-spaced style).  Public so the suite can check the
 -- faces against it without standing up a live Menu.
+-- The widest label a face may carry: the grid is twenty tiles and fit()
+-- makes the box the widest row plus three (POK-171).
+Menu.MAX_LABEL = 17
+
 function Menu.maxRows(rowStep)
   return math.max(1, math.floor((canvasRows() - 2) / (rowStep or 2)))
 end

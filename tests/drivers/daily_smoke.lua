@@ -63,6 +63,13 @@ return function(game)
       .. tostring(E.dailyStartsIn()) .. ", phase " .. tostring(E.phase()) .. ")")
   end
   U.log("DAILY: the clock started it (phase " .. tostring(E.phase()) .. ")")
+  -- Full is read HERE, at the open: this driver B's through the Safari and
+  -- catches nothing, so the buzzer puts it OUT and a count taken after
+  -- the drop is one short by its own hand.
+  local alive = E.aliveCount()
+  if alive ~= 30 then
+    return C.fail("the official match is not full: " .. tostring(alive) .. "/30")
+  end
   local t1 = love.timer.getTime()
   while love.timer.getTime() - t1 < 300 do
     local p = E.phase()
@@ -79,10 +86,6 @@ return function(game)
   end
   for _ = 1, 8 do U.tap(game, "a") U.wait(20) end
   U.wait(30)
-  local alive = E.aliveCount()
-  if alive ~= 30 then
-    return C.fail("the official match is not full: " .. tostring(alive) .. "/30")
-  end
   U.log(("DAILY OK: started on the clock with %d trainers"):format(alive))
   love.event.quit(0)
   U.wait(30)

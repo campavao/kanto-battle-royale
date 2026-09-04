@@ -28,6 +28,7 @@ function Channel.new(relay, peerId, opts)
     inbox = {},
     paired = true,   -- the room already connected us
     closed = false,
+    heard = false,   -- has the peer said anything yet (POK-162)
     error = nil,
     code = nil, address = nil, target = nil, -- Session mirrors these
     onClose = opts and opts.onClose,
@@ -54,6 +55,7 @@ end
 -- main.lua feeds inbound battle traffic here
 function Channel:push(inner)
   if self.closed then return end
+  self.heard = true
   self.inbox[#self.inbox + 1] = inner
 end
 

@@ -45,6 +45,7 @@ local Fame = require("mods.battle_royale.lib.fame")
 local Gyms = require("mods.battle_royale.lib.gyms")
 local Peek = require("mods.battle_royale.lib.peek")
 local BRMenu = require("mods.battle_royale.lib.menu")
+local Events = require("mods.battle_royale.lib.events")
 local Machines = require("mods.battle_royale.lib.machines")
 local Career = require("mods.battle_royale.lib.career")
 local Coexist = require("mods.battle_royale.lib.coexist")
@@ -65,6 +66,9 @@ local DEFAULT_RELAY = "maglev.proxy.rlwy.net:55436"
 -- is insurance against a dropped message and against a peer moving in a way
 -- we do not model (a warp).  5 seconds at 60 Hz.
 local RESYNC_TICKS = 300
+-- (TRAINER_TALK_TICKS, POK-163, lives beside tickTrainerTalk: the mod's
+-- main closure is at LuaJIT's 60-upvalue ceiling, and one more file-level
+-- local it reads is a load error, not a warning)
 
 -- How often a bot takes a beat, in REAL seconds (it may still stand still).
 --
@@ -210,6 +214,19 @@ local STORY_FLAGS = {
   "EVENT_AUTOWALKED_INTO_LORELEIS_ROOM",
   "EVENT_AUTOWALKED_INTO_BRUNOS_ROOM",
   "EVENT_AUTOWALKED_INTO_AGATHAS_ROOM",
+  -- POK-164 (POK-159 §2): SAFFRON is liberated before the buzzer.  Seven
+  -- street ROCKETs stand on the cells below the GYM, SILPH CO, the DOJO
+  -- and every house door, so an occupied Saffron is a town with no
+  -- Centre, no mart, no gym and no loot -- "Team Rocket still occupies
+  -- the city and every building is locked".  M.SAFFRON_CITY.onEnter
+  -- (data/scripts/story4.lua) reads this one flag and hides all nine
+  -- rockets and shows the six civilians on every entry.  What it costs:
+  -- the SILPH CO 11F Giovanni trigger (story.lua) stands down -- he is a
+  -- talk-only statue for the match -- and the Silph workers speak their
+  -- "saved" lines.  The Silph floors' own trainers and the ROCKET
+  -- HIDEOUT (its Giovanni gates on EVENT_BEAT_ROCKET_HIDEOUT_GIOVANNI)
+  -- are untouched, so the PvE crawls stay on the board.
+  "EVENT_BEAT_SILPH_CO_GIOVANNI",
 }
 
 return function(mod)
@@ -312,6 +329,7 @@ return function(mod)
     battle = nil,         -- active fight { channel, opponentId, isHost }
     nonceSeq = 0,
     pendingSays = {},     -- says waiting for a free runner (POK-49/POK-50)
+    events = Events.new(), -- challenges waiting for a quiet screen (POK-162)
     despawns = Despawn.new(),  -- beaten trainers, hidden on a quiet frame
     stats = nil,          -- the run's record: catches, beats, steps (POK-47)
     pendingParade = nil,  -- when the champion's ending should start (POK-47)
@@ -349,6 +367,7 @@ return function(mod)
     solo = false,         -- hosting a room of one, with no server
     quick = false,        -- came in through QUICK PLAY, so it self-starts
     fellAt = nil,         -- where a whiteout caught us, to spectate from
+    breatherUntil = nil,  -- no automatic fight until this clock (POK-174)
     autoStartAt = nil,    -- quick play starts itself at this clock time
     lastRoster = 0,       -- to notice an arrival and hold the countdown open
     matchSeed = nil,      -- every client derives bot names/parties from this
@@ -454,8 +473,16 @@ return function(mod)
     end
     local ow = mod.world:overworld()
     local top = game.stack and game.stack:top()
-    if not (ow and top) or top == ow then return nil end
-    return "menu"
+    if not (ow and top) then return nil end
+    if top ~= ow then return "menu" end
+    -- A dialog is a menu too (POK-162): the nurse's script runs INSIDE
+    -- the overworld state, so `top == ow` alone called a trainer mid-heal
+    -- free -- and a challenge to somebody mid-heal is the one that wedged
+    -- a match.  Somebody reading is not about to run either.
+    if ow.runner and ow.runner.isRunning and ow.runner:isRunning() then
+      return "menu"
+    end
+    return nil
   end
 
   -- Edge-triggered: a frame goes out only when the answer CHANGES, so a
@@ -697,7 +724,7 @@ return function(mod)
     relay:on("info", function(_, info)
       if BR.dailyLobby and relay:isHost() and BR.phase == "lobby"
          and info and info.daily then
-        BR.autoStartAt = love.timer.getTime() + info.daily.secs
+        BR:armDaily(info.daily.secs)
       end
     end)
     relay:on("closed", function(reason)
@@ -822,6 +849,27 @@ return function(mod)
     return true
   end
 
+  -- Arm the daily start from one info answer (POK-180).  The deadline
+  -- only ever moves earlier, or later by the jitter of an honest answer:
+  -- an answer that has already rolled over to tomorrow arrived AFTER the
+  -- hour and must not un-arm the start it is a fraction of a second late
+  -- for.  Daily.rearm is the rule; this is the wiring and the log line.
+  function BR:armDaily(secs)
+    -- required here, like Skins: the outer function is at LuaJIT's
+    -- sixty-upvalue cap, and one more top-level local fails the load
+    local Daily = require("mods.battle_royale.lib.daily")
+    local at = love.timer.getTime() + secs
+    local held, refused = Daily.rearm(self.autoStartAt, at)
+    self.autoStartAt = held
+    -- one line per streak: the answers keep coming until the tick fires
+    if refused and not self.dailyRefused then
+      log:say("daily: the hour is here; the start stands (server says %ds)",
+              secs)
+    end
+    self.dailyRefused = refused or nil
+    return refused
+  end
+
   -- Seconds until the daily hour, from the last info answer the server
   -- gave; nil until it has said.  Everyone in the room computes this the
   -- same way -- the host's autoStartAt is armed from the same numbers.
@@ -867,6 +915,21 @@ return function(mod)
   end
 
   function BR:isOpen() return self.relay and self.relay.open == true end
+
+  -- READY UP (POK-167): after a match, a quick room does not count down on
+  -- its own -- the host arms the next one.  Quick Play's promise is a game
+  -- NOW, and the first lobby keeps it; the second match is the one nobody
+  -- asked for, so it waits for the host to say so, and then gives the
+  -- room the same sixty seconds the first lobby had, which is the window
+  -- a guest has to read their result, check their party, or leave.
+  function BR:readyUp()
+    local relay = self.relay
+    if not (relay and relay:isHost() and relay:isOpen()) then return false end
+    if self.phase ~= "lobby" or self.autoStartAt then return false end
+    self.autoStartAt = love.timer.getTime() + QUICK_START_SECONDS
+    log:say("ready: the next match starts in %ds", QUICK_START_SECONDS)
+    return true
+  end
 
   -- seconds left on the quick-play countdown, or nil when nothing is counting
   function BR:startsIn()
@@ -1059,6 +1122,7 @@ return function(mod)
       self.battle = nil
     end
     self.fellAt = nil
+    self.breatherUntil = nil
     self.refusedBattle = nil
     self.players = {}
     -- the door's findings go with the room they were about (POK-142): the
@@ -1082,12 +1146,19 @@ return function(mod)
       Machines.restore(self.game and self.game.data, self.machineNames)
       self.machineNames = nil
     end
+    -- ...and the MOON STONE its ROM price (POK-178), for the same reason
+    if self.moonStonePrice ~= nil then
+      require("mods.battle_royale.lib.shops").restoreMoonStone(
+        self.game and self.game.data, self.moonStonePrice)
+      self.moonStonePrice = nil
+    end
     self.lastOpponent = nil
     self.fledFrom, self.fleeGrace, self.fleeLockout, self.fleeing = {}, {}, {}, nil
     self.peeked, self.lastPeekAt = nil, nil
     self.pendingDrop = nil   -- a release that never landed (POK-34)
     self.pendingGift = nil   -- a gift whose box was never reopened (POK-112)
     self.pendingSays = {}
+    Events.clear(self.events)
     self.despawns:clear()
     self.runnerBusySince, self.lastAutoA = nil, nil
     self.stats = nil
@@ -1097,6 +1168,7 @@ return function(mod)
     self.ringLocs = nil
     self.matchFog = nil
     self.safariPool = nil
+    self.safariTheme = nil
     self.dropSeq = nil
     self.safariEndsAt = nil  -- the Safari opening's clock (POK-21)
     self.lastSafariBeat = nil
@@ -1146,6 +1218,7 @@ return function(mod)
     self.runningMatch = nil   -- the POK-133 offer dies with the connection
     self.armKick = nil
     self.dailyLobby = nil
+    self.lootMenu = nil
   end
 
   function BR:teardown(message)
@@ -1335,6 +1408,14 @@ return function(mod)
   function BR:startMatch()
     local relay = self.relay
     if not (relay and relay:isHost()) then return end
+    -- Any start CONSUMES the quick-play countdown (POK-167).  Only the
+    -- tick's own firing used to clear it, so a quick host who pressed
+    -- START ahead of the sixty seconds carried the armed clock into the
+    -- match, where phase ~= "lobby" hid it -- and the moment the room
+    -- came back to the lobby the tick found a countdown hours expired and
+    -- started the next match on the same frame.  "The room just went
+    -- again": no result read, no party checked, no way out.
+    self.autoStartAt = nil
     -- A solo match is the one nothing else can see: it runs on a LocalRoom
     -- and never opens a socket (POK-124).  This is a counter bump and a
     -- local file write -- deliberately NOT a connection, because
@@ -1428,8 +1509,8 @@ return function(mod)
     self.matchFog = msg.fog
     -- ...and this match's zone, drawn from the same seed on every client
     -- rather than sent, so the draft is the same for everyone (POK-118)
-    self.safariPool = Safari.pool(msg.seed, self.game and self.game.data)
-    log:say("the zone today: %s", Safari.describe(self.safariPool))
+    self.safariPool, self.safariTheme = Safari.pool(msg.seed, self.game and self.game.data)
+    log:say("the zone today: %s", Safari.describe(self.safariPool, self.safariTheme))
     log:match(self.relay and self.relay.code, msg.seed)
     self.players = {}
     for _, s in ipairs(msg.spawns) do
@@ -1467,8 +1548,11 @@ return function(mod)
     -- the new phase ahead of the guard that reads it.
     armScriptWrap()
     -- ...and route trainers go opt-in for the same window (POK-150):
-    -- their sight lines stand down, their talk still fights
-    self:armTrainerTalk()
+    -- their sight lines stand down, their talk still fights.  Counted in
+    -- the log (POK-163), so a match where they did not is visible.
+    local armedTalk, armedMaps = self:armTrainerTalk()
+    log:say("route trainers stand down: %d talk handlers on %d maps",
+            armedTalk, armedMaps)
     self:setPhase(safari > 0 and "safari" or "match",
                   safari > 0 and "the SAFARI opens" or "straight to the drop")
     self.status = "alive"
@@ -1907,17 +1991,10 @@ return function(mod)
       self:onChallenge(fromId, msg.nonce)
 
     elseif msg.t == "accept" then
-      if self.pending and self.pending.to == fromId then
-        local nonce = self.pending.nonce
-        self.pending = nil
-        self:beginBattle(fromId, Engage.isHost(self.myId, fromId), nonce)
-      end
+      self:onAccept(fromId, msg.nonce)
 
     elseif msg.t == "decline" then
-      if self.pending and self.pending.to == fromId then
-        self.pending = nil
-        say("...They ran off.")
-      end
+      self:onDecline(fromId, msg.nonce, msg.why)
 
     elseif msg.t == "bt" then
       if self.battle and self.battle.opponentId == fromId then
@@ -1949,7 +2026,13 @@ return function(mod)
       end
 
     elseif msg.t == "took" then
-      self.spills:take(msg.key)
+      if msg.item then
+        self.spills:takeItem(msg.key, msg.item, msg.n, msg.cash)
+      else
+        self.spills:take(msg.key)
+      end
+      -- a bag we are looking into just changed under us (POK-176)
+      self:refreshLoot(msg.key)
 
     elseif msg.t == "safari" then
       -- the Safari clock is the host's too
@@ -2015,6 +2098,12 @@ return function(mod)
                  onDone = onDone }
   end
 
+  -- An answer is owed on the overworld (POK-162).  A challenge that lands
+  -- while anything else owns the screen -- the nurse's dialog, the PACK,
+  -- a wild battle -- is queued in BR.events and answered by tickEvents
+  -- the moment the screen is quiet again, the same gate the parade and
+  -- the exit wait on.  Answering on the spot is what opened a lockstep
+  -- under an occupied stack and wedged a match at 5 LEFT.
   function BR:onChallenge(fromId, nonce)
     -- nobody fights before the drop (POK-21): a peer whose clock ran ahead
     -- of ours is told we are busy, which is true
@@ -2022,6 +2111,24 @@ return function(mod)
       self.relay:send(fromId, Wire.decline(nonce, "busy"))
       return
     end
+    if not self:screenIsQuiet() then
+      log:say("challenge from %s queued behind the screen (nonce %s)",
+              self:nameOf(fromId), tostring(nonce))
+      Events.push(self.events, { kind = "challenge", from = fromId, nonce = nonce },
+                  clock() or 0)
+      return
+    end
+    self:answerChallenge(fromId, nonce)
+  end
+
+  -- a trainer's name for the log, id when the roster has none
+  function BR:nameOf(id)
+    local p = self.players[id]
+    return (p and p.name) and (tostring(p.name) .. "#" .. tostring(id)) or tostring(id)
+  end
+
+  -- The answer itself, on a quiet screen.
+  function BR:answerChallenge(fromId, nonce)
     -- a challenge from the player we are already challenging is an accept
     if self.pending and self.pending.to == fromId then
       self.pending = nil
@@ -2032,6 +2139,8 @@ return function(mod)
     local decision = Engage.answer(
       { status = self.status, inBattle = self.battle ~= nil }, fromId, self.pending,
       self:fleeAvoid(false))
+    log:say("challenge from %s (nonce %s): %s", self:nameOf(fromId),
+            tostring(nonce), decision)
     if decision ~= "accept" then
       self.relay:send(fromId, Wire.decline(nonce, "busy"))
       return
@@ -2039,7 +2148,7 @@ return function(mod)
     -- the beat over the challenger's ghost, THEN the accept -- both
     -- machines start after the flash (POK-55)
     self.pending = { to = fromId, nonce = nonce,
-                     host = Engage.isHost(self.myId, fromId) }
+                     host = Engage.isHost(self.myId, fromId), at = clock() or 0 }
     engageFlash(self.ghosts:npcOf(fromId), function()
       if not (BR.pending and BR.pending.to == fromId
               and BR.pending.nonce == nonce) then return end
@@ -2047,9 +2156,143 @@ return function(mod)
       if BR.battle or BR.status ~= "alive" then return end
       local challenger = BR.players[fromId]
       if not (challenger and challenger.status == "alive") then return end
+      -- a screen opened during the flash: no battle can open under it
+      -- (POK-162), and the challenger asks again once we are back
+      if not BR:screenIsQuiet() then
+        BR.relay:send(fromId, Wire.decline(nonce, "held"))
+        return
+      end
       BR.relay:send(fromId, Wire.accept(nonce))
       BR:beginBattle(fromId, Engage.isHost(BR.myId, fromId), nonce)
     end)
+  end
+
+  -- They accepted.  Ours to open -- unless the screen is not ours right
+  -- now, in which case the opening is queued the way an inbound challenge
+  -- is: the accepter's lockstep waits for our hello, and tickPending's
+  -- nets close it if we never come.
+  function BR:onAccept(fromId, nonce)
+    local pend = self.pending
+    log:say("%s accepted (nonce %s); %s", self:nameOf(fromId), tostring(nonce),
+            (pend and pend.to == fromId and pend.nonce == nonce)
+              and (self:screenIsQuiet() and "opening" or "queued behind the screen")
+              or "not waited for")
+    if pend and pend.to == fromId and pend.nonce == nonce then
+      if not self:canOpenBattle() then
+        -- we cannot fight any more (the fog got us while the challenge
+        -- flew): say so now, not after the hold
+        self.pending = nil
+        self.relay:send(fromId, Wire.decline(nonce, "held"))
+      elseif self:screenIsQuiet() then
+        self.pending = nil
+        self:beginBattle(fromId, Engage.isHost(self.myId, fromId), nonce)
+      else
+        Events.push(self.events, { kind = "begin", from = fromId, nonce = nonce },
+                    clock() or 0)
+      end
+      return
+    end
+    -- An accept we are not waiting for: the challenge it answers timed
+    -- out here already.  The accepter has opened a lockstep on it, so it
+    -- is told -- a decline naming the nonce closes exactly that battle
+    -- (onDecline) and nothing that has really started.  Never during our
+    -- own battle with them: a mutual sighting crosses two challenges and
+    -- lands an accept each side is right to ignore.
+    if self.battle and self.battle.opponentId == fromId then return end
+    if self.relay then self.relay:send(fromId, Wire.decline(nonce, "timeout")) end
+  end
+
+  function BR:onDecline(fromId, nonce, why)
+    log:say("%s declined (nonce %s, %s)", self:nameOf(fromId), tostring(nonce),
+            tostring(why))
+    if self.pending and self.pending.to == fromId then
+      self.pending = nil
+      Events.drop(self.events, "begin", fromId)
+      -- "held" and "timeout" are the queue's own housekeeping (POK-162):
+      -- the pair meets again on the next tick they are both free
+      if why ~= "held" and why ~= "timeout" then say("...They ran off.") end
+    end
+    -- the challenger gave up while we were holding their challenge...
+    Events.drop(self.events, "challenge", fromId)
+    -- ...or after we accepted it: the lockstep we opened on that nonce has
+    -- nobody coming.  Only a battle in which the peer has never spoken --
+    -- one that has is a real fight, and a stray decline is not its end.
+    local b = self.battle
+    if b and b.opponentId == fromId and b.nonce ~= nil and b.nonce == nonce
+       and not b.channel.heard then
+      log:say("%s declined the battle we had opened; closing it", tostring(fromId))
+      b.channel:peerGone()
+    end
+  end
+
+  -- Drain the queue (POK-162): expired events are answered with a decline
+  -- so nobody is left waiting on us; the rest wait for a quiet screen and
+  -- go one per tick, oldest first.
+  function BR:tickEvents()
+    local q = self.events
+    if not (q and q.queue[1]) then return end
+    local now = clock() or 0
+    local gone = Events.expire(q, now, Events.HOLD_SECONDS)
+    if self.phase ~= "match" then
+      for _, ev in ipairs(Events.clear(q)) do gone[#gone + 1] = ev end
+    end
+    for _, ev in ipairs(gone) do
+      if ev.kind == "begin" and self.pending and self.pending.to == ev.from then
+        self.pending = nil
+      end
+      if self.relay then self.relay:send(ev.from, Wire.decline(ev.nonce, "held")) end
+    end
+    if not q.queue[1] then return end
+    if not self:screenIsQuiet() then return end
+    local ev = Events.pop(q)
+    if ev.kind == "challenge" then
+      self:answerChallenge(ev.from, ev.nonce)
+    elseif ev.kind == "begin" then
+      local pend = self.pending
+      if pend and pend.to == ev.from and pend.nonce == ev.nonce then
+        self.pending = nil
+        if self:canOpenBattle() then
+          self:beginBattle(ev.from, Engage.isHost(self.myId, ev.from), ev.nonce)
+        elseif self.relay then
+          self.relay:send(ev.from, Wire.decline(ev.nonce, "held"))
+        end
+      end
+    end
+  end
+
+  -- The nets under the exchange (POK-162).  A challenge is not held
+  -- forever: past Engage.PENDING_SECONDS with no answer it is dropped and
+  -- the other side told, so one lost reply cannot gate every battle path
+  -- on this client for the rest of the match.  And a lockstep is not
+  -- held open forever either: LinkState says hello the moment it opens
+  -- (src/link/LinkState.lua:217), so a peer who has not said a word in
+  -- Engage.LINK_OPEN_SECONDS is never coming, and the battle is closed
+  -- the way a pulled cable closes one.
+  function BR:tickPending()
+    local now = clock()
+    if not now then return end
+    local pend = self.pending
+    if pend then
+      if not pend.at then pend.at = now end
+      -- a walk-up holds pending for as long as the bot takes to arrive
+      -- (POK-85), and tickWalkUp has its own abandon
+      local walking = self.walkUp and self.walkUp.id == pend.to
+      if not walking and Engage.stale(pend, now, Engage.PENDING_SECONDS) then
+        self.pending = nil
+        Events.drop(self.events, "begin", pend.to)
+        log:say("the challenge to %s went unanswered; dropping it", tostring(pend.to))
+        if pend.nonce ~= -1 and self.relay and not Bots.isBot(pend.to) then
+          self.relay:send(pend.to, Wire.decline(pend.nonce, "timeout"))
+        end
+      end
+    end
+    local b = self.battle
+    if b and b.at and b.channel and not b.channel.heard
+       and (now - b.at) >= Engage.LINK_OPEN_SECONDS then
+      log:say("nobody joined the battle with %s; closing it", tostring(b.opponentId))
+      b.at = nil   -- once
+      b.channel:peerGone()
+    end
   end
 
   -- The world view along one axis, in pixels, for POK-96's eyeline cap.
@@ -2064,8 +2307,29 @@ return function(mod)
     return (facing == "up" or facing == "down") and vh or vw
   end
 
+  -- The breather after a fight (POK-174): true while nothing automatic
+  -- may start another one.
+  function BR:inBreather(now)
+    local until_ = self.breatherUntil
+    if not until_ then return false end
+    now = now or clock() or 0
+    if now >= until_ then
+      self.breatherUntil = nil
+      return false
+    end
+    return true
+  end
+
+  function BR:startBreather()
+    self.breatherUntil = (clock() or 0) + Bots.BREATHER
+  end
+
   function BR:tryEngage()
     if self.status ~= "alive" or self.battle or self.pending then return end
+    -- only from a quiet screen (POK-162): a fight cannot open under a menu
+    if not self:screenIsQuiet() then return end
+    -- ...and not in the breather after a fight (POK-174)
+    if self:inBreather() then return end
     local ow = mod.world:overworld()
     local player = ow and ow.player
     if not (player and ow.map) then return end
@@ -2094,7 +2358,16 @@ return function(mod)
         others[#others + 1] = { id = id, map = p.map, x = gx, y = gy,
                                 facing = p.facing, moving = false,
                                 status = p.status,
-                                busy = p.status == "battle" }
+                                -- somebody in a fight OR a menu (POK-162):
+                                -- the challenge waits until they are back
+                                -- on the map, where they can answer it.
+                                -- A bot has no screen to be in.
+                                -- A bot is busy only mid-FIGHT (its grass
+                                -- dwell); one heading for the nurse may
+                                -- still be jumped (POK-160), and that is
+                                -- the same rule challengeTrainer applies.
+                                busy = p.status == "battle" or p.busy == "battle"
+                                  or (p.busy ~= nil and not Bots.isBot(id)) }
       end
     end
     -- terrain stops the eyeline; the other trainers on it do not, since they
@@ -2118,7 +2391,7 @@ return function(mod)
     local ow = mod.world:overworld()
     if Bots.isBot(target) then
       -- you are the aggressor: the ! over your own head, then the fight
-      self.pending = { to = target, nonce = -1, host = true }
+      self.pending = { to = target, nonce = -1, host = true, at = clock() or 0 }
       engageFlash(ow and ow.player, function()
         -- ...and then it walks over (POK-85).  pending is held until it
         -- arrives, so nothing else can start in the meantime.
@@ -2133,7 +2406,8 @@ return function(mod)
     end
     self.nonceSeq = self.nonceSeq + 1
     self.pending = { to = target, nonce = self.nonceSeq,
-                     host = Engage.isHost(self.myId, target) }
+                     host = Engage.isHost(self.myId, target), at = clock() or 0 }
+    log:say("challenging %s on sight (nonce %d)", self:nameOf(target), self.nonceSeq)
     self.relay:send(target, Wire.challenge(self.nonceSeq))
     -- and the challenger flashes while the challenge flies (POK-55)
     if ow then
@@ -2155,6 +2429,12 @@ return function(mod)
   function BR:tryBotEngage()
     if self.status ~= "alive" or self.battle or self.pending
        or self.botFight then return end
+    -- only onto a quiet screen (POK-162): a bot that spots you in a menu
+    -- would push its battle on top of it
+    if not self:screenIsQuiet() then return end
+    -- ...and not in the breather after a fight (POK-174): the bot parked
+    -- beside your last fight does not get the next one for free
+    if self:inBreather() then return end
     local ow = mod.world:overworld()
     local player = ow and ow.player
     if not (player and ow.map) or ow.transitioning then return end
@@ -2184,7 +2464,7 @@ return function(mod)
              { id = id, map = p.map, x = gx, y = gy, facing = p.facing,
                moving = false, status = "alive", busy = p.busy and true },
              me, { range = Bots.SIGHT, blocked = blocked }) == self.myId then
-          self.pending = { to = id, nonce = -1, host = true }
+          self.pending = { to = id, nonce = -1, host = true, at = clock() or 0 }
           engageFlash(self.ghosts:npcOf(id), function()
             BR:walkUpThen(id, function()
               if BR.pending and BR.pending.to == id then BR.pending = nil end
@@ -2383,6 +2663,63 @@ return function(mod)
                                   p.status, p.sprite, id))
   end
 
+  -- Which trainer's ghost stands on a cell of this map (POK-165): the
+  -- drawn cell first, since that is what the player walked into, then the
+  -- wire cell for a ghost this screen has not drawn yet.
+  function BR:trainerAtCell(mapId, x, y)
+    local found
+    for id, p in pairs(self.players) do
+      if p.status == "alive" and p.map == mapId then
+        local gx, gy = self.ghosts:cellOf(id)
+        if (gx == x and gy == y) or (gx == nil and p.x == x and p.y == y) then
+          if not found or id < found then found = id end
+        end
+      end
+    end
+    return found
+  end
+
+  -- Pick a fight with a trainer by hand: the walk-up talk and the bump
+  -- (POK-165) both come here.  True when a challenge went out or a bot's
+  -- walk-up began; false when nothing could start -- a fight or a
+  -- challenge already open, the other side out or mid-fight, a flee's
+  -- grace, or (for a bump) a screen in the way.  A human in a MENU is
+  -- still challenged: their queue answers when they are back (POK-162).
+  function BR:challengeTrainer(id, how)
+    if not (self.phase == "match" and self.status == "alive") then return false end
+    local p = self.players[id]
+    if not (p and p.status == "alive") then return false end
+    if self.battle or self.pending or self.botFight then return false end
+    if how ~= "walking up" and not self:screenIsQuiet() then return false end
+    if self:fleeAvoid(true)[id] then return false end
+    if p.busy == "battle" then return false end
+    local ow = mod.world:overworld()
+    if Bots.isBot(id) then
+      self.pending = { to = id, nonce = -1, host = true, at = clock() or 0 }
+      engageFlash(ow and ow.player, function()
+        -- you walked into THIS one, so its stride is already over and
+        -- Bots.approach returns nil on the first beat (POK-85)
+        BR:walkUpThen(id, function()
+          if BR.pending and BR.pending.to == id then BR.pending = nil end
+          if BR.status == "alive" and not BR.battle and not BR.botFight then
+            BR:startBotBattle(id)
+          end
+        end)
+      end)
+      return true
+    end
+    if not (self.relay and self.relay:isOpen()) then return false end
+    self.nonceSeq = self.nonceSeq + 1
+    self.pending = { to = id, nonce = self.nonceSeq,
+                     host = Engage.isHost(self.myId, id), at = clock() or 0 }
+    log:say("challenging %s by %s (nonce %d)", self:nameOf(id), how, self.nonceSeq)
+    self.relay:send(id, Wire.challenge(self.nonceSeq))
+    if ow then
+      ow.emote = { npc = ow.player, frames = ENGAGE_FLASH_FRAMES, bubble = 1 }
+    end
+    return true
+  end
+
   -- ------- the walk over (POK-85)
   --
   -- The "!" said a bot had seen you and then the battle simply happened,
@@ -2431,7 +2768,14 @@ return function(mod)
     w.at = now
     -- re-aimed every step: you are free to move, and it follows
     local dir = Bots.approach(p, canWalk, { x = me.x, y = me.y })
-    if not dir or w.steps >= Bots.WALKUP_STEPS then return arrived() end
+    if not dir or w.steps >= Bots.WALKUP_STEPS then
+      -- It is here; the fight opens when the screen is ours (POK-162).  A
+      -- menu or a dialog up at this moment used to get a battle pushed on
+      -- top of it.  Now the bot waits beside you, and pending is held for
+      -- as long as it waits (tickPending skips a walk-up).
+      if not self:screenIsQuiet() then return end
+      return arrived()
+    end
     w.steps = w.steps + 1
     local d = Bots.DELTA[dir]
     p.facing = dir
@@ -2475,7 +2819,9 @@ return function(mod)
   function BR:botRecord(id)
     local rec = self.botRecords[id]
     if not rec then
-      rec = Bots.newRecord(self.matchSeed, id, self.game and self.game.data)
+      -- from this match's zone (POK-177), which every client derived
+      rec = Bots.newRecord(self.matchSeed, id, self.game and self.game.data,
+                           self.safariPool)
       self.botRecords[id] = rec
     end
     if not rec.bag then
@@ -2773,7 +3119,12 @@ return function(mod)
     -- so the host's own trainer was invisible to every same-map hunt: on a
     -- solo match no bot ever walked at the player at all, and "hunt the
     -- nearest trainer, bot or human" only ever meant remote humans.
-    local meHere = (self.phase == "match" and self.status == "alive")
+    --
+    -- Not in the breather after a fight (POK-174): a player who just
+    -- came out of one is not prey for the length of it, so the bots on
+    -- the map walk at each other instead.
+    local meHere = (self.phase == "match" and self.status == "alive"
+                    and not self:inBreather(now))
       and here() or nil
     for id, p in pairs(self.players) do
       -- a bot on its way over is not also strolling somewhere (POK-85),
@@ -2843,13 +3194,22 @@ return function(mod)
           -- own the next beat.  tickBotFights stays ungated: two bots
           -- that blunder into each other still fight, or nobody thins
           -- the roster.
+          --
+          -- A trainer who is FIGHTING is not prey (POK-174).  The bot in
+          -- our battle stands frozen beside us, and every other bot on the
+          -- map used to pick it as the nearest trainer, walk up, and park
+          -- -- excluded from tickBotFights as the one we are fighting, so
+          -- nothing resolved them -- until the fight ended and the parked
+          -- bot took us on the spot.  Skipping it (and a peer marked
+          -- mid-fight) sends them at each other.
           local prey
           if not Bots.wantsHeal(self:botRecord(id)) then
             if meHere and meHere.mapId == p.map then
               prey = { x = meHere.x, y = meHere.y }
             end
             for otherId, o in pairs(self.phase == "match" and self.players or {}) do
-              if otherId ~= id and o.status == "alive" and o.map == p.map then
+              if otherId ~= id and o.status == "alive" and o.map == p.map
+                 and otherId ~= self.botFight and o.busy ~= "battle" then
                 if not prey or (math.abs(o.x - p.x) + math.abs(o.y - p.y))
                    < (math.abs(prey.x - p.x) + math.abs(prey.y - p.y)) then
                   prey = o
@@ -4064,6 +4424,22 @@ return function(mod)
         end
       end
     end
+    -- A step INTO another trainer is the engage gesture (POK-165).  Ghosts
+    -- are not solid any more -- being body-blocked in a doorway was pure
+    -- friction -- so the bump is read here, at the attempt: if a fight can
+    -- start it starts, and the step is refused the way a wall refuses one,
+    -- so the two stand face to face like a route trainer's approach.  If
+    -- nothing can start (a challenge already out, the other side in a
+    -- fight, a flee's grace) the step goes through, which is exactly the
+    -- unblocking this is for.
+    if ow and ctx and ctx.mover == ow.player and ctx.map
+       and BR.phase == "match" and BR.status == "alive" then
+      local id = BR:trainerAtCell(ctx.map.id, ctx.toX, ctx.toY)
+      if id and BR:challengeTrainer(id, "bumping") then
+        ctx.reason = "engage"
+        return false
+      end
+    end
     return next(allowed, ctx)
   end)
 
@@ -4093,7 +4469,8 @@ return function(mod)
     local from = mon.level
     local oldMax, oldHp = (mon.stats and mon.stats.hp or 0), (mon.hp or 0)
     mon.level = target
-    Pokemon.learnMovesFromDayCare(game.data, mon, def, from, target)
+    -- the rung's moves, never at the cost of a taught one (POK-172)
+    Levels.learn(game.data, mon, def, from, target)
     mon.stats = Stats.calc(def, target, mon.dvs, mon.statExp)
     mon.hp = Levels.carryHp(oldMax, oldHp, mon.stats.hp)
     local okExp, exp = pcall(Growth.expForLevel, def.growthRate, target,
@@ -4108,7 +4485,7 @@ return function(mod)
       Evolution.apply(game, mon, evo, "LEVEL")
       local newDef = game.data.pokemon[mon.species]
       if newDef then
-        Pokemon.learnMovesFromDayCare(game.data, mon, newDef, from, target)
+        Levels.learn(game.data, mon, newDef, from, target)
       end
     end
     return true
@@ -4146,59 +4523,111 @@ return function(mod)
     if BRMenu.say(mod, q[1].text) then table.remove(q, 1) end
   end
 
-  -- An online match never waits on a read (POK-54).  Any dialog left open
-  -- five continuous seconds gets pressed through -- one A a second until
-  -- the runner is quiet.  Plain-text says are the common case; the rare
-  -- prompt resolves to its default rather than holding the match hostage.
+  -- An online match never waits on a read (POK-54; the ceiling was five
+  -- seconds, POK-169/170 make it THREE, PER BOX).  Any text left unread
+  -- that long is pressed through: a plain say advances, the rare prompt
+  -- resolves to its default rather than holding the match hostage.  A
+  -- press of your own still advances at once -- this is a ceiling, not a
+  -- cadence.  Three surfaces, one rule:
+  --
+  --   the overworld's runner (signs, NPC chatter, the mod's own says);
+  --   a TextBox pushed on its own (a gift, an ask);
+  --   battle text -- link, bot, route trainer and wild alike -- where the
+  --   press is B, never A (POK-66): B advances text exactly like A and in
+  --   any menu BACKS OUT instead of choosing, so the watchdog keeps a
+  --   fight moving and can never pick a move.  A link battle's text is
+  --   paced locally on each side (only the moves are lockstep), which is
+  --   what POK-65's watchdog already relied on.
+  local AUTO_ADVANCE_SECONDS = 3
   function BR:tickAutoResolve(game)
     if not self.matchWorld then
-      self.runnerBusySince = nil
-      self.linkWaitSince = nil
+      self.runnerBusySince, self.battleTextSince, self.boxSince = nil, nil, nil
       return
     end
     local now = clock()
-    -- A link battle's text waits auto-advance too (POK-65): the intro and
-    -- turn messages cannot be parked on forever, so a silent player always
-    -- drifts to the move menu, where the shot clock (POK-59) takes over.
-    -- The menu and the wait-for-remote phases are exempt -- this never
-    -- picks a move -- and the party/bag screens sit above the battle on
-    -- the stack, so top == battle rules them out on its own.
+    if not (game and now) then return end
+    local top = game.stack and game.stack:top()
+    local input = game.input
+    local function press(btn)
+      if input and input.pressQueue then table.insert(input.pressQueue, btn) end
+    end
+
+    -- battle text waiting on a button: msgWaiting is the CONT arrow
+    -- between lines, msgPrompt the end of a message.  The party and bag
+    -- screens sit ABOVE the battle on the stack, so top == battle rules
+    -- them out on its own, and the move menu is not "messages" at all.
     local lb = self.localBattle
-    local top = game and game.stack and game.stack:top()
-    if now and lb and lb.kind == "link" and top == lb
-       and lb.phase ~= "menu" and lb.phase ~= "waitBoth"
-       and lb.phase ~= "waitRemote" then
-      self.linkWaitSince = self.linkWaitSince or now
-      if (now - self.linkWaitSince) >= 5
-         and not (self.lastAutoA and (now - self.lastAutoA) < 1) then
-        self.lastAutoA = now
-        if game.input and game.input.pressQueue then
-          -- B, never A (POK-66): B advances text exactly like A, but in
-          -- any menu it BACKS OUT instead of choosing -- the watchdog can
-          -- keep a stalled duel moving yet can never pick a move.  Full
-          -- silence still drifts to the action menu, where the POK-59
-          -- clock forfeits it.
-          table.insert(game.input.pressQueue, "b")
+    if lb and top == lb then
+      local waiting = lb.phase == "messages" and (lb.msgWaiting or lb.msgPrompt)
+      if waiting then
+        self.battleTextSince = self.battleTextSince or now
+        if (now - self.battleTextSince) >= AUTO_ADVANCE_SECONDS then
+          self.battleTextSince = nil
+          press("b")
         end
+      else
+        self.battleTextSince = nil
       end
-    else
-      self.linkWaitSince = nil
+      self.runnerBusySince, self.boxSince = nil, nil
+      return
     end
-    -- a battle on the stack silences the runner watchdog (POK-66): a
-    -- script-started trainer fight keeps the runner busy for the whole
-    -- battle, and pressing A into it picks moves nobody chose.  Battle
-    -- text paces like vanilla; only the overworld's own dialogs resolve.
-    if self.localBattle then self.runnerBusySince = nil return end
+    self.battleTextSince = nil
+    -- a battle under something else on the stack: those screens are the
+    -- player's own, and pressing into them picks things
+    if self.localBattle then
+      self.runnerBusySince, self.boxSince = nil, nil
+      return
+    end
+
     local ow = mod.world:overworld()
-    local busy = ow and ow.runner and ow.runner.isRunning and ow.runner:isRunning()
-    if not (busy and now) then self.runnerBusySince = nil return end
-    self.runnerBusySince = self.runnerBusySince or now
-    if (now - self.runnerBusySince) < 5 then return end
-    if self.lastAutoA and (now - self.lastAutoA) < 1 then return end
-    self.lastAutoA = now
-    if game and game.input and game.input.pressQueue then
-      table.insert(game.input.pressQueue, "a")
+    -- a TextBox on top -- the runner's own show_text pushes one and waits
+    -- under it, so this is the common case, not the rare one -- waiting on
+    -- A: `waiting` at a page end or a CONT arrow, `done` on the last page
+    local okTB, TextBox = pcall(require, "src.render.TextBox")
+    if okTB and top and top ~= ow and getmetatable(top) == TextBox then
+      if top.waiting or top.done then
+        self.boxSince = self.boxSince or now
+        if (now - self.boxSince) >= AUTO_ADVANCE_SECONDS then
+          self.boxSince = nil
+          press("a")
+        end
+      else
+        self.boxSince = nil
+      end
+      self.runnerBusySince = nil
+      return
     end
+    self.boxSince = nil
+
+    -- the overworld's own runner
+    local busy = ow and ow.runner and ow.runner.isRunning and ow.runner:isRunning()
+    if not busy then
+      self.runnerBusySince = nil
+      return
+    end
+    self.runnerBusySince = self.runnerBusySince or now
+    if (now - self.runnerBusySince) < AUTO_ADVANCE_SECONDS then return end
+    -- the press starts the NEXT box's three seconds
+    self.runnerBusySince = now
+    press("a")
+  end
+
+  -- THE LAST TURN'S TEXT DOES NOT FLASH OVER THIS ONE (POK-173).
+  --
+  -- An engine bug, worked around here because the engine a player runs
+  -- is not one we ship.  BattleState draws the text area during
+  -- "messages" while `current`, `animPlaying` OR `msgHold` is set, and
+  -- msgHold -- "keep the typed page behind the move animation" (#296) --
+  -- is set by every auto page (the "X used MOVE!" line) and cleared only
+  -- by the NEXT startMessage.  It survives the return to the move menu,
+  -- so the first frames of the next turn -- a queued fn, a hold, before
+  -- any text starts -- draw the STALE lines: "PONYTA used EMBER" flashing
+  -- before "CUBONE used TACKLE".  The hold's job is over the moment the
+  -- battle is at the menu, so it is dropped there, every tick, and the
+  -- next turn opens on a clean box.
+  function BR:tickBattleText()
+    local lb = self.localBattle
+    if lb and lb.phase == "menu" and lb.msgHold then lb.msgHold = nil end
   end
 
   function BR:tickLevels()
@@ -4329,17 +4758,22 @@ return function(mod)
   -- computed by whoever fell and broadcast (D8), so this one client's view
   -- is authoritative.
   --
-  -- The doorway rule is not about looking untidy.  A ball is a solid
-  -- runtime object and a warp only fires when you STEP ON it, so a ball on
-  -- a mart's door shuts that building for the rest of the match -- for
-  -- everyone, since every client lays the spill out the same way.  A
-  -- doorway is walkable by design, which is exactly why walkability alone
-  -- never caught it.
+  -- The doorway rule is not about looking untidy.  A warp fires when you
+  -- STEP ON it, so a ball on a mart's door can never be stood on to be
+  -- picked up -- and while balls were solid (before POK-175) it shut that
+  -- building for the rest of the match, for everyone, since every client
+  -- lays the spill out the same way.  A doorway is walkable by design,
+  -- which is exactly why walkability alone never caught it.
+  --
+  -- Nor on another ball (POK-175).  Solid balls kept each other apart
+  -- through the occupancy check; passable ones would stack, and a ball
+  -- under a ball is one nobody can see until the top one goes.
   local function spillCellFree(data, mapId, x, y)
     if not Spawn.walkable(data.maps, data.tilesets, mapId, x, y) then
       return false
     end
     if Spawn.isWarp(data.maps, mapId, x, y) then return false end
+    if BR.spills and BR.spills:keyAt(mapId, x, y) then return false end
     local ow = mod.world:overworld()
     if ow and ow.map and ow.map.id == mapId and ow.npcs then
       local Collision = require("src.world.Collision")
@@ -4418,57 +4852,142 @@ return function(mod)
     return true
   end
 
-  -- A fallen trainer's BAG (POK-25): what it holds, then take or leave.
-  -- The take is claimed for everyone like a ball's, and the contents land
-  -- in our bag the way the loot message used to put them there.
+  -- A fallen trainer's BAG (POK-25, reshaped by POK-176): A on it opens the
+  -- bag itself -- the engine's own item list, holding only what this bag
+  -- holds -- and each row offers USE / TAKE / CANCEL.  No text first: the
+  -- old flow read the contents out two lines a page, asked "Take it?",
+  -- then asked again whether to open the PACK, and a player under fog
+  -- pressure pressed through five boxes to reach one POTION.
+  --
+  -- Taking is PER ITEM on the wire (Wire.took with item and count,
+  -- PROTOCOL 11): what you leave stays on the ground for the next
+  -- trainer, and every client's copy of the bag gets lighter by the same
+  -- amount.  The money is a row of its own, TAKE only.  USE takes the
+  -- item and then runs the engine's own use -- the PACK opens on that
+  -- row with USE already chosen -- so a POTION picks its target, a TM
+  -- teaches, a stone evolves, exactly as from the START menu.
+  local MONEY_ROW = "money"
+
+  function BR:lootRows(key)
+    local game = self.game
+    local ball = self.spills:get(key)
+    local bag = ball and ball.bag
+    local rows = {}
+    for _, it in ipairs(bag and bag.items or {}) do
+      local def = game.data.items and game.data.items[it.id]
+      rows[#rows + 1] = { value = it.id, label = (def and def.name) or it.id,
+                          right = "x" .. tostring(it.n) }
+    end
+    if bag and (bag.money or 0) > 0 then
+      rows[#rows + 1] = { value = MONEY_ROW, label = ("¥%d"):format(bag.money) }
+    end
+    return rows
+  end
+
+  -- Redraw the open loot list after the bag changed -- ours or a rival's
+  -- take -- and close it when the bag is gone.
+  function BR:refreshLoot(key)
+    local loot = self.lootMenu
+    if not (loot and loot.key == key) then return end
+    local list = loot.list
+    list.items = self:lootRows(key)
+    if #list.items == 0 then
+      self.lootMenu = nil
+      list:close()
+      return
+    end
+    list.index = math.max(1, math.min(list.index or 1, #list.items))
+  end
+
   function BR:openBag(key, ball)
     local game = self.game
-    local data = game.data
-    local bag = ball.bag
-    local who = bag.name or "Someone"
-    local lines = {}
-    for _, it in ipairs(bag.items or {}) do
-      local def = data.items and data.items[it.id]
-      lines[#lines + 1] = ("%s x%d"):format((def and def.name) or it.id, it.n)
-    end
-    if (bag.money or 0) > 0 then lines[#lines + 1] = ("¥%d"):format(bag.money) end
-    if #lines == 0 then lines[1] = "nothing" end
-    -- two lines a page, the owner's name on the first
-    local pages = { ("%s's BAG:\n%s"):format(who, lines[1]) }
-    local i = 2
-    while i <= #lines do
-      pages[#pages + 1] = lines[i] .. (lines[i + 1] and ("\n" .. lines[i + 1]) or "")
-      i = i + 2
-    end
-    local TextBox = require("src.render.TextBox")
-    game.stack:push(TextBox.new(game, table.concat(pages, "\f") .. "\fTake it?", nil, {
-      choice = function(yes)
-        if not yes then return end
-        if not self.spills:get(key) then
-          say("It's gone --\nsomeone was\nquicker.")
-          return
-        end
-        self.spills:take(key)
-        if self.relay then self.relay:broadcast(Wire.took(key)) end
-        local save = game.save
-        for _, it in ipairs(bag.items or {}) do
-          save.inventory[it.id] = math.min(99, (save.inventory[it.id] or 0) + it.n)
-        end
-        save.bagOrder = nil -- rebuilt from the inventory on the next PACK open
-        save.money = math.min(999999, (save.money or 0) + (bag.money or 0))
-        -- straight to using it (POK-73): the moment you loot is the moment
-        -- you want the POTION -- offer the PACK without the START round-trip
-        game.stack:push(TextBox.new(game,
-          ("You took %s's\nBAG!\fOpen the PACK\nnow?"):format(who), nil, {
-          choice = function(open)
-            if not open then return end
-            local BagMenu = require("src.ui.BagMenu")
-            game.stack:push(BagMenu.new(game, {}))
-          end,
-        }))
-      end,
-    }))
+    local who = ball.bag.name or "Someone"
+    local ListMenu = require("src.ui.ListMenu")
+    local list
+    list = ListMenu.new(game, (who .. "'s BAG"):sub(1, 17), self:lootRows(key), {
+      kind = "loot",
+      itemBox = true,
+      onChoose = function(row) self:lootChoose(key, row.value) end,
+    })
+    game.stack:push(list)
+    self.lootMenu = { key = key, list = list }
     return true
+  end
+
+  -- Move `id` (all of it, or the money) from the bag on the ground into
+  -- ours, tell the room, and redraw.  A bag we cannot fit refuses whole:
+  -- the item stays on the ground rather than half of it vanishing.
+  function BR:lootTake(key, id)
+    local game = self.game
+    local save = game.save
+    local ball = self.spills:get(key)
+    local bag = ball and ball.bag
+    if not bag then
+      say("It's gone --\nsomeone was\nquicker.")
+      self:refreshLoot(key)
+      return false
+    end
+    if id == MONEY_ROW then
+      if (bag.money or 0) <= 0 then self:refreshLoot(key) return false end
+      local got = bag.money
+      save.money = math.min(999999, (save.money or 0) + got)
+      self.spills:takeItem(key, nil, nil, true)
+      if self.relay then self.relay:broadcast(Wire.took(key, MONEY_ROW, 1, true)) end
+      self:refreshLoot(key)
+      say(("Took ¥%d!"):format(got))
+      return true
+    end
+    local n
+    for _, it in ipairs(bag.items or {}) do
+      if it.id == id then n = it.n break end
+    end
+    if not n then self:refreshLoot(key) return false end
+    local Bag = require("src.inventory.Bag")
+    if not Bag.add(save, id, n, game.data) then
+      say("You can't carry\nany more!")
+      return false
+    end
+    self.spills:takeItem(key, id, n)
+    if self.relay then self.relay:broadcast(Wire.took(key, id, n)) end
+    self:refreshLoot(key)
+    return true
+  end
+
+  -- USE from the loot list: take it, then the PACK opens on that row with
+  -- USE already chosen, which is the engine's own use path from here on.
+  function BR:lootUse(key, id)
+    if not self:lootTake(key, id) then return false end
+    local game = self.game
+    local BagMenu = require("src.ui.BagMenu")
+    local pack = BagMenu.new(game, {})
+    local at
+    for i, row in ipairs(pack.items or {}) do
+      if row.value == id then at = i break end
+    end
+    if not at then return false end
+    pack.index = at
+    game.stack:push(pack)
+    -- the PACK's own A: the USE / TOSS box, whose first row is USE
+    if pack.onChoose then pack.onChoose(pack.items[at]) end
+    local sub = game.stack:top()
+    if sub ~= pack and sub and sub.items and sub.items[1] and sub.items[1].onSelect then
+      game.stack:pop()
+      sub.items[1].onSelect()
+    end
+    return true
+  end
+
+  function BR:lootChoose(key, id)
+    local game = self.game
+    local Menu = require("src.ui.Menu")
+    local rows = {}
+    if id ~= MONEY_ROW then
+      rows[#rows + 1] = { label = "USE", onSelect = function() self:lootUse(key, id) end }
+    end
+    rows[#rows + 1] = { label = "TAKE", onSelect = function() self:lootTake(key, id) end }
+    rows[#rows + 1] = { label = "CANCEL", onSelect = function() end }
+    -- the PACK's own USE / TOSS box geometry (BagMenu)
+    game.stack:push(Menu.new(game, rows, { tx = 13, ty = 10, tw = 7, th = 2 * #rows + 1 }))
   end
 
   -- Take a claimed spill ball: build the mon at 1 HP exactly as it fell,
@@ -4492,6 +5011,21 @@ return function(mod)
       dex.seen[ball.species] = true
       dex.owned[ball.species] = true
     end
+    -- A ball that changed hands is a trade (POK-179): KADABRA, MACHOKE,
+    -- GRAVELER and HAUNTER evolve on pickup, the engine's own trade
+    -- movie and all, when somebody ELSE dropped them -- a bot or a Kanto
+    -- trainer counts.  Your own drop picked back up is not a trade.  The
+    -- joined line first, then the movie, so the beat reads in order.
+    local Evolution = require("src.pokemon.Evolution")
+    local trade = { kind = "trade" }
+    if not Spills.isOwn(key, self.myId) and Evolution.pendingFor(game, mon, trade) then
+      local TextBox = require("src.render.TextBox")
+      log:say("TRADE: %s out of %s's ball evolves on pickup",
+              tostring(name), tostring(Spills.ownerOf(key)))
+      game.stack:push(TextBox.new(game, ("%s joined\nyour party!"):format(name),
+        function() Evolution.request(game, mon, trade) end))
+      return
+    end
     say(("%s joined\nyour party!"):format(name))
   end
 
@@ -4504,8 +5038,11 @@ return function(mod)
     local here = game and mod.world:current()
     if not (game and here and here.mapId and mon and mon.species) then return end
     local data = game.data
+    -- the same cell rule as a fall's ring (POK-175): this path asked for
+    -- bare walkability, which is how a traded-away mon still landed on a
+    -- doorway after POK-94 closed every other road there
     local cells = Spills.placeAround(here.x, here.y, 1, function(x, y)
-      return Spawn.walkable(data.maps, data.tilesets, here.mapId, x, y)
+      return spillCellFree(data, here.mapId, x, y)
     end)
     local cell = cells[1] or { x = here.x, y = here.y }
     self.dropSeq = (self.dropSeq or 0) + 1
@@ -5317,6 +5854,10 @@ return function(mod)
   mod.events:on("battle.ended", function(ev)
     BR.localBattle = nil
     BR:reclaimGhostLead()   -- the Safari's stand-in leaves with the screen
+    -- a breather after any fight in a match (POK-174): a bot's, a route
+    -- trainer's, a wild one's -- the queue of bots outside does not care
+    -- which kind you just had
+    if BR.phase == "match" then BR:startBreather() end
     -- A battle that never ran is not a defeat (POK-134).  The engine
     -- refuses a wild battle against an empty party -- BattleState marks it
     -- dead and emits `lose` with `skipped` set, then forces the blackout --
@@ -5429,7 +5970,7 @@ return function(mod)
     broadcastPlace()
   end)
 
-  function BR:beginBattle(opponentId, isHost, _nonce)
+  function BR:beginBattle(opponentId, isHost, nonce)
     -- POK-145: the `accept` message handler had no phase check at all, and
     -- onChallenge's own is spent when the challenge ARRIVES, not when the
     -- flash that follows it opens the fight.
@@ -5437,7 +5978,11 @@ return function(mod)
     local channel = Channel.new(self.relay, opponentId, {
       onClose = function() BR:onBattleClosed(opponentId) end,
     })
-    self.battle = { channel = channel, opponentId = opponentId, isHost = isHost }
+    -- the nonce names the challenge this fight answers, so a decline
+    -- carrying it can close a lockstep nobody joined (POK-162); `at` is
+    -- when the peer's hello clock started
+    self.battle = { channel = channel, opponentId = opponentId, isHost = isHost,
+                    nonce = nonce, at = clock() }
     self.lastOpponent = opponentId
     self.status = "battle"
     self.pending = nil
@@ -5484,6 +6029,7 @@ return function(mod)
       end
     end
     BR.fleeing = nil
+    BR:startBreather()   -- POK-174, the link battle's turn
     -- No "a refused battle is not a defeat" guard here on purpose: a
     -- refusal cannot reach this event.  LinkState builds this payload by
     -- hand -- { result, myParty, theirParty, peerName, role } -- so there
@@ -5654,6 +6200,12 @@ return function(mod)
 
     -- a bot walking over to fight you, one step per beat (POK-85)
     BR:tickWalkUp()
+    -- the challenges waiting for a quiet screen, and the nets under the
+    -- exchange (POK-162)
+    BR:tickEvents()
+    BR:tickPending()
+    -- ...and the route trainers' sight lines stay down (POK-163)
+    BR:tickTrainerTalk()
 
     -- the quick-play countdown: a lobby that starts itself
     if relay and relay:isOpen() and BR.phase == "lobby"
@@ -5787,6 +6339,7 @@ return function(mod)
     -- and neither they nor the engine's own lines may hold the match:
     -- five silent seconds presses any dialog through (POK-54)
     BR:tickAutoResolve(game)
+    BR:tickBattleText()
 
     if relay and relay:isOpen() and BR:inRound() then
       -- The mark goes out ABOVE the position block (POK-113), not inside
@@ -6073,7 +6626,13 @@ return function(mod)
     -- get their live talk table.
     local okD, EngineData = pcall(require, "src.core.Data")
     for mapId, def in pairs((okD and EngineData and EngineData.maps) or {}) do
-      local contribution = { onInteract = fieldMoveInteract }
+      -- Ranked above the default (POK-163): MapScripts merges talk tables
+      -- first-wins by priority, ties to the LATER registration, so any
+      -- other mod that names a route trainer's TEXT -- even with `false`
+      -- -- would outrank this one and hand the trainer its sight line
+      -- back for the length of a match.  Out of a session the table is
+      -- empty, so the rank changes nothing for a real playthrough.
+      local contribution = { onInteract = fieldMoveInteract, priority = 50 }
       for _, o in ipairs(def.objects or {}) do
         if o.trainerClass and o.text then
           trainerTalk[mapId] = {}
@@ -6100,11 +6659,15 @@ return function(mod)
     game.stack:push(TextBox.new(game, after, done))
   end
 
+  -- Returns how many handlers this call installed and on how many maps:
+  -- the whole roster at onStart, and nothing at all on a re-check that
+  -- found the tables intact.
   function BR:armTrainerTalk()
     local data = self.game and self.game.data
-    if not data or not data.maps then return end
+    if not data or not data.maps then return 0, 0 end
     local okMS, MapScripts = pcall(require, "src.script.MapScripts")
-    if not okMS then return end
+    if not okMS then return 0, 0 end
+    local armed, maps = 0, 0
     for mapId, T in pairs(trainerTalk) do
       local touched = false
       local def = data.maps[mapId]
@@ -6113,9 +6676,41 @@ return function(mod)
            and not MapScripts.baseTalk(mapId, o.text) then
           T[o.text] = trainerTalkHandler
           touched = true
+          armed = armed + 1
         end
       end
-      if touched then MapScripts.invalidate(mapId) end
+      if touched then
+        maps = maps + 1
+        MapScripts.invalidate(mapId)
+      end
+    end
+    return armed, maps
+  end
+
+  -- The lever, re-checked (POK-163).  A playtest saw route trainers
+  -- engage on sight in a Quick Play match, and nothing reproduces it: the
+  -- POK-150 smoke, the standard flow, and a relay-hosted quick play with
+  -- the default Safari all count every generic trainer armed at every
+  -- milestone and stand in a sight line unbothered.  Whatever emptied the
+  -- tables on that client, the cheap answer is to keep asking:
+  -- armTrainerTalk skips what is already armed, so re-running it costs a
+  -- walk over the roster and nothing else -- and a re-arm that FOUND
+  -- something missing is logged, which turns the next sighting into
+  -- evidence rather than a report.
+  -- how often a match re-checks; armTrainerTalk skips what is armed
+  local TRAINER_TALK_TICKS = 120
+  function BR:tickTrainerTalk()
+    if not self:inSession() then
+      self.talkCheck = nil
+      return
+    end
+    self.talkCheck = (self.talkCheck or 0) + 1
+    if self.talkCheck < TRAINER_TALK_TICKS then return end
+    self.talkCheck = 0
+    local armed, maps = self:armTrainerTalk()
+    if armed > 0 then
+      log:warn("route trainers: %d talk handler(s) on %d map(s) were missing "
+               .. "mid-session and have been re-armed (POK-163)", armed, maps)
     end
   end
 
@@ -6213,6 +6808,33 @@ return function(mod)
         say("Sorry -- we're\nclosed! The fog\nis coming!")
         return
       end
+      -- The stone counter (POK-178): Celadon's 4F clerk sells every
+      -- evolution stone for the length of a match, MOON STONE included.
+      -- The engine opens a mart from this same entry (OverworldController
+      -- "marts / nurses / PCs via TX_SCRIPT markers"): greeting, then the
+      -- ShopMenu screen over the mart's list.  Same two steps here, over
+      -- the extended list -- and no next(), which is how every other
+      -- answer in this hook keeps the vanilla path from running too.
+      -- Required in the hook: the outer function is at LuaJIT's
+      -- sixty-upvalue cap.
+      if entry and entry.mart then
+        local Shops = require("mods.battle_royale.lib.shops")
+        local stock = Shops.stock(entry.label, entry.mart)
+        if stock then
+          if BR.moonStonePrice == nil then
+            BR.moonStonePrice = Shops.priceMoonStone(data)
+          end
+          npc:facePlayer(ow.player)
+          local TextBox = require("src.render.TextBox")
+          local Screens = require("src.ui.Screens")
+          local romText = require("src.core.RomText")
+          local game = BR.game
+          game.stack:push(TextBox.new(game,
+            romText(data, "_PokemartGreetingText", "Hi there!\nMay I help you?"),
+            function() Screens.push(game, "ShopMenu", stock) end))
+          return
+        end
+      end
     end
     -- the gate worker sells no admission during a round (POK-40): the
     -- talk path could otherwise charge a second 500 and re-open the zone
@@ -6266,33 +6888,25 @@ return function(mod)
     if not (BR.game and BR.relay and BR.relay:isOpen()) then return end
     if BR.status == "out" then return end   -- a camera has nobody to face
     npc:facePlayer(ow.player)
-    -- talking counts as engaging if they are alive and we are
-    if BR.phase == "match" and BR.status == "alive" and BR.players[id]
-       and BR.players[id].status == "alive"
-       and not BR.battle and not BR.pending and not BR.botFight then
-      local owE = mod.world:overworld()
-      if Bots.isBot(id) then
-        BR.pending = { to = id, nonce = -1, host = true }
-        engageFlash(owE and owE.player, function()
-          -- you walked into THIS one, so its stride is already over and
-          -- Bots.approach returns nil on the first beat (POK-85)
-          BR:walkUpThen(id, function()
-            if BR.pending and BR.pending.to == id then BR.pending = nil end
-            if BR.status == "alive" and not BR.battle and not BR.botFight then
-              BR:startBotBattle(id)
-            end
-          end)
-        end)
-        return
-      end
-      BR.nonceSeq = BR.nonceSeq + 1
-      BR.pending = { to = id, nonce = BR.nonceSeq,
-                     host = Engage.isHost(BR.myId, id) }
-      BR.relay:send(id, Wire.challenge(BR.nonceSeq))
-      if owE then
-        owE.emote = { npc = owE.player, frames = ENGAGE_FLASH_FRAMES, bubble = 1 }
-      end
-    end
+    -- talking counts as engaging if they are alive and we are: the same
+    -- fight a bump starts (POK-165), so both live in challengeTrainer
+    BR:challengeTrainer(id, "walking up")
+  end)
+
+  -- A on the tile you stand on (POK-175).  The engine's A press only
+  -- looks at the FACED cell, and a passable ball is one you can stand on;
+  -- when the press resolves to nothing -- a wall, grass, open ground --
+  -- the ball under your feet is what you meant.  Anything the faced cell
+  -- answers (an NPC, a sign, a ball ahead) keeps answering: facing wins,
+  -- as it does everywhere else in Kanto.
+  mod.events:on("world.interacted", function(ev)
+    if not (ev and ev.kind == "none") then return end
+    if not (BR:inRound() and BR.status == "alive"
+            and not BR.battle and not BR.botFight) then return end
+    local here = mod.world:current()
+    if not (here and here.mapId == ev.mapId) then return end
+    local key = BR.spills:keyAt(here.mapId, here.x, here.y)
+    if key then BR:openSpill(key) end
   end)
 
   -- ------- the fog, drawn on the TOWN MAP
@@ -6573,6 +7187,17 @@ return function(mod)
     local sheet, bubbles = emoteSheet(game)
     local cam = ow.camera
     if cam and sheet then
+      -- the world pass's own size and scale (POK-166); 160x144 at 1 when
+      -- the renderer cannot say
+      local markVw, markVh, markZ = 160, 144, 1
+      local okV, vw, vh = pcall(function() return game.renderer:worldViewSize() end)
+      if okV and vw and vh then markVw, markVh = vw, vh end
+      local okZ, z = pcall(function()
+        local Zoom = require("src.render.Zoom")
+        local Sp = (viewport and viewport.scale) or 1
+        return Zoom.scale(Sp) / Sp
+      end)
+      if okZ and z and z > 0 then markZ = z end
       local h = here()
       for id, p in pairs(BR.players) do
         -- On OUR map and actually drawn.  Both halves matter: a bot that
@@ -6590,15 +7215,19 @@ return function(mod)
             local quad = emoteQuad(bubbles, sheet,
                                    p.busy == "battle" and "EXCLAMATION_BUBBLE"
                                    or "QUESTION_BUBBLE")
-            -- the engine's own bubble slot, so it lands exactly where a
-            -- trainer-sight "!" does (fxEmote: px + 4, py - 14)
-            local mx = math.floor(npc.px - cam.x) + 4
-            local my = math.floor(npc.py - cam.y) - 14
+            -- The engine's own bubble slot (fxEmote: px + 4, py - 14),
+            -- mapped from the WORLD pass onto this canvas (POK-166): the
+            -- world is drawn at worldViewSize() and the zoom's scale, both
+            -- centred in the viewport, so a mark computed in world pixels
+            -- and drawn here straight sat half the extra view off the
+            -- sprite -- "two tiles right and one up" on a wide window.
+            local mx, my = Ghosts.markAt(npc.px, npc.py, cam, markVw, markVh, markZ)
+            mx, my = math.floor(mx), math.floor(my)
             -- only when it would land on the screen: a bubble for somebody
             -- across a big map is a smear at the edge, not information
             if quad and mx >= -16 and mx <= 160 and my >= -16 and my <= 144 then
               g.setColor(1, 1, 1, 1)
-              g.draw(sheet, quad, mx, my)
+              g.draw(sheet, quad, mx, my, 0, markZ, markZ)
             end
           end
         end
@@ -6786,6 +7415,8 @@ return function(mod)
   mod.exports.setFill = function(n) return BR:setFill(n) end
   mod.exports.botsAtStart = function() return BR:botsAtStart() end
   mod.exports.startsIn = function() return BR:startsIn() end
+  mod.exports.readyUp = function() return BR:readyUp() end
+  mod.exports.isQuick = function() return BR.quick == true end
   mod.exports.join = function(code) return BR:join(code) end
   mod.exports.start = function() return BR:startMatch() end
   mod.exports.leave = function() return BR:teardown() end
@@ -6977,15 +7608,19 @@ return function(mod)
   mod.exports.peeked = function() return BR.peeked end
   -- a driver's way to put a bag on the ground here and now: a bag-only
   -- spill two cells from where we stand (no ball to get in the way)
-  mod.exports.debugSpill = function(dx, dy, withMon)
+  mod.exports.debugSpill = function(dx, dy, withMon, owner)
     local here = mod.world:current()
     local data = BR.game and BR.game.data
     if not (here and data) then return nil, "no world" end
     local x, y = here.x + (dx or 0), here.y + (dy or 2)
     -- withMon: one ball too, so a driver can watch placeAround dodge an
-    -- occupied cell (POK-75); default stays the bag-only spill
-    local party = withMon and { { species = "RATTATA", level = 5, hp = 10 } } or {}
-    local spill = Spills.build(999, here.mapId, x, y, party,
+    -- occupied cell (POK-75); default stays the bag-only spill.  A string
+    -- names the species (POK-179's KADABRA); `owner` "me" keys the spill
+    -- as our own drop, anything else as somebody else's (999).
+    local species = type(withMon) == "string" and withMon or "RATTATA"
+    local party = withMon and { { species = species, level = 5, hp = 10 } } or {}
+    local who = (owner == "me") and (BR.myId or 0) or (owner or 999)
+    local spill = Spills.build(who, here.mapId, x, y, party,
       function(cx, cy) return spillCellFree(data, here.mapId, cx, cy) end,
       { items = { { id = "POTION", n = 1 } }, money = 500, name = "DEBUG" },
       function(cx, cy) return Spawn.isWarp(data.maps, here.mapId, cx, cy) end)
@@ -7026,6 +7661,43 @@ return function(mod)
     p.busy = kind
     return true
   end
+  -- A challenge from outside the eyeline (POK-162).  The harness needs a
+  -- challenge to LAND while the other screen is busy, and the eyeline
+  -- will not fire one at a trainer marked busy any more -- so the driver
+  -- sends it by hand, the same way tryEngage would have.
+  mod.exports.debugChallenge = function(id)
+    if not (BR.relay and BR.relay:isOpen() and BR.players[id]) then return false end
+    if BR.phase ~= "match" or BR.status ~= "alive" or BR.battle or BR.pending then
+      return false
+    end
+    BR.nonceSeq = BR.nonceSeq + 1
+    BR.pending = { to = id, nonce = BR.nonceSeq,
+                   host = Engage.isHost(BR.myId, id), at = clock() or 0 }
+    log:say("challenging %s by hand (nonce %d)", BR:nameOf(id), BR.nonceSeq)
+    BR.relay:send(id, Wire.challenge(BR.nonceSeq))
+    return true
+  end
+  -- ...what this side is holding, and what it has queued (POK-162)
+  mod.exports.pending = function()
+    local p = BR.pending
+    if not p then return nil end
+    return { to = p.to, nonce = p.nonce, host = p.host }
+  end
+  mod.exports.queued = function() return Events.count(BR.events) end
+  -- the mark's arithmetic, for a driver reading a screenshot (POK-166)
+  mod.exports.markProbe = function(id)
+    local ow = mod.world:overworld()
+    local npc = BR.ghosts:npcOf(id)
+    local cam = ow and ow.camera
+    if not (npc and cam and npc.px) then return nil end
+    local vw, vh = 160, 144
+    pcall(function() vw, vh = BR.game.renderer:worldViewSize() end)
+    local mx, my = Ghosts.markAt(npc.px, npc.py, cam, vw, vh, 1)
+    return { px = npc.px, py = npc.py, camX = cam.x, camY = cam.y, vw = vw, vh = vh,
+             mx = mx, my = my,
+             spriteX = 80 + (npc.px - cam.x - vw / 2),
+             spriteY = 72 + (npc.py - cam.y - vh / 2) }
+  end
   -- ...and one on the walk over (POK-85): a smoke needs to know the
   -- stride began, not just that a battle eventually happened
   mod.exports.walkUp = function()
@@ -7051,6 +7723,16 @@ return function(mod)
   -- the six names BR actually uses.
   local PHASES = { off = true, lobby = true, safari = true,
                    drop = true, match = true, over = true }
+  -- A poll answer the driver writes itself (POK-180): the race is a
+  -- fraction of a second wide, so a driver reproduces it by handing the
+  -- info handler a "tomorrow" answer while the real deadline is seconds
+  -- out.  Goes through the relay's own event so the wiring is what runs.
+  mod.exports.debugDailyInfo = function(secs)
+    local relay = BR.relay
+    if not (relay and relay._fire) then return false end
+    relay:_fire("info", relay, { daily = { secs = secs, at = love.timer.getTime() } })
+    return true
+  end
   mod.exports.debugPhase = function(p)
     if not PHASES[p] then return nil, "not a phase" end
     BR.phase = p
@@ -7091,7 +7773,7 @@ return function(mod)
   -- phase change.  nil clears it, the way leaving a match does.
   mod.exports.debugSafariPool = function(seed)
     if seed == nil then BR.safariPool = nil return nil end
-    BR.safariPool = Safari.pool(seed, BR.game and BR.game.data)
+    BR.safariPool, BR.safariTheme = Safari.pool(seed, BR.game and BR.game.data)
     return BR.safariPool
   end
 
@@ -7250,6 +7932,10 @@ return function(mod)
   mod.exports.serverInfo = function()
     return BR.relay and BR.relay.serverInfo or nil
   end
+  -- this match's zone and its theme (POK-118 / POK-177), for drivers
+  mod.exports.safariPool = function() return BR.safariPool, BR.safariTheme end
+  mod.exports.myId = function() return BR.myId end
+  mod.exports.botRecord = function(id) return BR:botRecord(id) end
   mod.exports.dailyPlay = function() return BR:dailyPlay() end
   mod.exports.dailyStartsIn = function() return BR:dailyStartsIn() end
   mod.exports.isDailyLobby = function() return BR.dailyLobby == true end

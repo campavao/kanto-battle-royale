@@ -3,7 +3,7 @@
 -- Each remote player is a runtime object (mod.world:spawnNpc) we drive
 -- ourselves.  Making them real NPCs rather than sprites we blit is what
 -- buys the feature for free: the tile renderer sorts them against the map,
--- Collision treats them as solid so you cannot walk through someone, and
+-- Collision knows them as entities (solid until POK-165, passable since), and
 -- OverworldState:interact finds them when you press A.
 --
 -- What we do NOT use is Handle:scriptMove -- that queues onto
@@ -26,24 +26,23 @@ local Spawn = require("mods.battle_royale.lib.spawn")
 local Ghosts = {}
 Ghosts.__index = Ghosts
 
--- May this ghost be walked through?
+-- May this ghost be walked through?  Yes (POK-165).
 --
--- Solid is the point of them -- you cannot walk through another trainer,
--- which is what makes a corridor a real place to meet somebody.  Two
--- exceptions, and both are about not sealing somebody in:
---
---   * an eliminated trainer, so a corpse cannot wall a survivor in;
---   * ANY trainer standing on a warp.  A door is walkable in order to be
---     stepped on, and a solid thing parked there closes the building for
---     everyone -- POK-94 is the same bug with a spilled Poke Ball on the
---     VIRIDIAN mart's door.  A ghost is worse than a ball, because it
---     seals the door from the INSIDE too: a peer idling in a one-exit
---     house leaves whoever is in there with no way out at all.  Bots never
---     hit this (canWalk excludes warps); a human stands wherever they like.
+-- Solid used to be the point of them -- you could not walk through
+-- another trainer, which made a corridor a real place to meet somebody --
+-- with two exceptions about not sealing anyone in (a corpse, a body
+-- parked on a warp, POK-94/POK-108).  Play said otherwise: being
+-- body-blocked in a doorway or at a Centre counter is pure friction, and
+-- a griefable one, while WALKING INTO someone is already the engage
+-- gesture.  So nobody is solid any more.  The bump is read by main.lua's
+-- collision hook at the attempt (BR:challengeTrainer), and the step is
+-- refused only for as long as a fight can actually start from it.  The
+-- signature keeps its map arguments for the callers; the one thing still
+-- not walked through is nothing at all -- a missing peer is a bug
+-- upstream, and the answer keeps its old shape for it.
 function Ghosts.passableFor(maps, mapId, peer)
   if not peer then return false end
-  if peer.status == "out" then return true end
-  return Spawn.isWarp(maps, mapId, peer.x, peer.y)
+  return true
 end
 
 -- Un-replayed steps we will walk out before snapping.  Past this a backlog
@@ -320,6 +319,22 @@ end
 function Ghosts:face(id, facing)
   local handle = self:_handle(self.ghosts[id])
   if handle and not handle:isMoving() then handle:face(facing) end
+end
+
+-- Where a mark over a ghost's head lands on the 160x144 UI canvas
+-- (POK-166).  The world is drawn at Renderer:worldViewSize() -- wider than
+-- the UI canvas whenever the window is not exactly 160N x 144N -- and at
+-- the zoom's scale, and both passes are CENTRED in the viewport.  A mark
+-- computed in world pixels and drawn on the UI canvas as they were was
+-- therefore off by half the extra view on each axis: "roughly two tiles
+-- right and one up".  `cam` is the overworld camera, (vw, vh) the world
+-- view, `z` the world scale over the UI scale (1 with no zoom).  The +4/-14
+-- is the engine's own bubble slot (fxEmote).
+function Ghosts.markAt(px, py, cam, vw, vh, z)
+  z = z or 1
+  local wx = px - cam.x + 4
+  local wy = py - cam.y - 14
+  return 80 + (wx - (vw or 160) / 2) * z, 72 + (wy - (vh or 144) / 2) * z
 end
 
 return Ghosts

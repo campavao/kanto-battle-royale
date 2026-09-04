@@ -714,8 +714,12 @@ do
               "a match that moved on abandons the walk-up")
       T.check(walk:find("return finish()", 1, true) == nil,
               "...and nothing still calls the old one-exit finish()")
-      T.check(walk:find("Bots.WALKUP_STEPS then return arrived()", 1, true) ~= nil,
+      T.check(walk:find("return arrived()", 1, true) ~= nil,
               "while the walk that ARRIVES still opens the fight (POK-85)")
+      -- ...onto a quiet screen only (POK-162): a bot standing beside a
+      -- player in a menu waits, and does not push its battle over it
+      T.check(walk:find("if not self:screenIsQuiet() then return end\n      return arrived()", 1, true) ~= nil,
+              "...and waits beside a player whose screen is busy")
       T.check(walk:find("self.pending = nil", 1, true) ~= nil,
               "an abandoned walk-up clears the pending challenge with it")
     end
@@ -859,6 +863,396 @@ do
                      1, true) ~= nil,
             "a battle that opens at \"over\" is recorded, so the funnel can "
             .. "close what no guard could refuse")
+  end
+end
+
+-- ------- the event queue's wiring (POK-162), read off the source
+--
+-- onChallenge, onAccept, tickEvents and tickPending are closures over a
+-- relay and a stack, so what can be pinned headless is that each gate is
+-- still there.  Every line below is the exact shape of the wedge: an
+-- answer given under an occupied stack, a pending nothing could clear, a
+-- lockstep nobody joined.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the event-queue scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    local function body(fn)
+      return src:match("function BR:" .. fn .. "%(.-\n  end\n")
+    end
+
+    local chal = body("onChallenge")
+    T.check(chal ~= nil, "found BR:onChallenge")
+    T.check(chal and chal:find('Events.push(self.events, { kind = "challenge"', 1, true) ~= nil,
+            "a challenge that lands on a busy screen is queued, not answered")
+    T.check(chal and chal:find("if not self:screenIsQuiet() then", 1, true) ~= nil,
+            "...and the gate is the one the parade and the exit wait on")
+    T.check(chal and chal:find("Engage.answer", 1, true) == nil,
+            "onChallenge itself no longer answers; answerChallenge does")
+
+    local acc = body("onAccept")
+    T.check(acc ~= nil, "found BR:onAccept")
+    T.check(acc and acc:find("pend.nonce == nonce", 1, true) ~= nil,
+            "an accept has to name the challenge it answers")
+    T.check(acc and acc:find('Events.push(self.events, { kind = "begin"', 1, true) ~= nil,
+            "an accept that lands on a busy screen queues the opening")
+    T.check(acc and acc:find('Wire.decline(nonce, "timeout")', 1, true) ~= nil,
+            "a late accept is declined so the accepter's lockstep closes")
+    T.check(acc and acc:find("self.battle.opponentId == fromId then return end", 1, true) ~= nil,
+            "...but never during the battle it crossed (a mutual sighting)")
+
+    local dec = body("onDecline")
+    T.check(dec ~= nil, "found BR:onDecline")
+    T.check(dec and dec:find('Events.drop(self.events, "challenge", fromId)', 1, true) ~= nil,
+            "a decline pulls that challenger's held challenge")
+    T.check(dec and dec:find("b.nonce == nonce", 1, true) ~= nil
+            and dec:find("not b.channel.heard", 1, true) ~= nil
+            and dec:find("b.channel:peerGone()", 1, true) ~= nil,
+            "...and closes a lockstep opened on that nonce that nobody joined")
+
+    local tick = body("tickPending")
+    T.check(tick ~= nil, "found BR:tickPending")
+    T.check(tick and tick:find("Engage.stale(pend, now, Engage.PENDING_SECONDS)", 1, true) ~= nil,
+            "a pending challenge times out")
+    T.check(tick and tick:find("self.walkUp and self.walkUp.id == pend.to", 1, true) ~= nil,
+            "...except while a bot is walking over on it (POK-85)")
+    T.check(tick and tick:find("Engage.LINK_OPEN_SECONDS", 1, true) ~= nil
+            and tick:find("not b.channel.heard", 1, true) ~= nil,
+            "a lockstep whose peer never spoke is closed")
+
+    local ev = body("tickEvents")
+    T.check(ev ~= nil, "found BR:tickEvents")
+    T.check(ev and ev:find("Events.expire(q, now, Events.HOLD_SECONDS)", 1, true) ~= nil
+            and ev:find('Wire.decline(ev.nonce, "held")', 1, true) ~= nil,
+            "a challenge held too long is declined, not forgotten")
+    T.check(ev and ev:find("if not self:screenIsQuiet() then return end", 1, true) ~= nil,
+            "the queue drains onto a quiet screen only")
+
+    -- and the tick runs both, next to the walk-up
+    T.check(src:find("BR:tickWalkUp()\n    -- the challenges waiting for a quiet screen", 1, true) ~= nil
+            and src:find("    BR:tickEvents()\n    BR:tickPending()\n", 1, true) ~= nil,
+            "the tick drains the queue and runs the nets every frame")
+
+    -- the eyeline holds off a trainer in a menu; the mark now covers a
+    -- dialog too, which is the nurse
+    local try = body("tryEngage")
+    T.check(try and try:find("if not self:screenIsQuiet() then return end", 1, true) ~= nil,
+            "tryEngage fires from a quiet screen only")
+    T.check(try and try:find("(p.busy ~= nil and not Bots.isBot(id))", 1, true) ~= nil,
+            "...and does not challenge a trainer in a menu (a bot has no menu)")
+    T.check(try and try:find('p.busy == "battle"', 1, true) ~= nil,
+            "...nor a bot mid-fight, the rule the bump shares (POK-165)")
+    local bot = body("tryBotEngage")
+    T.check(bot and bot:find("if not self:screenIsQuiet() then return end", 1, true) ~= nil,
+            "a bot does not spot a player whose screen is busy")
+    local busy = src:match("local function myBusy%(%).-\n  end\n")
+    T.check(busy and busy:find("ow.runner:isRunning()", 1, true) ~= nil,
+            "a running dialog is broadcast as a menu")
+
+    -- resetMatch drops the queue with the rest of the match
+    T.check(src:find("    self.pendingSays = {}\n    Events.clear(self.events)\n", 1, true) ~= nil,
+            "resetMatch clears the queue")
+  end
+end
+
+-- ------- the route trainers' sight lines stay down (POK-163)
+--
+-- POK-150's lever is a talk table per map, filled at onStart.  A playtest
+-- saw the sight lines come back mid-match and nothing reproduces it, so
+-- the lever is now re-checked every TRAINER_TALK_TICKS and ranked above
+-- any other mod's talk table.  What can be pinned headless: the
+-- registration carries the rank, the re-check exists and runs from the
+-- tick, and a re-arm that finds something missing says so in the log.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the trainer-talk scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    T.check(src:find("local contribution = { onInteract = fieldMoveInteract, priority = 50 }", 1, true) ~= nil,
+            "the map-script contribution outranks the default priority")
+    local tick = src:match("function BR:tickTrainerTalk%(.-\n  end\n")
+    T.check(tick ~= nil, "found BR:tickTrainerTalk")
+    T.check(tick and tick:find("self:armTrainerTalk()", 1, true) ~= nil,
+            "the re-check re-arms")
+    T.check(tick and tick:find("log:warn(", 1, true) ~= nil
+            and tick:find("re-armed (POK-163)", 1, true) ~= nil,
+            "...and a re-arm that found something missing is logged")
+    T.check(src:find("    BR:tickPending()\n    -- ...and the route trainers' sight lines stay down (POK-163)\n    BR:tickTrainerTalk()\n", 1, true) ~= nil,
+            "the tick runs the re-check")
+    local arm = src:match("function BR:armTrainerTalk%(.-\n  end\n")
+    T.check(arm and arm:find("return armed, maps", 1, true) ~= nil,
+            "armTrainerTalk reports what it installed")
+    T.check(src:find('log:say("route trainers stand down: %d talk handlers on %d maps"', 1, true) ~= nil,
+            "onStart logs the arm count")
+  end
+end
+
+-- ------- a quick room does not roll into the next match (POK-167)
+--
+-- The countdown is host-local clock state, so what a headless run can
+-- pin is the wiring: every start consumes it, the READY UP lever exists,
+-- and the lobby offers it in a quick room after a match instead of the
+-- instant start.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  local m = io.open("mods/battle_royale/lib/menu.lua", "r")
+  if not (f and m) then
+    io.write("  (skipping the quick-again scan: sources not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    local menu = m:read("*a")
+    m:close()
+    local start = src:match("function BR:startMatch%(.-\n  end\n")
+    T.check(start ~= nil, "found BR:startMatch")
+    T.check(start and start:find("self.autoStartAt = nil", 1, true) ~= nil,
+            "a start consumes the quick-play countdown")
+    local ready = src:match("function BR:readyUp%(.-\n  end\n")
+    T.check(ready ~= nil, "found BR:readyUp")
+    T.check(ready and ready:find("QUICK_START_SECONDS", 1, true) ~= nil,
+            "...which arms the same sixty seconds the first lobby had")
+    T.check(ready and ready:find('self.phase ~= "lobby" or self.autoStartAt then return false', 1, true) ~= nil,
+            "...only from a lobby that is not already counting")
+    T.check(menu:find('if BR.quick and BR.lastResult and not countdown then', 1, true) ~= nil
+            and menu:find('label = "READY UP"', 1, true) ~= nil
+            and menu:find("BR:readyUp()", 1, true) ~= nil,
+            "a quick room after a match offers READY UP, not an instant start")
+  end
+end
+
+-- ------- a ball that changed hands is a trade (POK-179), read off the
+-- source: claimSpill asks the engine's own trade check, only for a ball
+-- somebody else dropped, and plays the engine's own movie.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the trade-evolution scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    local claim = src:match("function BR:claimSpill%(.-\n  end\n")
+    T.check(claim ~= nil, "found BR:claimSpill")
+    T.check(claim and claim:find("if not Spills.isOwn(key, self.myId) and Evolution.pendingFor(game, mon, trade) then", 1, true) ~= nil,
+            "a trade evolution is asked only for a ball somebody else dropped")
+    T.check(claim and claim:find('local trade = { kind = "trade" }', 1, true) ~= nil,
+            "...through the engine's own TRADE method")
+    T.check(claim and claim:find("Evolution.request(game, mon, trade)", 1, true) ~= nil,
+            "...and plays the engine's own evolution movie")
+    T.check(claim and claim:find("Party.add(save.party, mon)", 1, true) ~= nil
+            and claim:find("Party.add(", 1, true) < claim:find("Evolution.pendingFor(", 1, true),
+            "the mon joins the party before it evolves")
+  end
+end
+
+-- ------- the stone counter (POK-178), read off the source: the talk
+-- hook answers the 4F clerk with the extended list, only in a session,
+-- and the MOON STONE's price goes back at resetMatch.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the stone-counter scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    local talk = src:match('mod%.hooks:wrap%("world%.talk".-\n  end%)\n')
+    T.check(talk ~= nil, "found the talk hook")
+    T.check(talk and talk:find("Shops.stock(entry.label, entry.mart)", 1, true) ~= nil,
+            "a mart entry is asked whether it is the stone counter")
+    T.check(talk and talk:find('Screens.push(game, "ShopMenu", stock)', 1, true) ~= nil,
+            "...and the counter opens the engine's own shop over the extended list")
+    -- the counter sits under the session guard the cable club and nurse share
+    local guard = talk and talk:find("if BR:inSession() and def and def.text and data and data.textEntry", 1, true)
+    local counter = talk and talk:find("Shops.stock(entry.label, entry.mart)", 1, true)
+    T.check(guard and counter and guard < counter, "...only while the match world exists")
+    local reset = src:match("function BR:resetMatch%(.-\n  end\n")
+    T.check(reset and reset:find("restoreMoonStone(", 1, true) ~= nil
+            and reset:find("self.moonStonePrice = nil", 1, true) ~= nil,
+            "resetMatch gives the MOON STONE its ROM price back")
+  end
+end
+
+-- ------- A on a bag opens the bag (POK-176), read off the source: no
+-- text box before the list, USE / TAKE / CANCEL per row, and a take that
+-- travels by the item so the rest stays on the ground.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the loot-bag scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    local open = src:match("function BR:openBag%(.-\n  end\n")
+    T.check(open ~= nil, "found BR:openBag")
+    T.check(open and open:find('ListMenu.new(game, (who .. "\'s BAG"):sub(1, 17), self:lootRows(key)', 1, true) ~= nil,
+            "A on a bag pushes the item list of that bag alone")
+    T.check(open and open:find("TextBox", 1, true) == nil and open:find("Take it?", 1, true) == nil,
+            "...with no text box first")
+    local choose = src:match("function BR:lootChoose%(.-\n  end\n")
+    T.check(choose ~= nil, "found BR:lootChoose")
+    T.check(choose and choose:find('label = "USE"', 1, true) ~= nil
+            and choose:find('label = "TAKE"', 1, true) ~= nil
+            and choose:find('label = "CANCEL"', 1, true) ~= nil,
+            "a row offers USE / TAKE / CANCEL")
+    T.check(choose and choose:find("if id ~= MONEY_ROW then", 1, true) ~= nil,
+            "...and the money row only TAKE")
+    local take = src:match("function BR:lootTake%(.-\n  end\n")
+    T.check(take ~= nil, "found BR:lootTake")
+    T.check(take and take:find("self.relay:broadcast(Wire.took(key, id, n))", 1, true) ~= nil,
+            "a take travels by the item and count")
+    T.check(take and take:find("Bag.add(save, id, n, game.data)", 1, true) ~= nil,
+            "...through the bag's own capacity rule")
+    local use = src:match("function BR:lootUse%(.-\n  end\n")
+    T.check(use and use:find("if not self:lootTake(key, id) then return false end", 1, true) ~= nil
+            and use:find("BagMenu.new(game, {})", 1, true) ~= nil,
+            "USE takes the item and opens the PACK on it")
+    T.check(src:find("self.spills:takeItem(msg.key, msg.item, msg.n, msg.cash)", 1, true) ~= nil,
+            "a rival's per-item take lightens our copy of the bag")
+    T.check(src:find('"Open the PACK\\nnow?"', 1, true) == nil,
+            "the second question is gone")
+  end
+end
+
+-- ------- pickups are walkable, and A on the tile takes them (POK-175),
+-- read off the source: the placement rule refuses a cell with a ball on
+-- it (passable balls would stack), the trade-drop path lands by the same
+-- rule as a fall (the doorway hole POK-94 left), and an A press that
+-- resolves to nothing asks the cell under the player.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the walkable-pickup scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    local free = src:match("local function spillCellFree%(.-\n  end\n")
+    T.check(free ~= nil, "found spillCellFree")
+    T.check(free and free:find("BR.spills:keyAt(mapId, x, y) then return false", 1, true) ~= nil,
+            "a cell with a ball on it is not free (no stacking)")
+    T.check(free and free:find("Spawn.isWarp(data.maps, mapId, x, y) then return false", 1, true) ~= nil,
+            "...and a doorway still is not")
+    local drop = src:match("function BR:spillDropped%(.-\n  end\n")
+    T.check(drop ~= nil, "found BR:spillDropped")
+    T.check(drop and drop:find("return spillCellFree(data, here.mapId, x, y)", 1, true) ~= nil
+            and drop:find("Spawn.walkable(", 1, true) == nil,
+            "a traded-away mon lands by the fall's own cell rule, not bare walkability")
+    local at = src:match('mod%.events:on%("world%.interacted", function%(ev%).-\n  end%)\n')
+    T.check(at ~= nil, "found the A-on-the-tile listener")
+    T.check(at and at:find('ev.kind == "none"', 1, true) ~= nil,
+            "it answers only a press that resolved to nothing (facing wins)")
+    T.check(at and at:find("BR.spills:keyAt(here.mapId, here.x, here.y)", 1, true) ~= nil
+            and at:find("BR:openSpill(key)", 1, true) ~= nil,
+            "...and opens the ball under the player's feet")
+    T.check(at and at:find('BR.status == "alive"', 1, true) ~= nil
+            and at:find("not BR.battle and not BR.botFight", 1, true) ~= nil,
+            "...under the same guards as the faced-ball path")
+  end
+end
+
+-- ------- the daily host's clock survives the hour (POK-180), read off
+-- the source: the info handler goes through the rule, not straight to
+-- the field, and a driver can hand it a late answer.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the daily re-arm scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    local info = src:match('relay:on%("info", function%(_, info%).-\n    end%)\n')
+    T.check(info ~= nil, "found the info handler")
+    T.check(info and info:find("BR:armDaily(info.daily.secs)", 1, true) ~= nil,
+            "the info handler arms through BR:armDaily")
+    T.check(info and info:find("BR.autoStartAt = ", 1, true) == nil,
+            "...and never writes the deadline itself")
+    local arm = src:match("function BR:armDaily%(.-\n  end\n")
+    T.check(arm ~= nil, "found BR:armDaily")
+    T.check(arm and arm:find("Daily.rearm(self.autoStartAt, at)", 1, true) ~= nil,
+            "armDaily is Daily.rearm over the held deadline")
+    T.check(src:find("mod.exports.debugDailyInfo = function(secs)", 1, true) ~= nil,
+            "a driver can hand the handler a late answer")
+  end
+end
+
+-- ------- text never parks a match (POK-169/170) and a bump is a challenge
+-- (POK-165), read off the source
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the auto-advance/bump scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    T.check(src:find("local AUTO_ADVANCE_SECONDS = 3", 1, true) ~= nil,
+            "text auto-advances after three seconds")
+    local auto = src:match("function BR:tickAutoResolve%(.-\n  end\n")
+    T.check(auto ~= nil, "found BR:tickAutoResolve")
+    T.check(auto and auto:find("lb.msgWaiting or lb.msgPrompt", 1, true) ~= nil
+            and auto:find('press("b")', 1, true) ~= nil,
+            "battle text waiting on a button is pressed through with B, never A (POK-66)")
+    T.check(auto and auto:find("getmetatable(top) == TextBox", 1, true) ~= nil,
+            "a text box of its own is pressed through too")
+    T.check(auto and auto:find("self.runnerBusySince = now", 1, true) ~= nil,
+            "each box gets its own three seconds")
+    local coll = src:match('mod%.hooks:wrap%("movement%.collision".-\n  end%)\n')
+    T.check(coll ~= nil, "found the collision hook")
+    T.check(coll and coll:find("BR:trainerAtCell(ctx.map.id, ctx.toX, ctx.toY)", 1, true) ~= nil
+            and coll:find('ctx.reason = "engage"', 1, true) ~= nil,
+            "a step into a trainer is the engage gesture, refused only while a fight can start")
+    T.check(src:find('BR:challengeTrainer(id, "walking up")', 1, true) ~= nil,
+            "the walk-up talk starts the same fight")
+    local chal = src:match("function BR:challengeTrainer%(.-\n  end\n")
+    T.check(chal and chal:find("self:fleeAvoid(true)[id]", 1, true) ~= nil,
+            "...and neither starts inside a flee's grace")
+  end
+end
+
+-- ------- the last turn's text does not flash (POK-173) and the bots do
+-- not queue up on the player (POK-174), read off the source
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the POK-173/174 scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    local tb = src:match("function BR:tickBattleText%(.-\n  end\n")
+    T.check(tb ~= nil and tb:find('lb.phase == "menu" and lb.msgHold then lb.msgHold = nil', 1, true) ~= nil,
+            "a battle at the menu drops the stale text hold (POK-173)")
+    T.check(src:find("    BR:tickAutoResolve(game)\n    BR:tickBattleText()\n", 1, true) ~= nil,
+            "...every tick")
+    local Bots = require("mods.battle_royale.lib.bots")
+    T.check(type(Bots.BREATHER) == "number" and Bots.BREATHER >= 5 and Bots.BREATHER <= Bots.FIGHT_COOLDOWN,
+            "the player's breather is real and no longer than the bots' own")
+    T.check(src:find('if BR.phase == "match" then BR:startBreather() end', 1, true) ~= nil
+            and src:find("BR:startBreather()   -- POK-174, the link battle's turn", 1, true) ~= nil,
+            "every fight's end starts the breather")
+    local try = src:match("function BR:tryEngage%(.-\n  end\n")
+    local bot = src:match("function BR:tryBotEngage%(.-\n  end\n")
+    T.check(try and try:find("if self:inBreather() then return end", 1, true) ~= nil
+            and bot and bot:find("if self:inBreather() then return end", 1, true) ~= nil,
+            "neither eyeline fires inside it")
+    T.check(src:find('and otherId ~= self.botFight and o.busy ~= "battle" then', 1, true) ~= nil,
+            "a fighting trainer is not prey, so bots walk at each other")
+    T.check(src:find("and not self:inBreather(now))", 1, true) ~= nil,
+            "...and neither is a player in the breather")
+    local chal = src:match("function BR:challengeTrainer%(.-\n  end\n")
+    T.check(chal and chal:find("inBreather", 1, true) == nil,
+            "a deliberate bump or talk still fights: the breather is a shield, not a cage")
   end
 end
 

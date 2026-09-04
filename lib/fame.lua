@@ -111,8 +111,11 @@ function Fame:draw()
   if page.kind == "mon" then
     Font.draw("HALL OF FAME", 32, 16)
     if self.sprite then g.draw(self.sprite, 52, 36) end
+    -- No level (POK-168).  POK-111 hid levels from the battle HUD, the
+    -- party and the summary for the length of a match, and this parade is
+    -- only ever shown at the end of one -- the roll shows the team the way
+    -- the match let its trainer see it.
     Font.draw(tostring(page.name), 36, 104)
-    Font.draw(("Lv%d"):format(page.level), 108, 104)
   else
     Font.draw("MATCH RECORD", 32, 16)
     local y = 36

@@ -48,7 +48,7 @@ do
   ok(Wire.decode({ t = "start", seed = 1, spawns = {} }) == nil, "empty start is refused")
 
   -- the Safari opening (POK-21): start carries the round, beats carry the clock
-  eq(Wire.PROTOCOL, 10, "a room whose bots carry records is PROTOCOL 10")
+  eq(Wire.PROTOCOL, 11, "a room that takes loot by the item is PROTOCOL 11")
 
   -- botrec (POK-158): the record on the wire
   local br = Wire.decode(Wire.botrec(1001, {
@@ -1064,6 +1064,19 @@ do
   eq(drop.mons[1].key, "5:drop:1", "with its drop key intact")
   eq(Wire.decode(Wire.took("7:1")).key, "7:1", "took carries the key")
   ok(Wire.decode({ t = "took" }) == nil, "took without a key is refused")
+  -- part of a bag (POK-176): the item and how many, and whether the cash went
+  local part = Wire.decode(Wire.took("7:bag", "POTION", 2))
+  ok(part and part.item == "POTION" and part.n == 2 and part.cash == nil,
+     "a per-item take carries the item and the count")
+  ok(Wire.decode(Wire.took("7:bag", "money", 1, true)).cash == true,
+     "...and says when the money went with it")
+  ok(Wire.decode(Wire.took("7:1")).item == nil, "a bare key is still the whole piece")
+  ok(Wire.decode({ t = "took", key = "7:bag", item = "POTION" }) == nil,
+     "an item without a count is refused")
+  ok(Wire.decode({ t = "took", key = "7:bag", item = "POTION", n = 0 }) == nil,
+     "...and so is a count of nothing")
+  ok(Wire.decode({ t = "took", key = "7:bag", item = "POTION", n = 2.5 }) == nil,
+     "...or half an item")
 
   -- the table: add, claim, gone
   local fake = { world = { removeNpc = function() return true end,
@@ -1086,6 +1099,24 @@ do
      "and is findable, with its contents")
   t:take("7:bag")
   eq(t:count(), 2, "taking it leaves the balls")
+
+  -- a bag is taken by the item (POK-176): lighter, then gone
+  local u = Spills.new(fake)
+  u:add({ map = "ROUTE_1", mons = {},
+          bag = { key = "9:bag", x = 1, y = 1, name = "SAM", money = 300,
+                  items = { { id = "POTION", n = 3 }, { id = "POKE_BALL", n = 2 } } } })
+  ok(u:takeItem("9:bag", "POTION", 2) == true, "two of three POTIONs leave the bag")
+  eq(u:get("9:bag").bag.items[1].n, 1, "...and one is still in it")
+  ok(u:takeItem("9:bag", "POTION", 1) == true, "the last POTION goes")
+  eq(u:get("9:bag").bag.items[1].id, "POKE_BALL",
+     "...and the row with it, the next item moving up")
+  ok(u:takeItem("9:bag", "ELIXER", 1) == false, "an item that is not in the bag is refused")
+  ok(u:takeItem("9:bag", nil, nil, true) == true, "the cash can go on its own")
+  eq(u:get("9:bag").bag.money, 0, "...leaving none")
+  eq(u:takeItem("9:bag", "POKE_BALL", 2), "gone", "the last item empties the bag")
+  ok(u:get("9:bag") == nil and u:count() == 0, "...and an empty bag is gone from the ground")
+  ok(u:takeItem("9:bag", "POTION", 1) == false, "a bag that is gone takes nothing")
+  ok(u:takeItem("nope", "POTION", 1) == false, "and neither does a key nobody has")
 end
 
 -- ------- level scaling
@@ -1215,6 +1246,184 @@ do
      "player pending with someone else is busy")
   eq(Engage.answer({ status = "alive" }, 5, { to = 5 }), "accept",
      "a challenge from the one we are challenging is accepted")
+end
+
+-- ------- the event queue (POK-162)
+--
+-- A challenge that lands while the screen is busy waits for the screen;
+-- one that waits too long is handed back so the challenger can be told;
+-- a challenge is not held forever either side.  Driven with a fake clock.
+
+do
+  local Events = require("mods.battle_royale.lib.events")
+  local Channel = require("mods.battle_royale.lib.channel")
+
+  local q = Events.new()
+  eq(Events.count(q), 0, "a new queue is empty")
+  ok(Events.pop(q) == nil, "...and pops nothing")
+
+  Events.push(q, { kind = "challenge", from = 7, nonce = 1 }, 10)
+  Events.push(q, { kind = "challenge", from = 9, nonce = 5 }, 11)
+  eq(Events.count(q), 2, "two challengers, two events")
+  eq(Events.peek(q).from, 7, "oldest first")
+
+  -- a re-issued challenge replaces the old one IN PLACE: their nonce
+  -- moved on, and answering the old nonce answers a challenge they no
+  -- longer hold -- but it does not queue-jump the trainer behind them
+  Events.push(q, { kind = "challenge", from = 7, nonce = 2 }, 12)
+  eq(Events.count(q), 2, "a second challenge from the same trainer replaces the first")
+  eq(Events.peek(q).nonce, 2, "...with the new nonce")
+  eq(Events.peek(q).from, 7, "...and keeps its place in the line")
+  eq(Events.find(q, "challenge", 9).nonce, 5, "find by kind and sender")
+  ok(Events.find(q, "begin", 9) == nil, "...and not by the wrong kind")
+
+  -- expiry hands back what has waited too long and keeps the rest
+  local gone = Events.expire(q, 12 + Events.HOLD_SECONDS - 0.5)
+  eq(#gone, 1, "only the one held the full hold expires")
+  eq(gone[1].from, 9, "...the older wait")
+  eq(Events.count(q), 1, "the fresher one is still queued")
+  gone = Events.expire(q, 12 + Events.HOLD_SECONDS)
+  eq(#gone, 1, "and at the hold, exactly at it, the other goes too")
+  eq(Events.count(q), 0, "queue drained by expiry")
+
+  -- a decline from the challenger pulls their challenge out of the line
+  Events.push(q, { kind = "challenge", from = 7, nonce = 3 }, 20)
+  Events.push(q, { kind = "begin", from = 7, nonce = 3 }, 20)
+  Events.push(q, { kind = "challenge", from = 9, nonce = 6 }, 20)
+  eq(#Events.drop(q, "challenge", 7), 1, "drop by kind and sender")
+  eq(Events.count(q), 2, "...leaves the other kind and the other sender")
+  eq(#Events.drop(q, "begin"), 1, "drop by kind alone")
+  eq(Events.pop(q).from, 9, "what is left pops")
+  Events.push(q, { kind = "challenge", from = 9, nonce = 7 }, 30)
+  eq(#Events.clear(q), 1, "clear hands everything back")
+  eq(Events.count(q), 0, "...and empties the queue (resetMatch)")
+
+  -- the pending timeout: made at 100, stale at 100 + PENDING_SECONDS
+  local pend = { to = 7, nonce = 1, at = 100 }
+  ok(not Engage.stale(pend, 100 + Engage.PENDING_SECONDS - 1), "a fresh challenge is not stale")
+  ok(Engage.stale(pend, 100 + Engage.PENDING_SECONDS), "...and past the limit it is")
+  ok(not Engage.stale({ to = 7, nonce = 1 }, 500), "one nobody timed is not stale (it gets stamped)")
+  ok(not Engage.stale(nil, 500), "no pending, nothing stale")
+  ok(Engage.stale(pend, 103, 3), "the limit can be passed in")
+
+  -- the three clocks nest: a held challenge is answered (either way)
+  -- before the challenger gives up on it, with room for the flash and
+  -- the relay; and a lockstep nobody joined outlives both
+  ok(Events.HOLD_SECONDS + 2 < Engage.PENDING_SECONDS,
+     "a hold expires well before the challenger's patience does")
+  ok(Engage.PENDING_SECONDS + Events.HOLD_SECONDS <= Engage.LINK_OPEN_SECONDS,
+     "and the open-lockstep net sits under both")
+
+  -- the channel remembers whether the peer ever spoke: that is what tells
+  -- a lockstep nobody joined from a real fight a stray decline must not end
+  local sent = {}
+  local relay = { send = function(_, id, m) sent[#sent + 1] = { id, m } return true end }
+  local ch = Channel.new(relay, 7)
+  ok(not ch.heard, "a new channel has heard nothing")
+  ch:push({ type = "hello" })
+  ok(ch.heard, "...until the peer says something")
+  eq(#ch:poll(), 1, "which is still delivered")
+  ch:peerGone()
+  ch:push({ type = "late" })
+  eq(#ch:poll(), 0, "nothing is heard through a closed channel")
+end
+
+-- ------- whose ball was it (POK-179)
+
+do
+  local Spills = require("mods.battle_royale.lib.spills")
+  eq(Spills.ownerOf("7:1"), "7", "a player's ball names the player")
+  eq(Spills.ownerOf("7:bag"), "7", "...and so does their bag")
+  eq(Spills.ownerOf("7:drop:2"), "7", "...and a mon they released")
+  eq(Spills.ownerOf("1003:2"), "1003", "a bot's ball names the bot")
+  eq(Spills.ownerOf("npc:PEWTER_GYM:BROCK:1"), "npc", "a Kanto trainer's names npc")
+  ok(Spills.ownerOf(nil) == nil and Spills.ownerOf("") == nil and Spills.ownerOf("nocolon") == nil,
+     "no key, no owner")
+  ok(Spills.isOwn("7:1", 7), "our own ball is our own (a number id against a string key)")
+  ok(Spills.isOwn("7:drop:2", 7), "...and so is the mon we released")
+  ok(not Spills.isOwn("7:1", 8), "somebody else's is not")
+  ok(not Spills.isOwn("1003:1", 3), "a bot's is not (1003 is not 3)")
+  ok(not Spills.isOwn("npc:M:X:1", 1), "a Kanto trainer's is not")
+  ok(not Spills.isOwn("7:1", nil), "with no id of our own nothing is ours")
+end
+
+-- ------- the stone counter (POK-178)
+
+do
+  local Shops = require("mods.battle_royale.lib.shops")
+  local rom = { "POKE_DOLL", "FIRE_STONE", "THUNDER_STONE", "WATER_STONE", "LEAF_STONE" }
+  local stock = Shops.stock("CeladonMart4FClerkText", rom)
+  ok(stock ~= nil, "the 4F clerk is the stone counter")
+  eq(table.concat(stock, ","), "POKE_DOLL,FIRE_STONE,THUNDER_STONE,WATER_STONE,LEAF_STONE,MOON_STONE",
+     "the ROM's list in its order, then the stone it lacked")
+  ok(Shops.stock("ViridianMartClerkText", { "POKE_BALL", "POTION" }) == nil,
+     "every other mart is left alone")
+  ok(Shops.stock(nil, rom) == nil, "no label, no counter")
+  local twice = Shops.stock("CeladonMart4FClerkText", Shops.stock("CeladonMart4FClerkText", rom))
+  eq(#twice, 6, "extending an already extended list adds nothing")
+  local bare = Shops.stock("CeladonMart4FClerkText", {})
+  eq(table.concat(bare, ","), "MOON_STONE,FIRE_STONE,THUNDER_STONE,WATER_STONE,LEAF_STONE",
+     "a build whose counter sells nothing still gets all five")
+
+  -- the MOON STONE gets a price for the counter, and gives it back
+  local data = { items = { MOON_STONE = { price = 0 }, FIRE_STONE = { price = 2100 } } }
+  local was = Shops.priceMoonStone(data)
+  eq(was, 0, "the ROM price is remembered")
+  eq(data.items.MOON_STONE.price, Shops.MOON_STONE_PRICE, "...and replaced with the stones' price")
+  eq(data.items.FIRE_STONE.price, 2100, "the other stones are not touched")
+  Shops.restoreMoonStone(data, was)
+  eq(data.items.MOON_STONE.price, 0, "restore puts the ROM price back")
+  local priced = { items = { MOON_STONE = { price = 50 } } }
+  Shops.priceMoonStone(priced)
+  eq(priced.items.MOON_STONE.price, 50, "a build that already prices it keeps its price")
+  ok(Shops.priceMoonStone(nil) == nil and Shops.priceMoonStone({}) == nil,
+     "no items, nothing to price")
+end
+
+-- ------- a spill is walked through, not walled by (POK-175)
+--
+-- Thirty trainers' loot used to be thirty solid objects, and a player who
+-- waded into a pile found every way out blocked by the very things they
+-- came for.  The spawn marks each ball passable through the same handle
+-- the ghosts use, and draws it a pixel high so the y-sort puts it under
+-- the feet of whoever stands on it rather than flickering over them.
+
+do
+  local Spills = require("mods.battle_royale.lib.spills")
+  local calls, npcs = {}, {}
+  local fake = { log = { warn = function() end }, world = {} }
+  function fake.world:spawnNpc(mapId, def)
+    local npc = { py = def.y * 16, cellX = def.x, cellY = def.y }
+    npcs["n" .. def.name] = npc
+    return "n" .. def.name
+  end
+  function fake.world:removeNpc() return true end
+  function fake.world:npc(mapId, id)
+    local npc = npcs[id]
+    if not npc then return nil, "no such object" end
+    return { npc = npc, setPassable = function(_, v) calls[#calls + 1] = { id = id, v = v } end }
+  end
+  local s = Spills.new(fake)
+  s:add({ map = "M", mons = { { key = "1:1", x = 4, y = 6, species = "RATTATA", level = 5 } },
+          bag = { key = "1:bag", x = 4, y = 5, items = {}, money = 100, name = "SAM" } })
+  s:sync("M")
+  eq(#calls, 2, "every spawned piece is marked passable (ball and bag)")
+  ok(calls[1].v == true and calls[2].v == true, "...passable, not solid")
+  local ball = npcs["nBR_SPILL_1:1"]
+  eq(ball and ball.py, 6 * 16 - Spills.UNDERFOOT, "a ball is drawn a pixel high, under the player's feet")
+  eq(Spills.UNDERFOOT, 1, "one pixel: enough to win the y-sort, too small to see")
+  -- a world without the handle API still places the ball, only solid
+  local bare = { log = { warn = function() end },
+                 world = { spawnNpc = function() return "x" end,
+                           removeNpc = function() return true end } }
+  local b = Spills.new(bare)
+  b:add({ map = "M", mons = { { key = "2:1", x = 1, y = 1, species = "PIDGEY", level = 5 } } })
+  b:sync("M")
+  ok(b.spawned["2:1"] == "x", "an engine without npc handles still gets its ball")
+  -- the pile does not stack: keyAt is what the placement rule asks
+  ok(s:keyAt("M", 4, 6) == "1:1" and s:keyAt("M", 4, 5) == "1:bag",
+     "a placed piece answers keyAt on its cell")
+  ok(s:keyAt("M", 5, 6) == nil, "...and a free cell does not")
 end
 
 -- ------- the bag obeys the doorway rule too (POK-94)
@@ -3132,6 +3341,89 @@ do
   eq(#poor, 1, "and a build with none of them still yields something catchable")
   eq(poor[1], "RATTATA", "namely a RATTATA, which Kanto can always find")
 
+  -- POK-177: the zone has a shape.  Without data there is no theme (a
+  -- type is read off the data), but the rare slice is always there.
+  local rareSet = {}
+  for _, sp in ipairs(Safari.RARE) do rareSet[sp] = true end
+  for _, seed in ipairs({ 1, 2, 3, 12345, 99999 }) do
+    local zone, theme = Safari.pool(seed, nil)
+    ok(theme == nil, "no data, no theme (seed " .. seed .. ")")
+    local rares = 0
+    for _, sp in ipairs(zone) do if rareSet[sp] then rares = rares + 1 end end
+    ok(rares >= Safari.RARE_PER_POOL,
+       ("every zone holds at least %d of the rare slice (seed %d: %d)"):format(
+         Safari.RARE_PER_POOL, seed, rares))
+  end
+  ok(#Safari.CANDIDATES >= 65, "the candidate list is wider than the routes (" .. #Safari.CANDIDATES .. ")")
+  local candSet = {}
+  for _, sp in ipairs(Safari.CANDIDATES) do candSet[sp] = true end
+  for _, sp in ipairs(Safari.RARE) do
+    ok(candSet[sp], "a rare entry is a candidate: " .. sp)
+  end
+  for _, sp in ipairs({ "LAPRAS", "SNORLAX", "EEVEE", "PORYGON", "MR_MIME", "FARFETCHD",
+                        "LICKITUNG", "TANGELA", "ELECTABUZZ", "MAGMAR", "JYNX", "DITTO" }) do
+    ok(candSet[sp], "the one-offs the report missed are candidates: " .. sp)
+  end
+
+  -- with data that knows types, the seed picks a theme and the zone leans
+  -- into it; NORMAL never is one, and a thin type never is either
+  local typed = { pokemon = {} }
+  local function mon(sp, ...) typed.pokemon[sp] = { types = { ... } } end
+  for _, sp in ipairs(Safari.CANDIDATES) do mon(sp, "NORMAL") end
+  for _, sp in ipairs({ "POLIWAG", "PSYDUCK", "KRABBY", "GOLDEEN", "MAGIKARP",
+                        "SHELLDER", "HORSEA", "STARYU", "SEEL", "LAPRAS" }) do
+    mon(sp, "WATER")
+  end
+  for _, sp in ipairs({ "CATERPIE", "WEEDLE", "PARAS", "VENONAT", "SCYTHER", "PINSIR" }) do
+    mon(sp, "BUG")
+  end
+  mon("GASTLY", "GHOST", "POISON")   -- one ghost: not enough for a theme
+  eq(table.concat(Safari.themes(typed), ","), "BUG,WATER",
+     "the themes are the types enough candidates carry, NORMAL and thin types excluded")
+  local sawBug, sawWater = false, false
+  for seed = 1, 40 do
+    local zone, theme = Safari.pool(seed, typed)
+    ok(theme == "BUG" or theme == "WATER", "a themed zone names its theme (seed " .. seed .. ")")
+    local inTheme = 0
+    for _, sp in ipairs(zone) do
+      for _, ty in ipairs(typed.pokemon[sp].types) do
+        if ty == theme then inTheme = inTheme + 1 end
+      end
+    end
+    ok(inTheme >= Safari.THEME_PER_POOL,
+       ("the zone leans into its theme (seed %d, %s: %d)"):format(seed, theme, inTheme))
+    eq(#zone, Safari.POOL_SIZE, "...and is still POOL_SIZE")
+    local z2, t2 = Safari.pool(seed, typed)
+    ok(t2 == theme and table.concat(z2, ",") == table.concat(zone, ","),
+       "the same seed and data draw the same themed zone")
+    if theme == "BUG" then sawBug = true elseif theme == "WATER" then sawWater = true end
+  end
+  ok(sawBug and sawWater, "over forty seeds both themes come up")
+  eq(Safari.themeName("PSYCHIC_TYPE"), "PSYCHIC", "the data's PSYCHIC_TYPE reads as PSYCHIC")
+  eq(Safari.themeName(nil), nil, "no theme, no name")
+  ok(Safari.describe({ "A", "B" }, "WATER"):find("a WATER match: A, B", 1, true) ~= nil,
+     "the log line names the theme")
+  eq(Safari.describe({ "A", "B" }, nil), "A, B", "...and stays plain without one")
+
+  -- bots draft their first mon from the zone (POK-177)
+  local Bots = require("mods.battle_royale.lib.bots")
+  local zone = Safari.pool(777, nil)
+  local zoneSet = {}
+  for _, sp in ipairs(zone) do zoneSet[sp] = true end
+  local fromZone = 0
+  for id = 1, 30 do
+    local rec = Bots.newRecord(777, id, nil, zone)
+    eq(#rec, 1, "one mon at the drop, still")
+    if zoneSet[rec[1].species] then fromZone = fromZone + 1 end
+    local again = Bots.newRecord(777, id, nil, zone)
+    eq(again[1].species, rec[1].species, "the draft is derived, so every client agrees")
+  end
+  eq(fromZone, 30, "every bot's first mon is out of the match's own zone")
+  local plain = Bots.newRecord(777, 1, nil, nil)
+  ok(plain[1] and plain[1].species ~= nil, "without a zone the tier's list still stands")
+  local unknown = Bots.newRecord(777, 1, { pokemon = { RATTATA = true } }, { "MEWTWO" })
+  eq(unknown[1].species, "RATTATA", "a zone this build cannot make falls back rather than asserting")
+
   -- picking within a zone
   local rolled = Safari.pick(a1, function(lo, hi) return lo end)
   eq(rolled, a1[1], "pick draws through the caller's own roll")
@@ -3153,18 +3445,19 @@ do
   local maps = { VIRIDIAN_CITY = { warps = { { x = 29, y = 19,
                                                destMap = "VIRIDIAN_MART" } } } }
 
-  ok(not Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 10, y = 10, status = "alive" }),
-     "a living trainer in the open is solid -- you cannot walk through somebody")
+  -- POK-165 turned this around: nobody is solid.  Being body-blocked in a
+  -- doorway or at a Centre counter was pure friction, and walking INTO
+  -- somebody is the engage gesture, read by main.lua's collision hook.
+  ok(Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 10, y = 10, status = "alive" }),
+     "a living trainer in the open is walk-through (POK-165)")
   ok(Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 10, y = 10, status = "out" }),
-     "an eliminated one is walk-through, so a corpse cannot wall a survivor in")
+     "an eliminated one still is")
   ok(Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 29, y = 19, status = "alive" }),
-     "and one standing IN the mart's door is too, or the shop shuts for good (POK-94)")
+     "and one standing IN the mart's door is (POK-94)")
   ok(Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 29, y = 19, status = "battle" }),
-     "mid-battle in a doorway seals it just as thoroughly")
-  ok(not Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 29, y = 20, status = "alive" }),
-     "the cell beside the door is not the door")
-  ok(not Ghosts.passableFor(maps, "PALLET_TOWN", { x = 29, y = 19, status = "alive" }),
-     "and the door is this map's, not that coordinate on every map")
+     "mid-battle too")
+  ok(Ghosts.passableFor(maps, "PALLET_TOWN", { x = 29, y = 19, status = "alive" }),
+     "on every map")
   ok(not Ghosts.passableFor(maps, "VIRIDIAN_CITY", nil),
      "no peer at all is not a hole in the world")
 end
@@ -3824,6 +4117,40 @@ do
   ok(r.serverInfo.daily.at ~= nil, "with a receipt clock for the countdown")
 end
 
+-- POK-180: the daily host's re-arm never pushes the start to tomorrow.
+-- The arm lands after the true hour by up to a second plus half an RTT,
+-- and a poll answered in that sliver reports next day's seconds.  The
+-- night of 2026-09-04 the lone host sat through 00:00Z on exactly that.
+do
+  local Daily = require("mods.battle_royale.lib.daily")
+  -- the first answer arms, whatever it says
+  local held, refused = Daily.rearm(nil, 1000 + 510)
+  eq(held, 1510, "the first answer arms the deadline")
+  ok(refused == false, "...and is not a refusal")
+  -- honest re-derivations drift by truncation and RTT: both ways pass
+  held, refused = Daily.rearm(1510, 1510.8)
+  eq(held, 1510.8, "a re-derivation a fraction later is taken")
+  held, refused = Daily.rearm(1510.8, 1509.9)
+  eq(held, 1509.9, "...and one a fraction earlier")
+  ok(refused == false, "neither is a refusal")
+  -- the grace bump then the true clock: earlier is always allowed
+  held = Daily.rearm(1540, 1510)
+  eq(held, 1510, "the true hour reclaims a deadline the grace pushed out")
+  -- THE RACE: armed for 0.9s from now, the answer says tomorrow
+  local now = 1509.1
+  held, refused = Daily.rearm(1510, now + 86400)
+  eq(held, 1510, "an answer that rolled over to tomorrow leaves the arm alone")
+  ok(refused == true, "...and says so, for the log")
+  -- the same shape at the arm boundary: a jump past the slack is a
+  -- refusal, one inside it is a correction
+  held, refused = Daily.rearm(1510, 1510 + Daily.SLACK)
+  ok(refused == false, "later by exactly the slack is still a correction")
+  held, refused = Daily.rearm(1510, 1510 + Daily.SLACK + 0.001)
+  ok(refused == true and held == 1510, "a hair past the slack is the hour gone by")
+  ok(Daily.SLACK >= 2 and Daily.SLACK < 60,
+     "the slack covers a second of truncation and RTT jitter, not a minute")
+end
+
 -- POK-160 item 3: the move layer plays the turn a person would.  It
 -- rides the engine's own additive scoring (base 10, minimum wins), so
 -- these pins are exact scores, not tendencies.
@@ -4206,6 +4533,173 @@ do
     for _, c in ipairs(calls) do if c == "installHooks" then n = n + 1 end end
     eq(n, 2, "...and restoring both double-installs, which is the trap")
   end
+end
+
+-- ------- Saffron is liberated by the flag the match sets (POK-164)
+--
+-- Seven street ROCKETs stand on the cells below Saffron's doors, so an
+-- occupied Saffron is a town with nothing to enter.  The lever is the
+-- engine's own: M.SAFFRON_CITY.onEnter (data/scripts/story4.lua) reads
+-- EVENT_BEAT_SILPH_CO_GIOVANNI and hides every rocket / shows every
+-- civilian.  Drive the VANILLA handler with a recording Commands, so the
+-- pin is on what the flag really does -- and then check the loadout sets
+-- exactly that flag, and not the hideout's.
+
+do
+  package.loaded["src.render.TextBox"] = package.loaded["src.render.TextBox"]
+    or { new = function(_, _, done) if done then done() end return {} end }
+  local S4 = require("data.scripts.story4")
+  local real = package.loaded["src.script.Commands"]
+  local calls = {}
+  package.loaded["src.script.Commands"] = {
+    hide_object = function(_, map, name) calls[#calls + 1] = "hide " .. map .. " " .. name end,
+    show_object = function(_, map, name) calls[#calls + 1] = "show " .. map .. " " .. name end,
+  }
+  local function enter(flags)
+    calls = {}
+    S4.SAFFRON_CITY.onEnter({ save = { flags = flags } },
+                            { map = { id = "SAFFRON_CITY" } })
+    local hid, shown = 0, 0
+    for _, c in ipairs(calls) do
+      if c:find("^hide SAFFRON_CITY SAFFRONCITY_ROCKET") then hid = hid + 1
+      elseif c:find("^show ") then shown = shown + 1 end
+    end
+    return hid, shown
+  end
+  local hid, shown = enter({})
+  eq(hid, 0, "a vanilla save keeps the rockets on the streets")
+  eq(shown, 0, "...and the civilians hidden")
+  hid, shown = enter({ EVENT_BEAT_SILPH_CO_GIOVANNI = true })
+  eq(hid, 9, "the flag hides all nine street rockets")
+  eq(shown, 6, "...and shows the six civilians")
+  hid, shown = enter({ EVENT_RESCUED_MR_FUJI = true })
+  eq(hid, 1, "Fuji alone only swaps the Silph door guard")
+  package.loaded["src.script.Commands"] = real
+
+  -- ...and the match arms exactly that flag, read off the loadout like
+  -- the other story flags are
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if f then
+    local src = f:read("*a")
+    f:close()
+    local block = src:match("local STORY_FLAGS = {.-\n}\n")
+    ok(block ~= nil, "found STORY_FLAGS")
+    ok(block and block:find('"EVENT_BEAT_SILPH_CO_GIOVANNI"', 1, true) ~= nil,
+       "the match arms with Saffron liberated (POK-164)")
+    ok(block and block:find('"EVENT_BEAT_ROCKET_HIDEOUT_GIOVANNI"', 1, true) == nil,
+       "...but not the hideout: its Giovanni stays a boss")
+  end
+end
+
+-- ------- the mark over a ghost's head lands on the ghost (POK-166)
+
+do
+  local Ghosts = require("mods.battle_royale.lib.ghosts")
+  local cam = { x = 100, y = 200 }
+  local mx, my = Ghosts.markAt(116, 216, cam, 160, 144, 1)
+  eq(mx, 20, "a 160x144 world view at 1x is the old formula (x)")
+  eq(my, 2, "...and (y)")
+  mx, my = Ghosts.markAt(116, 216, cam, 200, 150, 1)
+  eq(mx, 0, "a wider world view is centred: half the extra comes off x")
+  eq(my, -1, "...and off y")
+  mx, my = Ghosts.markAt(116, 216, cam, 160, 144, 0.5)
+  eq(mx, 50, "zoomed out, the mark scales toward the centre (x)")
+  eq(my, 37, "...and (y)")
+end
+
+-- ------- an automatic level-up never displaces a taught move (POK-172)
+
+do
+  local Levels = require("mods.battle_royale.lib.levels")
+  local data = { moves = { TACKLE = { pp = 35 }, TAIL_WHIP = { pp = 30 },
+                           QUICK_ATTACK = { pp = 30 }, HYPER_FANG = { pp = 15 },
+                           THUNDERBOLT = { pp = 15 }, BLIZZARD = { pp = 5 } } }
+  -- the real shape: the level-1 moves sit beside the learnset, not in it
+  local def = { level1Moves = { "TACKLE", "TAIL_WHIP" },
+                learnset = { { level = 7, move = "QUICK_ATTACK" },
+                             { level = 14, move = "HYPER_FANG" } } }
+  local function ids(mon)
+    local out = {}
+    for _, m in ipairs(mon.moves) do out[#out + 1] = m.id end
+    return table.concat(out, ",")
+  end
+  -- room to spare: the empty slots are filled
+  local mon = { moves = { { id = "TACKLE", pp = 35 } } }
+  Levels.learn(data, mon, def, 5, 15)
+  eq(ids(mon), "TACKLE,QUICK_ATTACK,HYPER_FANG", "empty slots are filled first")
+  -- two taught, two natural: the natural ones give way, oldest first
+  mon = { moves = { { id = "TACKLE" }, { id = "TAIL_WHIP" },
+                    { id = "THUNDERBOLT" }, { id = "BLIZZARD" } } }
+  local learned, forgot = Levels.learn(data, mon, def, 5, 15)
+  eq(ids(mon), "THUNDERBOLT,BLIZZARD,QUICK_ATTACK,HYPER_FANG",
+     "the TM moves survive; the level-up moves gave way")
+  eq(table.concat(forgot, ","), "TACKLE,TAIL_WHIP", "...oldest natural first")
+  eq(table.concat(learned, ","), "QUICK_ATTACK,HYPER_FANG", "both rung moves learned")
+  eq(mon.moves[4].pp, 15, "a learned move arrives with its PP")
+  -- all four taught: the rung's move is skipped, silently
+  mon = { moves = { { id = "THUNDERBOLT" }, { id = "BLIZZARD" }, { id = "SURF" }, { id = "DIG" } } }
+  learned = Levels.learn(data, mon, def, 5, 15)
+  eq(ids(mon), "THUNDERBOLT,BLIZZARD,SURF,DIG", "four taught moves are all kept")
+  eq(#learned, 0, "...and nothing was learned")
+  -- a move learned this rung is natural for the next: it can give way later
+  mon = { moves = { { id = "THUNDERBOLT" }, { id = "BLIZZARD" }, { id = "SURF" } } }
+  Levels.learn(data, mon, def, 5, 7)
+  eq(ids(mon), "THUNDERBOLT,BLIZZARD,SURF,QUICK_ATTACK", "rung 7 fills the slot")
+  Levels.learn(data, mon, def, 7, 15)
+  eq(ids(mon), "THUNDERBOLT,BLIZZARD,SURF,HYPER_FANG",
+     "rung 15 replaces the move rung 7 taught, not a TM")
+  -- nothing below the level it already had is re-learned
+  mon = { moves = { { id = "THUNDERBOLT" } } }
+  Levels.learn(data, mon, def, 20, 30)
+  eq(ids(mon), "THUNDERBOLT", "no rung move in the window, no change")
+  -- ...and the loadout uses it, read off the source
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if f then
+    local src = f:read("*a")
+    f:close()
+    ok(src:find("Pokemon.learnMovesFromDayCare(", 1, true) == nil,
+       "scaleMon no longer uses the engine's oldest-slot learn")
+    ok(src:find("Levels.learn(game.data, mon, def, from, target)", 1, true) ~= nil
+       and src:find("Levels.learn(game.data, mon, newDef, from, target)", 1, true) ~= nil,
+       "...both the rung and the evolution learn through Levels.learn")
+  end
+end
+
+-- ------- the parade shows no level (POK-168)
+
+do
+  local f = io.open("mods/battle_royale/lib/fame.lua", "r")
+  if f then
+    local src = f:read("*a")
+    f:close()
+    ok(src:find('"Lv%d"', 1, true) == nil, "the Hall of Fame roll draws no level")
+  end
+end
+
+-- ------- the FOG row fits the grid (POK-171)
+
+do
+  local BRMenu = require("mods.battle_royale.lib.menu")
+  eq(BRMenu.MAX_LABEL, 17, "a label may be seventeen tiles: twenty less the box's three")
+  local BR = {
+    phase = "match", status = "alive", solo = false,
+    ring = { phase = 2, center = { name = "VERMILION CITY" } },
+    aliveCount = function() return 4 end, level = function() return 15 end,
+    safariLeft = function() return 0 end, lastResult = nil,
+  }
+  local items = BRMenu.items({ version = "0.0.0" }, BR, {})
+  local fogRows, longest = 0, 0
+  for _, it in ipairs(items) do
+    if it.label == "FOG:" or it.label == "VERMILION CITY" then fogRows = fogRows + 1 end
+    if #it.label > longest then longest = #it.label end
+  end
+  eq(fogRows, 2, "the longest town goes under its label")
+  ok(longest <= BRMenu.MAX_LABEL, "no row wider than the grid allows (" .. longest .. ")")
+  BR.ring.center.name = "PALLET TOWN"
+  items = BRMenu.items({ version = "0.0.0" }, BR, {})
+  local found = false
+  for _, it in ipairs(items) do if it.label == "FOG: PALLET TOWN" then found = true end end
+  ok(found, "a short town stays on one row")
 end
 
 io.write(("\nbattle royale: %d passed, %d failed\n"):format(passed, failed))
