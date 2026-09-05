@@ -225,31 +225,30 @@ const REPO = "campavao/kanto-battle-royale";
 // check-for-updates walked right past this mod, so those releases could
 // only ever be installed by hand.
 const OFFERABLE_FROM = [0, 27, 1];
-const CACHE_KEY = "kbr-releases-v1";
-const CACHE_MS = 10 * 60 * 1000;
 
 const $ = id => document.getElementById(id);
 const semver = t => (t.replace(/^v/, "").split(".").map(Number).concat([0,0,0])).slice(0,3);
 const cmp = (a, b) => a[0]-b[0] || a[1]-b[1] || a[2]-b[2];
 const blind = tag => cmp(semver(tag), OFFERABLE_FROM) < 0;
 const day = iso => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+const clock = iso => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 
-function cached() {
-  try {
-    const raw = localStorage.getItem(CACHE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return Date.now() - parsed.at < CACHE_MS ? parsed.data : null;
-  } catch (e) { return null; }
-}
-function cache(data) {
-  try { localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), data })); } catch (e) {}
+// The release list has two sources. data/releases.json is written by the
+// relay-stats job on the server side, so it is always here and never
+// rate-limited; the GitHub API is asked afterwards for live download counts
+// and drawn over it when it answers. The API used to be the only source,
+// behind a 10-minute localStorage cache, and a browser holding onto an old
+// answer showed a history days out of date under a header that was current.
+async function baked() {
+  const r = await fetch("data/releases.json", { cache: "no-cache" });
+  if (!r.ok) throw new Error("no data/releases.json (" + r.status + ")");
+  const j = await r.json();
+  if (!Array.isArray(j.list) || !j.list.length) throw new Error("data/releases.json is empty");
+  return { list: j.list, at: j.readAt };
 }
 
-async function releases() {
-  const hit = cached();
-  if (hit) return { list: hit, stale: true };
-  const r = await fetch("https://api.github.com/repos/" + REPO + "/releases?per_page=100");
+async function live() {
+  const r = await fetch("https://api.github.com/repos/" + REPO + "/releases?per_page=100", { cache: "no-cache" });
   if (r.status === 403) throw new Error("GitHub is rate-limiting this IP. It resets within the hour.");
   if (!r.ok) throw new Error("GitHub answered " + r.status + ".");
   const list = (await r.json()).map(x => ({
@@ -258,8 +257,7 @@ async function releases() {
     at: x.published_at,
     dl: (x.assets || []).reduce((n, a) => n + a.download_count, 0)
   }));
-  cache(list);
-  return { list, stale: false };
+  return { list };
 }
 
 function drawLadder(list) {
@@ -355,23 +353,36 @@ async function relay() {
   } catch (e) {}
 }
 
+function drawReleases(list) {
+  const total = list.reduce((n, r) => n + r.dl, 0);
+  $("dl").textContent = total;
+  $("rel").textContent = list.length;
+  $("dlsub").textContent = "the updater re-downloads on every update, so this counts events, not people";
+  $("relsub").textContent = "first cut " + day(list[list.length - 1].at);
+  drawLadder(list);
+  drawTable(list);
+}
+
 (async () => {
   feed();
   relay();
+  let shown = null;
   try {
-    const res = await releases();
-    const list = res.list;
-    const total = list.reduce((n, r) => n + r.dl, 0);
-    $("dl").textContent = total;
-    $("rel").textContent = list.length;
-    $("dlsub").textContent = "the updater re-downloads on every update, so this counts events, not people";
-    $("relsub").textContent = "first cut " + day(list[list.length - 1].at);
-    drawLadder(list);
-    drawTable(list);
-    $("stamp").textContent = res.stale ? "from cache, up to 10 min old" : "read just now from the GitHub API";
+    shown = await baked();
+    drawReleases(shown.list);
+    $("stamp").textContent = "the site's copy, written " + day(shown.at) + " " + clock(shown.at);
+  } catch (e) {}
+  try {
+    const res = await live();
+    drawReleases(res.list);
+    $("stamp").textContent = "read just now from the GitHub API";
   } catch (e) {
-    $("ladderbox").innerHTML = '<div class="err">' + e.message + "</div>";
-    $("stamp").textContent = "could not reach GitHub";
+    if (shown) {
+      $("stamp").textContent += " · GitHub API not reached: " + e.message;
+    } else {
+      $("ladderbox").innerHTML = '<div class="err">' + e.message + "</div>";
+      $("stamp").textContent = "could not reach GitHub";
+    }
   }
 })();
 </script>

@@ -35,7 +35,13 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
+      # The branch tip, not github.sha. When relay-stats calls this right
+      # after pushing a commit, github.sha is still the commit that TRIGGERED
+      # the run -- one behind the file it just wrote -- so every publish was
+      # shipping the previous stats.json and the page ran one update late.
       - uses: actions/checkout@v4
+        with:
+          ref: main
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

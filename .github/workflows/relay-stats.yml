@@ -33,23 +33,29 @@ jobs:
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           RAILWAY_PROJECT_TOKEN: ${{ secrets.RAILWAY_PROJECT_TOKEN }}
+          # For the release list; the job's own token keeps it off the
+          # unauthenticated 60/hour limit.
+          GITHUB_TOKEN: ${{ github.token }}
         run: node tools/relay-stats.mjs
 
       - name: commit if it moved
         id: commit
         run: |
-          if [ -z "$(git status --porcelain site/data/stats.json)" ]; then
+          if [ -z "$(git status --porcelain site/data/stats.json site/data/releases.json)" ]; then
             echo "nothing to commit"
             echo "moved=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           summary=$(node -e "
             const s = require('./site/data/stats.json');
-            process.stdout.write(\`\${s.conns} connected, \${s.rooms} rooms, \${s.statSolo ?? 0} solo\`);
+            let r = '';
+            try { r = ' | ' + require('./site/data/releases.json').list.length + ' releases'; } catch (e) {}
+            process.stdout.write(\`\${s.conns} connected, \${s.rooms} rooms, \${s.statSolo ?? 0} solo\${r}\`);
           ")
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add site/data/stats.json
+          if [ -f site/data/releases.json ]; then git add site/data/releases.json; fi
           git commit -m "relay: $summary"
           git push
           echo "moved=true" >> "$GITHUB_OUTPUT"
