@@ -1,23 +1,23 @@
 {
-  "readAt": "2026-09-05T15:32:31.749Z",
+  "readAt": "2026-09-05T21:32:00.707Z",
   "list": [
     {
       "tag": "v0.45.0",
       "name": "the lobby is a room",
       "at": "2026-09-05T14:57:59Z",
-      "dl": 3
+      "dl": 11
     },
     {
       "tag": "v0.44.0",
       "name": "loot you can walk through",
       "at": "2026-09-04T15:04:41Z",
-      "dl": 14
+      "dl": 15
     },
     {
       "tag": "v0.43.0",
       "name": "nobody drops into a cage",
       "at": "2026-09-01T02:03:25Z",
-      "dl": 44
+      "dl": 45
     },
     {
       "tag": "v0.42.0",
@@ -35,7 +35,7 @@
       "tag": "v0.40.0",
       "name": "the bots can win",
       "at": "2026-08-28T12:43:41Z",
-      "dl": 188
+      "dl": 191
     },
     {
       "tag": "v0.39.0",
