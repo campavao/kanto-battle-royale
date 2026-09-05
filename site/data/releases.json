@@ -1,0 +1,251 @@
+{
+  "readAt": "2026-09-05T13:40:07.179Z",
+  "list": [
+    {
+      "tag": "v0.44.0",
+      "name": "loot you can walk through",
+      "at": "2026-09-04T15:04:41Z",
+      "dl": 13
+    },
+    {
+      "tag": "v0.43.0",
+      "name": "nobody drops into a cage",
+      "at": "2026-09-01T02:03:25Z",
+      "dl": 44
+    },
+    {
+      "tag": "v0.42.0",
+      "name": "the DAILY GAME, 7PM Central",
+      "at": "2026-08-31T23:32:24Z",
+      "dl": 8
+    },
+    {
+      "tag": "v0.41.0",
+      "name": "nobody hosts into the void",
+      "at": "2026-08-30T19:19:50Z",
+      "dl": 33
+    },
+    {
+      "tag": "v0.40.0",
+      "name": "the bots can win",
+      "at": "2026-08-28T12:43:41Z",
+      "dl": 188
+    },
+    {
+      "tag": "v0.39.0",
+      "name": "bots pick their fights",
+      "at": "2026-08-28T04:42:05Z",
+      "dl": 5
+    },
+    {
+      "tag": "v0.38.0",
+      "name": "nobody stops you on the road",
+      "at": "2026-08-28T02:39:20Z",
+      "dl": 5
+    },
+    {
+      "tag": "v0.37.0",
+      "name": "the bots play the game",
+      "at": "2026-08-28T01:46:43Z",
+      "dl": 3
+    },
+    {
+      "tag": "v0.36.0",
+      "name": "the download loses its test suite",
+      "at": "2026-08-27T19:54:29Z",
+      "dl": 16
+    },
+    {
+      "tag": "v0.35.0",
+      "name": "the room says who you can fight",
+      "at": "2026-08-27T13:41:05Z",
+      "dl": 13
+    },
+    {
+      "tag": "v0.34.0",
+      "name": "sharing the overworld",
+      "at": "2026-08-26T21:46:23Z",
+      "dl": 36
+    },
+    {
+      "tag": "v0.33.0",
+      "name": "the only thing that moves you is the fog",
+      "at": "2026-08-26T19:24:41Z",
+      "dl": 8
+    },
+    {
+      "tag": "v0.32.0",
+      "name": "how much play there has been",
+      "at": "2026-08-26T17:45:25Z",
+      "dl": 5
+    },
+    {
+      "tag": "v0.31.0",
+      "name": "a career that outlives the playthrough",
+      "at": "2026-08-26T15:29:02Z",
+      "dl": 7
+    },
+    {
+      "tag": "v0.30.0",
+      "name": "a TM that says what it teaches",
+      "at": "2026-08-26T13:05:46Z",
+      "dl": 12
+    },
+    {
+      "tag": "v0.29.0",
+      "name": "the counter shuts when the fog rolls in",
+      "at": "2026-08-26T12:46:31Z",
+      "dl": 0
+    },
+    {
+      "tag": "v0.28.0",
+      "name": "the room outlives its host",
+      "at": "2026-08-26T04:13:35Z",
+      "dl": 7
+    },
+    {
+      "tag": "v0.27.3",
+      "name": "the lobby list scrolls",
+      "at": "2026-08-26T00:58:03Z",
+      "dl": 6
+    },
+    {
+      "tag": "v0.27.2",
+      "name": "the screen says which build it is",
+      "at": "2026-08-26T00:25:33Z",
+      "dl": 1
+    },
+    {
+      "tag": "v0.27.1",
+      "name": "the launcher can offer an update",
+      "at": "2026-08-26T00:17:40Z",
+      "dl": 4
+    },
+    {
+      "tag": "v0.27.0",
+      "name": "the playtest batch",
+      "at": "2026-08-25T23:38:04Z",
+      "dl": 1
+    },
+    {
+      "tag": "v0.26.0",
+      "name": "the shim is gone",
+      "at": "2026-08-25T20:45:55Z",
+      "dl": 4
+    },
+    {
+      "tag": "v0.25.1",
+      "name": "the debug switch actually exists",
+      "at": "2026-08-25T18:07:11Z",
+      "dl": 1
+    },
+    {
+      "tag": "v0.25.0",
+      "name": "they walk over, and the match lets you go",
+      "at": "2026-08-25T15:39:36Z",
+      "dl": 0
+    },
+    {
+      "tag": "v0.24.0",
+      "name": "the fog you can see",
+      "at": "2026-08-25T03:16:36Z",
+      "dl": 1
+    },
+    {
+      "tag": "v0.22.0",
+      "name": "wear your wins",
+      "at": "2026-08-25T02:40:20Z",
+      "dl": 0
+    },
+    {
+      "tag": "v0.20.0",
+      "name": "the rung is the only ladder",
+      "at": "2026-08-25T01:43:10Z",
+      "dl": 0
+    },
+    {
+      "tag": "v0.19.0",
+      "name": "spectating and the world around it",
+      "at": "2026-08-25T00:43:40Z",
+      "dl": 0
+    },
+    {
+      "tag": "v0.18.0",
+      "name": "the live-playtest batch",
+      "at": "2026-08-25T00:21:24Z",
+      "dl": 0
+    },
+    {
+      "tag": "v0.17.1",
+      "name": "silence cannot freeze a duel",
+      "at": "2026-08-24T22:11:10Z",
+      "dl": 0
+    },
+    {
+      "tag": "v0.17.0",
+      "name": "the gyms are landmarks",
+      "at": "2026-08-24T21:50:19Z",
+      "dl": 0
+    },
+    {
+      "tag": "v0.16.0",
+      "name": "the gate holds, the drop is fair",
+      "at": "2026-08-24T19:26:54Z",
+      "dl": 0
+    },
+    {
+      "tag": "v0.14.0",
+      "name": "the map speaks, the pack hunts, TMs walk the earth",
+      "at": "2026-08-24T15:42:15Z",
+      "dl": 0
+    },
+    {
+      "tag": "v0.12.0",
+      "name": "the match keeps moving",
+      "at": "2026-08-24T15:02:39Z",
+      "dl": 0
+    },
+    {
+      "tag": "v0.8.0",
+      "name": "the ground is the record",
+      "at": "2026-08-24T01:40:02Z",
+      "dl": 1
+    },
+    {
+      "tag": "v0.4.0",
+      "name": "the Safari comes first",
+      "at": "2026-08-23T23:52:06Z",
+      "dl": 0
+    },
+    {
+      "tag": "v0.2.1",
+      "name": "playtest fixes",
+      "at": "2026-08-23T17:19:04Z",
+      "dl": 2
+    },
+    {
+      "tag": "v0.2.0",
+      "name": "download and play, no server needed",
+      "at": "2026-08-23T16:40:44Z",
+      "dl": 1
+    },
+    {
+      "tag": "v0.1.2",
+      "name": "bounded, measurable relay hosting",
+      "at": "2026-08-23T16:23:21Z",
+      "dl": 0
+    },
+    {
+      "tag": "v0.1.1",
+      "name": "hosted relay addresses",
+      "at": "2026-08-23T16:15:21Z",
+      "dl": 1
+    },
+    {
+      "tag": "v0.1.0",
+      "name": "Kanto Battle Royale",
+      "at": "2026-08-23T16:02:16Z",
+      "dl": 1
+    }
+  ]
+}
