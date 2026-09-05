@@ -436,6 +436,47 @@ test("set_open is the host's alone, and tells the room", async () => {
   });
 });
 
+test("MAX is the room's size: the host sets it, the relay refuses past it", async () => {
+  await withRelay(async (port) => {
+    const host = await connect(port);
+    host.send({ type: "host_room", name: "HOST", open: true, max: 2 });
+    const code = (await host.until("room_hosted")).code;
+    assert.equal((await host.until("roster")).max, 2, "the roster says the size");
+
+    const a = await connect(port);
+    a.send({ type: "join_room", code, name: "A" });
+    await a.until("room_joined");
+    await a.until("roster");   // the one their own arrival caused
+    const b = await connect(port);
+    b.send({ type: "join_room", code, name: "B" });
+    assert.equal((await b.next()).reason, "full", "a third trainer is refused");
+    // ...and quick play walks past it too
+    const seeker = await connect(port);
+    seeker.send({ type: "quick_join", name: "SEEK" });
+    assert.equal((await seeker.next()).type, "no_open_rooms");
+
+    // a guest cannot resize the room; the host can, live
+    a.send({ type: "set_max", max: 4 });
+    const c = await connect(port);
+    c.send({ type: "join_room", code, name: "C" });
+    assert.equal((await c.next()).reason, "full");
+    host.send({ type: "set_max", max: 4 });
+    assert.equal((await a.until("roster")).max, 4);
+    const d = await connect(port);
+    d.send({ type: "join_room", code, name: "D" });
+    await d.until("room_joined");
+    await a.until("roster");   // D's arrival
+
+    // and it never exceeds the relay's own ceiling, or drops under two
+    host.send({ type: "set_max", max: 999 });
+    assert.equal((await a.until("roster")).max, 16);
+    host.send({ type: "set_max", max: 0 });
+    assert.equal((await a.until("roster")).max, 2);
+
+    host.end(); a.end(); b.end(); c.end(); d.end(); seeker.end();
+  });
+});
+
 test("the room ceiling holds, refuses cleanly, and frees up again", async () => {
   await withRelay(async (port) => {
     // concurrent rooms are what a hosted relay is billed for, so the cap has

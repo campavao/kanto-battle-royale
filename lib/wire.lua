@@ -9,7 +9,15 @@
 -- envelope (see relay/server.js).  Field names are short because a step
 -- goes out roughly four times a second per player to every other player.
 --
---   {t="place", map=, x=, y=, f=, st=, sprite=}   where I am + my status
+--   {t="place", map=, x=, y=, f=, st=, sprite=, w=, fl=, sd=, cd=}
+--                                                 where I am + my status
+--                                                 (w: my career wins, for the
+--                                                 lobby's seat card; fl / sd:
+--                                                 the host's FILL target and
+--                                                 the room's seed, so a guest's
+--                                                 lobby shows the same bots;
+--                                                 cd: seconds until the host's
+--                                                 clock starts the match)
 --   {t="step",  d=, x=, y=, map=}                 a step just committed
 --   {t="face",  f=, map=}                         a turn in place
 --
@@ -157,10 +165,23 @@ end
 -- `build` is { engine =, mod = } and is the sender's OWN (PROTOCOL 9).
 -- Bot places pass none: a bot is the host's puppet with no install of its
 -- own, and it never fights over the link, so it has no build to compare.
-function Wire.place(map, x, y, facing, status, sprite, as, build)
+-- `wins` is the sender's career count (lib/career.lua), read by the
+-- lobby's seat card and nothing else; absent is fine and means unknown.
+-- Additive: an older client's decoder drops fields it does not name.
+-- `fill` is the host's FILL target (0 = off) and `seed` the room's match
+-- seed, both sent by the host only, both for the lobby's seats.
+local function count(v)
+  v = tonumber(v)
+  return v and math.floor(v) or nil
+end
+
+function Wire.place(map, x, y, facing, status, sprite, as, build, wins, fill, seed,
+                    countdown)
   return { t = "place", v = Wire.PROTOCOL, map = map, x = x, y = y, f = facing,
            st = status, sprite = sprite, as = as,
-           ev = build and build.engine, mv = build and build.mod }
+           ev = build and build.engine, mv = build and build.mod,
+           w = count(wins), fl = count(fill), sd = count(seed),
+           cd = count(countdown) }
 end
 
 function Wire.step(dir, x, y, map, as)
@@ -198,7 +219,8 @@ function Wire.botrec(id, record)
   local rows = {}
   for i, m in ipairs(record or {}) do
     if i > 6 then break end
-    rows[i] = { s = m.species, f = m.hpFrac }
+    -- `t`: this row changed hands (POK-181), so its trade line evolves
+    rows[i] = { s = m.species, f = m.hpFrac, t = m.traded and true or nil }
   end
   local out = { t = "botrec", id = id, mons = rows }
   local bag = record and record.bag
@@ -339,6 +361,14 @@ decoders.place = function(m)
            status = m.st, as = actorOf(m),
            sprite = type(m.sprite) == "string" and #m.sprite <= MAX_ID
                     and m.sprite or nil,
+           wins = (type(m.w) == "number" and m.w >= 0 and m.w == math.floor(m.w))
+                  and m.w or nil,
+           fill = (type(m.fl) == "number" and m.fl >= 0 and m.fl == math.floor(m.fl))
+                  and m.fl or nil,
+           lobbySeed = (type(m.sd) == "number" and m.sd >= 1 and m.sd == math.floor(m.sd))
+                  and m.sd or nil,
+           countdown = (type(m.cd) == "number" and m.cd >= 0 and m.cd == math.floor(m.cd))
+                  and m.cd or nil,
            build = (engine or modv) and { engine = engine, mod = modv } or nil }
 end
 
@@ -454,7 +484,8 @@ decoders.botrec = function(m)
     local f = tonumber(r.f)
     if not f then return nil, "bad record hp" end
     record[#record + 1] = { species = r.s,
-                            hpFrac = math.max(0, math.min(1, f)) }
+                            hpFrac = math.max(0, math.min(1, f)),
+                            traded = (r.t == true) or nil }
   end
   if #record == 0 then return nil, "empty record" end
   if m.bag ~= nil then

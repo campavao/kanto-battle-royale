@@ -1028,6 +1028,51 @@ do
   end
 end
 
+-- ------- a gift lands at the rung (POK-182), read off the source: the
+-- before_give listener clamps the level ahead of everything else it does.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the gift-rung scan: main.lua not found)")
+    io.write(string.char(10))
+  else
+    local src = f:read("*a")
+    f:close()
+    local give = src:match('mod%.events:on%("pokemon%.before_give", function%(gift%).-\n  end%)\n')
+    T.check(give ~= nil, "found the before_give listener")
+    local clamp = give and give:find("if tonumber(gift.level) and gift.level > rung then gift.level = rung end", 1, true)
+    local full = give and give:find("#(save.party or {}) >= 6", 1, true)
+    T.check(clamp ~= nil, "a gift above the rung is clamped to it")
+    T.check(clamp and full and clamp < full, "...before the full-party return, so every gift is clamped")
+  end
+end
+
+-- ------- a bot's team evolves (POK-181), read off the source: every
+-- read of a record goes through the evolution, and a looted ball marks
+-- the row as changed hands.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the bot-evolution scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    local n = 0
+    for _ in src:gmatch("Bots%.fightRows%(rec, self:level%(%), game%.data, stone, pick%)") do n = n + 1 end
+    T.check(n == 2, "both fight-row builds pass the data and the stone rung (" .. n .. ")")
+    T.check(src:find("Bots.fightRows(rec, self:level())", 1, true) == nil,
+            "...and none is left on the bare rows")
+    T.check(src:find("Bots.spillRows(self:botRecord(id), self:level(), data, stone, pick)", 1, true) ~= nil,
+            "the spill a bot drops is built the same way")
+    T.check(src:find("traded = (not Spills.isOwn(key, id)) or nil", 1, true) ~= nil,
+            "a looted ball that changed hands marks the row")
+    T.check(src:find("mod.exports.botRows = function(id, rung)", 1, true) ~= nil,
+            "a driver can read the rows at any rung")
+  end
+end
+
 -- ------- a ball that changed hands is a trade (POK-179), read off the
 -- source: claimSpill asks the engine's own trade check, only for a ball
 -- somebody else dropped, and plays the engine's own movie.

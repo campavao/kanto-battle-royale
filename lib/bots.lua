@@ -52,10 +52,28 @@ function Bots.nextFill(n)
   return 0
 end
 
+-- What the lobby's MAX row cycles through once FILL is on: the same
+-- rungs without the off, topping out at a full room of thirty (Bots.MAX
+-- is the bot cap and the room cap alike).  Wraps to the bottom.
+Bots.MAXES = { 2, 4, 6, 8, 12, 16, 20, 26, Bots.MAX }
+
+function Bots.nextMax(n)
+  for _, step in ipairs(Bots.MAXES) do
+    if step > (tonumber(n) or 0) then return step end
+  end
+  return Bots.MAXES[1]
+end
+
 -- Names fit the 7-character Gen 1 box and read like trainers, not robots.
+-- At least Bots.MAX of them, so a full roster is dealt without the digit
+-- Bots.name falls back on past the end of the list: the lobby shows
+-- every seat by name now (lib/lobby.lua), and "TOBY1" read as a robot.
 local NAMES = {
   "JOEY", "MIKEY", "CALVIN", "LASS", "TIANA", "DUDLEY", "SETH", "PIA",
   "RUDY", "NOLAN", "IVY", "MAX", "REN", "KIM", "TOBY", "VIC",
+  "ANNA", "BEN", "CORA", "DANE", "ELLA", "FINN", "GINA", "HUGO",
+  "IRIS", "JUNE", "KAI", "LEON", "MIA", "NED", "OTIS", "PAM",
+  "QUINN", "ROSA", "SAM", "TESS",
 }
 
 -- A shallow common-Kanto pool: every one of these is a real Red species and
@@ -809,14 +827,91 @@ function Bots.recordCap()
   return 6
 end
 
+-- ---------------------------------------------------------------- EVOLUTION
+--
+-- A bot's team EVOLVES (POK-181).  The record stores species and no
+-- level -- the rung is a bot's level -- and every read used to build the
+-- row as that species at the rung, so a bot's GRIMER at level 80 was a
+-- GRIMER, while a player's own party evolves on the rung tick.  Fifty
+-- matches of that read as "the same ten lines": no MUK, no DUGTRIO, no
+-- GENGAR, and the only evolved forms anyone met were the ACE list's.
+--
+-- The species is DERIVED at read time instead: what a line has reached
+-- at this rung, walked off the data's own evolution table.  The moment
+-- the rung lands, every read -- the fight, the spill it drops, the
+-- spectator's peek -- shows the evolved form, on every client, with no
+-- message and no chance of two records disagreeing.  Level evolutions
+-- follow the rung as a player's do.  A stone has no bot moment, so each
+-- bot gets a seeded rung at which its stone line "used a stone" (a
+-- ROOKIE never gets to Celadon; an ACE was there early).  A trade rides
+-- a change of hands, exactly as it does for a player (POK-179): a row a
+-- bot looted out of somebody ELSE's ball is marked `traded`, and that
+-- mark rides the botrec wire.
+
+-- the rung band in which a tier's stone line evolves; nil never does
+Bots.STONE_RUNG = { REGULAR = { 30, 60 }, ACE = { 16, 40 } }
+
+-- This bot's stone rung and, for a line with several stones (EEVEE), a
+-- fraction that picks one.  A stream of its own, like the tier's.
+function Bots.stoneRung(seed, id)
+  local tier = Bots.tier(seed, id)
+  local band = tier and Bots.STONE_RUNG[tier.id]
+  if not band then return nil, 0 end
+  local rng = Bots.rng((tonumber(seed) or 1) + 30011, id)
+  local rung = rng(band[1], band[2])
+  return rung, (rng(1, 1000) - 1) / 1000
+end
+
+-- What `species` has become by `rung`.  opts: stoneRung (nil = no stone
+-- ever), pick (0..1, which stone), traded (a change of hands).  A build
+-- without the target species stops where it is rather than asserting.
+function Bots.evolveAt(data, species, rung, opts)
+  opts = opts or {}
+  local mons = data and data.pokemon
+  if not (mons and species) then return species end
+  local lv = tonumber(rung) or 0
+  local cur = species
+  for _ = 1, 3 do
+    local def = mons[cur]
+    local evos = type(def) == "table" and def.evolutions or nil
+    if not (evos and #evos > 0) then break end
+    local nxt, stones = nil, {}
+    for _, e in ipairs(evos) do
+      if not mons[e.species] then
+        -- unknown target: skip
+      elseif e.method == "LEVEL" then
+        if lv >= (tonumber(e.level) or 0) then nxt = e.species break end
+      elseif e.method == "TRADE" then
+        if opts.traded then nxt = e.species break end
+      elseif e.method == "ITEM" then
+        if opts.stoneRung and lv >= opts.stoneRung then stones[#stones + 1] = e.species end
+      end
+    end
+    if not nxt and #stones > 0 then
+      local i = math.floor((tonumber(opts.pick) or 0) * #stones) + 1
+      nxt = stones[math.max(1, math.min(#stones, i))]
+    end
+    if not nxt or nxt == cur then break end
+    cur = nxt
+  end
+  return cur
+end
+
+local function evolvedRow(m, rung, data, stone, pick)
+  return Bots.evolveAt(data, m.species, rung,
+                       { stoneRung = stone, pick = pick, traded = m.traded })
+end
+
 -- The rows a FIGHT is built from: healthy mons only, at the rung, in
--- record order.  Also returns idx -- the record index behind each row --
--- so the fight's outcome can be carried back (Bots.scarRecord).
-function Bots.fightRows(record, rung)
+-- record order, each line at what it has reached by now (data, stone and
+-- pick from Bots.stoneRung; without data the species stands).  Also
+-- returns idx -- the record index behind each row -- so the fight's
+-- outcome can be carried back (Bots.scarRecord).
+function Bots.fightRows(record, rung, data, stone, pick)
   local rows, idx = {}, {}
   for i, m in ipairs(record or {}) do
     if (m.hpFrac or 0) > 0 then
-      rows[#rows + 1] = { species = m.species, level = rung }
+      rows[#rows + 1] = { species = evolvedRow(m, rung, data, stone, pick), level = rung }
       idx[#idx + 1] = i
     end
   end
@@ -824,11 +919,12 @@ function Bots.fightRows(record, rung)
 end
 
 -- The rows a SPILL is built from: the whole team, fainted included --
--- "the team hits the ground where you fell" counts the fallen.
-function Bots.spillRows(record, rung)
+-- "the team hits the ground where you fell" counts the fallen -- each
+-- at what it has reached, so what a bot drops is what it fought with.
+function Bots.spillRows(record, rung, data, stone, pick)
   local rows = {}
   for _, m in ipairs(record or {}) do
-    rows[#rows + 1] = { species = m.species, level = rung }
+    rows[#rows + 1] = { species = evolvedRow(m, rung, data, stone, pick), level = rung }
   end
   return rows
 end

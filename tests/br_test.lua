@@ -28,6 +28,33 @@ local Hub = require("mods.battle_royale.tests.fake_relay")
 
 do
   local m = Wire.decode(Wire.place("PALLET_TOWN", 5, 6, "down", "alive", "SPRITE_RED"))
+  -- the career rides the place (2026-09-05), for the lobby's seat card
+  eq(m.wins, nil, "no wins sent reads as unknown")
+  eq(Wire.decode(Wire.place("PALLET_TOWN", 5, 6, "down", "alive", "SPRITE_RED",
+                            nil, nil, 7)).wins, 7, "wins sent are wins read")
+  eq(Wire.decode(Wire.place("PALLET_TOWN", 5, 6, "down", "alive", "SPRITE_RED",
+                            nil, nil, "lots")).wins, nil, "a non-number is dropped")
+  eq(Wire.decode({ t = "place", v = Wire.PROTOCOL, st = "alive", w = -3 }).wins, nil,
+     "and so is a negative one off the wire")
+  eq(Wire.decode({ t = "place", v = Wire.PROTOCOL, st = "alive", w = 2.5 }).wins, nil,
+     "and a fraction")
+  -- ...and the host's FILL target and room seed, the same way
+  eq(m.fill, nil, "no fill sent reads as unknown")
+  eq(m.lobbySeed, nil, "and no seed")
+  local hostPlace = Wire.decode(Wire.place("PALLET_TOWN", 5, 6, "down", "alive",
+                                           "SPRITE_RED", nil, nil, nil, 8, 4242))
+  eq(hostPlace.fill, 8, "the host's fill is read")
+  eq(hostPlace.lobbySeed, 4242, "and the room's seed")
+  eq(Wire.decode(Wire.place("PALLET_TOWN", 5, 6, "down", "alive", "SPRITE_RED",
+                            nil, nil, nil, 0)).fill, 0, "off is zero, not absent")
+  eq(Wire.decode({ t = "place", v = Wire.PROTOCOL, st = "alive", fl = -1 }).fill, nil,
+     "a negative fill is dropped")
+  eq(Wire.decode({ t = "place", v = Wire.PROTOCOL, st = "alive", sd = 0 }).lobbySeed, nil,
+     "and a zero seed")
+  eq(Wire.decode(Wire.place("PALLET_TOWN", 5, 6, "down", "alive", "SPRITE_RED",
+                            nil, nil, nil, nil, nil, 37)).countdown, 37,
+     "the host's clock rides the place too")
+  eq(m.countdown, nil, "...and is absent when none is running")
   ok(m ~= nil, "place round-trips")
   eq(m and m.status, "alive", "place carries status")
   eq(m and m.sprite, "SPRITE_RED", "place carries sprite")
@@ -441,6 +468,15 @@ do
   end
   eq(#dupes, 0, "a full roster has no duplicate names ("
      .. table.concat(dupes, ",") .. ")")
+  -- ...and no digits: the lobby seats every bot by name now, and "TOBY1"
+  -- read as a robot (the list is at least Bots.MAX long, so the digit
+  -- fallback is never reached inside a real match)
+  for _, s in ipairs({ 4242, 7, 1, 99999 }) do
+    for i = 1, Bots.MAX do
+      local nm = Bots.name(s, Bots.idFor(i))
+      ok(not nm:find("%d"), "bot " .. i .. " of seed " .. s .. " has no digit (" .. nm .. ")")
+    end
+  end
 
   -- and past the end of the name list too
   local wideNames, wideDupes = {}, 0
@@ -2442,6 +2478,91 @@ do
   ok(not Bots.recordAlive({ { species = "A", hpFrac = 0 } }),
      "a wiped record is not")
 
+  -- ------- a bot's team evolves (POK-181): derived at read time
+
+  local evo = { pokemon = {
+    GRIMER = { evolutions = { { method = "LEVEL", level = 38, species = "MUK" } } },
+    MUK = { evolutions = {} },
+    CATERPIE = { evolutions = { { method = "LEVEL", level = 7, species = "METAPOD" } } },
+    METAPOD = { evolutions = { { method = "LEVEL", level = 10, species = "BUTTERFREE" } } },
+    BUTTERFREE = { evolutions = {} },
+    GEODUDE = { evolutions = { { method = "LEVEL", level = 25, species = "GRAVELER" } } },
+    GRAVELER = { evolutions = { { method = "TRADE", level = 1, species = "GOLEM" } } },
+    GOLEM = { evolutions = {} },
+    NIDORAN_M = { evolutions = { { method = "LEVEL", level = 16, species = "NIDORINO" } } },
+    NIDORINO = { evolutions = { { method = "ITEM", item = "MOON_STONE", level = 1, species = "NIDOKING" } } },
+    NIDOKING = { evolutions = {} },
+    EEVEE = { evolutions = {
+      { method = "ITEM", item = "WATER_STONE", level = 1, species = "VAPOREON" },
+      { method = "ITEM", item = "THUNDER_STONE", level = 1, species = "JOLTEON" },
+      { method = "ITEM", item = "FIRE_STONE", level = 1, species = "FLAREON" } } },
+    VAPOREON = {}, JOLTEON = {}, FLAREON = {},
+    KADABRA = { evolutions = { { method = "TRADE", level = 1, species = "ALAKAZAM" } } },
+    ALAKAZAM = {},
+    DRATINI = { evolutions = { { method = "LEVEL", level = 30, species = "DRAGONAIR" } } },
+    DRAGONAIR = { evolutions = { { method = "LEVEL", level = 55, species = "MISSING" } } },
+  } }
+  eq(Bots.evolveAt(evo, "GRIMER", 37), "GRIMER", "below the level, the line waits")
+  eq(Bots.evolveAt(evo, "GRIMER", 38), "MUK", "at the level it has evolved")
+  eq(Bots.evolveAt(evo, "CATERPIE", 15), "BUTTERFREE", "a two-step line walks both steps")
+  eq(Bots.evolveAt(evo, "CATERPIE", 8), "METAPOD", "...or one, when the rung only reaches one")
+  eq(Bots.evolveAt(evo, "GEODUDE", 100), "GRAVELER", "a trade line stops at the trade without a change of hands")
+  eq(Bots.evolveAt(evo, "GEODUDE", 100, { traded = true }), "GOLEM", "...and finishes with one")
+  eq(Bots.evolveAt(evo, "GEODUDE", 24, { traded = true }), "GEODUDE", "a change of hands does not skip the level step")
+  eq(Bots.evolveAt(evo, "KADABRA", 5, { traded = true }), "ALAKAZAM", "a trade needs no level")
+  eq(Bots.evolveAt(evo, "NIDORAN_M", 50), "NIDORINO", "a stone line stops at the stone with no stone rung")
+  eq(Bots.evolveAt(evo, "NIDORAN_M", 50, { stoneRung = 40 }), "NIDOKING", "...and finishes once the stone rung is reached")
+  eq(Bots.evolveAt(evo, "NIDORAN_M", 30, { stoneRung = 40 }), "NIDORINO", "...not before")
+  eq(Bots.evolveAt(evo, "EEVEE", 30, { stoneRung = 20, pick = 0 }), "VAPOREON", "several stones: the pick chooses")
+  eq(Bots.evolveAt(evo, "EEVEE", 30, { stoneRung = 20, pick = 0.5 }), "JOLTEON", "...deterministically")
+  eq(Bots.evolveAt(evo, "EEVEE", 30, { stoneRung = 20, pick = 0.999 }), "FLAREON", "...across the whole range")
+  eq(Bots.evolveAt(evo, "DRATINI", 60), "DRAGONAIR", "a target the build lacks stops the walk rather than asserting")
+  eq(Bots.evolveAt(evo, "MEW", 100), "MEW", "a species the data lacks stands")
+  eq(Bots.evolveAt(nil, "GRIMER", 100), "GRIMER", "no data, no evolution")
+  eq(Bots.evolveAt(evo, nil, 100), nil, "no species, nothing")
+
+  -- the stone rung: seeded per bot, banded by tier, never for a ROOKIE
+  local bands = { seen = {} }
+  for id = 1001, 1060 do
+    local tier = Bots.tier(9, id).id
+    local rung, pick = Bots.stoneRung(9, id)
+    local r2, p2 = Bots.stoneRung(9, id)
+    ok(rung == r2 and pick == p2, "the stone rung is derived (bot " .. id .. ")")
+    if tier == "ROOKIE" then
+      ok(rung == nil, "a ROOKIE never used a stone")
+    else
+      local band = Bots.STONE_RUNG[tier]
+      ok(rung >= band[1] and rung <= band[2],
+         ("a %s's stone rung sits in its band (%d)"):format(tier, rung))
+      ok(pick >= 0 and pick < 1, "...with a pick fraction in [0,1)")
+      bands.seen[tier] = true
+    end
+  end
+  ok(bands.seen.REGULAR and bands.seen.ACE, "both stone tiers turn up in sixty bots")
+
+  -- the reads carry it: the fight, the spill
+  local line = { { species = "GRIMER", hpFrac = 1 }, { species = "KADABRA", hpFrac = 1, traded = true },
+                 { species = "NIDORAN_M", hpFrac = 0 } }
+  local frows = Bots.fightRows(line, 50, evo, 40, 0)
+  eq(frows[1].species .. "," .. frows[2].species, "MUK,ALAKAZAM",
+     "the fight is built from what each line has reached")
+  eq(#frows, 2, "...healthy rows only, as before")
+  local srows = Bots.spillRows(line, 50, evo, 40, 0)
+  eq(srows[3].species, "NIDOKING", "the spill drops the evolved form, fallen included")
+  eq(Bots.fightRows(line, 50)[1].species, "GRIMER", "without data the old rows stand")
+
+  -- the wire carries the change-of-hands mark
+  local Wire = require("mods.battle_royale.lib.wire")
+  local back = Wire.decode(Wire.botrec(1001, line)).record
+  ok(back[2].traded == true and back[1].traded == nil,
+     "botrec carries `traded` on the row that changed hands, and only that one")
+
+  -- ...and the peek shows the same team the fight would
+  local Peek = require("mods.battle_royale.lib.peek")
+  local peeked = Peek.botParty(Bots, 9, 1001, evo, 50, line)
+  ok(peeked[1].species == "MUK" and peeked[2].species == "ALAKAZAM",
+     "a spectator sees the evolved team")
+
   -- catches: capped by tier, paced by chance, drawn from the map's table
   local slots = { { species = "CATERPIE", level = 4 } }
   local always = function(a, b) if a then return a end return 0 end
@@ -2612,6 +2733,73 @@ end
 -- for an alive player after the drop.  luacheck would say so; it is not on
 -- this machine, so this says so.
 
+-- ------- a catch on its "was caught!" page survives the buzzer
+--
+-- The engine stores a caught mon AFTER the caught page is dismissed
+-- (BattleState.storeCaughtMon runs behind sayNextWaitSfx), and the buzzer
+-- closes an open battle after BUZZER_BATTLE_GRACE.  A MAGMAR caught with
+-- seconds left sat on its page -- fanfare, then a prompt -- until the
+-- close discarded it, and its trainer was out for catching nothing.  So:
+-- a closed ball marks the catch pending until pokemon.caught, the page is
+-- pressed through at once, and closeLiveBattle waits on it.
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if f then
+    local src = f:read("*a")
+    f:close()
+    ok(src:find('mod%.events:on%("battle%.ball_thrown"') ~= nil,
+       "a closed ball is watched for")
+    local thrown = src:match('mod%.events:on%("battle%.ball_thrown".-\n  end%)')
+    ok(thrown and thrown:find("ev%.caught") and thrown:find("BR%.catchPending = ev%.battle"),
+       "...and a caught one is a catch pending")
+    local landed = src:match('mod%.events:on%("pokemon%.caught".-\n  end%)')
+    ok(landed and landed:find("BR%.catchPending = nil"), "which pokemon.caught lands")
+    local ended = src:match('mod%.events:on%("battle%.ended".-\n  end%)')
+    ok(ended and ended:find("BR%.catchPending = nil"), "and a closed battle clears")
+    local close = src:match("function BR:closeLiveBattle%(.-\n  end\n")
+    ok(close and close:find('if self%.catchPending == battle then return "waiting" end'),
+       "the buzzer's close waits on a pending catch")
+    local auto = src:match("function BR:tickAutoResolve%(.-\n  end\n")
+    ok(auto and auto:find("self%.catchPending == lb"),
+       "and the caught page is pressed through at once")
+    -- ...a second in: the jingle is cut, and the page says less
+    ok(auto and auto:find("self%.caughtPage%.seconds") and auto:find("pcall%(src%.stop, src%)"),
+       "the caught jingle is cut at caughtPage.seconds")
+    local page = src:match("BR%.caughtPage = {.-\n  }\n")
+    ok(page and page:find("seconds = 1,"), "which is one second")
+    ok(page and page:find('text = "All right!\\n%s was\\ncaught!"', 1, true),
+       "the engine's caught page is the catalog id")
+    ok(page and page:find('match = "%s was\\ncaught!"', 1, true),
+       "and the match's reads without the All right!")
+    ok(src:find("Data%.strings%[BR%.caughtPage%.text%] = BR%.caughtPage%.match") ~= nil,
+       "swapped in with the throwaway world")
+    local reset = src:match("function BR:resetMatch%(.-\n  end\n")
+    ok(reset and reset:find("Data%.strings%[self%.caughtPage%.text%] = self%.caughtPage%.text"),
+       "and back at resetMatch, for a real playthrough")
+    ok(src:find("mod%.content%.strings:override%(BR%.caughtPage%.text, BR%.caughtPage%.text%)") ~= nil,
+       "with an identity entry at load so the catalog is live")
+  end
+end
+
+-- ------- a guest leaving mid-match does not hand the host the match
+--
+-- The roster handler forgets whoever is no longer on the relay's member
+-- list.  A bot never was, so the forget loop wiped every bot the moment
+-- a human left, and checkWinner found the host alone: YOU WIN! with
+-- twenty-eight bots standing (the 2026-09-05 two-client run).  The loop
+-- has to skip bot ids, and this pins that it does.
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if f then
+    local src = f:read("*a")
+    f:close()
+    local forget = src:match("forget anyone who left; the host recounts survivors.-BR%.players%[id%] = nil")
+    ok(forget ~= nil, "the roster handler's forget loop is where it was")
+    ok(forget and forget:find("not Bots%.isBot%(id%)") ~= nil,
+       "...and it leaves the bots alone: they are never on the roster")
+  end
+end
+
 do
   local f = io.open("mods/battle_royale/main.lua", "r")
   if not f then
@@ -2722,16 +2910,22 @@ end
 --
 -- The screen's rows are a function of BR, rebuilt every frame; the rows
 -- that start a room keep the screen open so it can become the lobby.
+--
+-- Since 2026-09-05 the lobby face is a drawn ROOM (lib/lobby.lua): every
+-- trainer as a sprite and a name, empty seats as outlines, one button.
+-- Menu.items' "lobby" rows are the host's OPTIONS box over that room.
 
 do
   local okMenu, BRMenu = pcall(require, "mods.battle_royale.lib.menu")
+  local Lobby = require("mods.battle_royale.lib.lobby")
+  local Bots = require("mods.battle_royale.lib.bots")
   if not okMenu then
     io.write("  (skipping lobby screen: " .. tostring(BRMenu) .. ")\n")
   else
     local function fakeBR(over)
       local BR = {
         phase = "off", status = "lobby", solo = false, botCount = 3, fillTo = 0,
-        ring = nil, relay = nil,
+        ring = nil, relay = nil, players = {},
         aliveCount = function() return 4 end,
         level = function() return 5 end,
         safariLeft = function() return 65 end,
@@ -2741,19 +2935,29 @@ do
         playerName = function() return "RED" end,
         skinLabel = function() return "RED" end,
         skinId = function() return "RED" end,
-        winCount = function() return 0 end,
+        skinWalk = function() return "SPRITE_HIKER" end,
+        winCount = function() return 4 end,
         setSkin = function() end,
         relayAddress = function() return "127.0.0.1:7790" end,
         fogSeconds = function() return 120 end,
         safariSeconds = function() return 120 end,
         cycleFog = function(self) self.cycledFog = true end,
-        -- the deep-log switch the DEBUG LOG row reads (POK-86)
+        -- the deep-log switch the DEBUG row reads (POK-86)
         debugOn = false,
         isDebug = function(self) return self.debugOn end,
-        statsOn = function(self) return self.stats ~= false end,
-        setStatsOn = function(self, on) self.stats = on and true or false return self.stats end,
         setDebug = function(self, on) self.debugOn = on and true or false end,
         cycleSafari = function(self) self.cycledSafari = true end,
+        -- FILL / MAX, the shape main.lua gives them
+        fillOn = function(self) return (self.fillTo or 0) > 0 end,
+        fillMax = function(self) return self.fillTarget or 30 end,
+        setFillOn = function(self, on)
+          if on then self.fillTo = self:fillMax() else self.fillTo = 0 end
+        end,
+        cycleFillMax = function(self)
+          self.fillTarget = Bots.nextMax(self:fillMax())
+          if self:fillOn() then self.fillTo = self.fillTarget end
+        end,
+        nextBotCount = function(self) return Bots.nextCount(self.botCount) end,
         -- the room door (POK-142): no trouble unless a test says so
         buildTrouble = function(self, id) return (self.trouble or {})[id] end,
         buildTroubleLabel = function(self) return self.troubleLabel end,
@@ -2762,12 +2966,13 @@ do
         -- trainers the door turned away: none unless a test stages some
         flaggedAbsent = function(self) return self.absent or {} end,
         clearRefusal = function(self) self.refused = nil end,
+        kick = function(self, id) self.kicked = id return true end,
       }
       for k, v in pairs(over or {}) do BR[k] = v end
       return BR
     end
     local function room(host, over)
-      local r = { code = "ABCDEF", hostId = 1, status = "open",
+      local r = { code = "ABCDEF", hostId = 1, id = host and 1 or 2, status = "open",
                   members = { { id = 1, name = "RED" }, { id = 2, name = "BLUE" } },
                   isOpen = function() return true end,
                   isHost = function() return host end }
@@ -2785,15 +2990,22 @@ do
       end
       return nil
     end
+    local function names(seats)
+      local out = {}
+      for i, s in ipairs(seats) do
+        out[i] = s.empty and "_" or (tostring(s.name) .. (s.flag and "!" or "")
+                                       .. (s.absent and "?" or ""))
+      end
+      return table.concat(out, "|")
+    end
 
     -- ------- no face may run off the bottom of the screen (POK-104)
     --
     -- The box height was `#items * rowStep + 2` flat, which is right for a
-    -- fixed list and wrong for this one: the hosted lobby grows a row per
-    -- trainer in the room on top of the host's settings, so a real room
-    -- pushed START MATCH and LEAVE off the canvas with no way to reach
-    -- them -- the screen that starts matches could not start one.  Menu
-    -- knew how to scroll all along; nobody had set maxVisible.
+    -- fixed list and wrong for a list that grew a row per trainer.  The
+    -- room draws the trainers now, so the OPTIONS box is a fixed list
+    -- again -- and it has to FIT, every variant of it, because a box that
+    -- scrolls over a room is a box with something hidden.
     do
       local cap = BRMenu.maxRows(2)
       eq(cap, 8, "eight double-spaced rows fit the 18-tile canvas")
@@ -2806,28 +3018,28 @@ do
       ok(#first <= cap,
          "the first face fits on one screen (" .. #first .. "/" .. cap .. ")")
 
-      -- ...and the hosted lobby is the one that does not, which is the
-      -- whole reason the cap has to exist
+      -- ...and so does the host's OPTIONS box, however full the room: the
+      -- crowd is drawn as seats, not as rows
       local crowd = {}
-      for i = 1, 6 do crowd[i] = { id = i, name = "P" .. i } end
+      for i = 1, 12 do crowd[i] = { id = i, name = "P" .. i } end
       local lobbyBR = fakeBR({ relay = room(true, { members = crowd }) })
       local lobby, lobbyView = BRMenu.items({ version = "0.0.0" }, lobbyBR, {})
       eq(lobbyView, "lobby", "a room with a host is the lobby face")
-      ok(#lobby > cap,
-         "a full lobby overflows one screen (" .. #lobby .. " rows)")
-      -- the rows that were falling off are the ones you cannot do without
-      ok(find(lobby, "START MATCH") ~= nil, "START MATCH is in the list")
+      ok(#lobby <= cap,
+         "a full room's OPTIONS box still fits (" .. #lobby .. " rows)")
+      ok(find(lobby, "START MATCH") ~= nil, "START MATCH is in the box")
       ok(find(lobby, "LEAVE") ~= nil, "so is LEAVE")
-
-      -- one row per member, so this grows without bound as a room fills:
-      -- a cap is the only thing that can hold it
-      local bigger = BRMenu.items({ version = "0.0.0" },
-        fakeBR({ relay = room(true, { members = (function()
-          local m = {}
-          for i = 1, 12 do m[i] = { id = i, name = "P" .. i } end
-          return m
-        end)() }) }), {})
-      ok(#bigger > #lobby, "a fuller room is a longer list still")
+      ok(not labels(lobby):find("P7", 1, true),
+         "and no trainer is a row: " .. labels(lobby))
+      lobbyBR:setFillOn(true)
+      lobby = BRMenu.items({ version = "0.0.0" }, lobbyBR, {})
+      ok(#lobby <= cap,
+         "with FILL on and its MAX row too (" .. #lobby .. " rows)")
+      -- the room itself pages: twelve trainers is two pages of eight
+      local seats = Lobby.seats(lobbyBR)
+      eq(#seats, 30, "FILL to 30 with twelve here is thirty seats")
+      eq(Lobby.scrollFor(0, 30, 30), math.ceil(30 / Lobby.COLS) - Lobby.ROWS,
+         "the last seat scrolls the room to its last page")
     end
 
     -- ------- the door marks the lobby (POK-142)
@@ -2837,42 +3049,41 @@ do
     -- from the TITLE as well as from the start menu, and with no overworld
     -- under it there is nothing to queue a text box onto at all.
     do
+      -- (a MAX of two throughout: the door tests read the whole room, and
+      -- open seats past the humans are another test's business)
       local marked = fakeBR({
-        relay = room(true),
+        relay = room(true), fillTarget = 2,
         trouble = { [2] = "build" },
         troubleLabel = "! UPDATE THE GAME",
       })
-      local rows = labels(BRMenu.items({ version = "0.0.0" }, marked, {}))
-      ok(rows:find("- RED*|", 1, true),
-         "an agreeing trainer keeps their plain row, host star and all")
-      ok(rows:find("- BLUE!|", 1, true), "and the one the door flagged wears a !")
+      local seats = Lobby.seats(marked)
+      eq(names(seats), "RED|BLUE!", "the one the door flagged wears a !")
+      ok(seats[1].host and seats[1].me, "the host's seat knows it is the host's, and mine")
+      eq(seats[1].sprite, "SPRITE_HIKER", "my seat wears the skin I picked")
+      eq(Lobby.status(marked), "! UPDATE THE GAME",
+         "with the status line saying which number to chase")
 
-      -- the mark sits against the NAME, ahead of the host's asterisk: the
-      -- Gen 1 font draws no asterisk, so a "!" after one floats a blank
-      -- cell away from the trainer it accuses
-      local host = labels(BRMenu.items({ version = "0.0.0" }, fakeBR({
-        relay = room(true), trouble = { [1] = "build" },
-        troubleLabel = "! UPDATE ROYALE",
-      }), {}))
-      ok(host:find("- RED!*|", 1, true),
-         "a flagged host wears the ! before the star: " .. host)
-      ok(rows:find("! UPDATE THE GAME", 1, true),
-         "with one row saying which number to chase")
-
-      ok(rows:find("YOU ARE ON:", 1, true), "and our own numbers under it")
-      ok(rows:find("ROYALE v0.34.1", 1, true), "the mod version we are running")
-      ok(rows:find("GAME v0.2.31", 1, true), "and the engine release")
+      -- the seat, opened: the numbers to match live behind the flag
+      marked.players[2] = { name = "BLUE", build = { engine = "0.2.29", mod = "0.34.0" } }
+      local card = labels(Lobby.seatItems(marked, seats[2]))
+      ok(card:find("BLUE|", 1, true), "the card leads with the name")
+      ok(card:find("CANNOT BATTLE", 1, true), "says the room cannot fight them")
+      ok(card:find("ROYALE v0.34.0", 1, true) and card:find("GAME v0.2.29", 1, true),
+         "and names their build: " .. card)
+      ok(card:find("|REMOVE|", 1, true), "the host can show them the door")
 
       -- a trainer the door turned away leaves a trace, because on the host
       -- that trace is the only sign they were ever there
-      local bounced = labels(BRMenu.items({ version = "0.0.0" }, fakeBR({
-        relay = room(true),
+      local bounced = fakeBR({
+        relay = room(true), fillTarget = 2,
         troubleLabel = "! GAME MISMATCH",
         absent = { { id = 9, name = "GUESTB",
                      build = { engine = "9.9.9", mod = "0.34.1" } } },
-      }), {}))
-      ok(bounced:find("! GUESTB|", 1, true),
-         "the turned-away trainer is listed under the roster: " .. bounced)
+      })
+      eq(names(Lobby.seats(bounced)), "RED|BLUE|GUESTB!?",
+         "the turned-away trainer sits under the roster, dim and flagged")
+      ok(Lobby.seats(bounced)[3].id == nil, "...and cannot be opened")
+
       -- ------- the face a refused guest actually lands on
       --
       -- Not a text box: this screen opens from the TITLE as well as the
@@ -2914,19 +3125,17 @@ do
       end
 
       -- ...and a fightable room says none of it.  The "!" is the whole
-      -- signal, so nothing else in this face may carry one.
-      local clean = labels(BRMenu.items({ version = "0.0.0" },
-                                        fakeBR({ relay = room(true) }), {}))
-      ok(not clean:find("!", 1, true),
-         "a fightable room has no ! anywhere in it: " .. clean)
-      ok(not clean:find("YOU ARE ON:", 1, true),
-         "and does not spend rows on numbers nobody needs")
+      -- signal, so nothing else in the room may carry one.
+      local clean = fakeBR({ relay = room(true), fillTarget = 2 })
+      eq(names(Lobby.seats(clean)), "RED|BLUE", "a fightable room has no ! in it")
+      eq(Lobby.status(clean), nil, "and nothing on the status line")
+      ok(not labels(Lobby.seatItems(clean, Lobby.seats(clean)[2])):find("CANNOT", 1, true),
+         "and a clean seat's card says nothing about builds")
 
       -- fit() sizes the box to the widest label + 3 against a 20-tile
       -- canvas, so a label past 17 characters is clipped off the right
-      -- with nothing to say it happened.  The door added the longest rows
-      -- this face has ever carried, so it brings the check with it.
-      for _, br in ipairs({ marked, fakeBR({ relay = room(true) }) }) do
+      -- with nothing to say it happened.
+      for _, br in ipairs({ marked, clean }) do
         for _, it in ipairs(BRMenu.items({ version = "0.34.1" }, br, {})) do
           ok(#it.label <= 17,
              ("lobby row fits the box (%d): %s"):format(#it.label, it.label))
@@ -2951,60 +3160,129 @@ do
     eq(view, "connecting", "a relay mid-handshake is the connecting face")
     eq(labels(items), "CONNECTING...|CANCEL", "which waits, or cancels")
 
-    -- a solo lobby: the two rows that decide the match, and out
-    BR.relay = room(true)
+    -- a solo lobby: MAX is the bot count outright, then the two clocks,
+    -- the log, and out -- no FILL (nobody to fill around), no OPEN
+    BR.relay = room(true, { members = { { id = 1, name = "RED" } } })
     BR.solo = true
     items, view = BRMenu.items({}, BR, {})
     eq(view, "lobby", "an open room is the lobby")
-    eq(labels(items), "BOTS: 3|FOG: 120s|SAFARI: 120s|DEBUG LOG: OFF|SEND STATS: ON|START MATCH|LEAVE",
-       "solo: bots, the two clocks, start, leave")
+    eq(labels(items), "MAX: 3|FOG: 120s|SAFARI: 120s|DEBUG: OFF|START MATCH|LEAVE",
+       "solo: max, the two clocks, the log, start, leave")
+    eq(Lobby.header(BR), "SOLO VS BOTS", "a solo room has no code to read out")
+    eq(names(Lobby.seats(BR)), "RED|_|_|_",
+       "...and MAX: 3 is three seats, unknown until the room has a seed")
+    BR.lobbySeed = 4242
+    local solo = Lobby.seats(BR)
+    ok(solo[2].bot and solo[3].bot and solo[4].bot, "with a seed they are bots")
+    ok(solo[2].name ~= solo[3].name and solo[3].name ~= solo[4].name,
+       "each their own: " .. names(solo))
+    ok(not names(solo):find("%d"), "and none wears a digit")
+    find(items, "MAX").onSelect()
+    eq(BR.botCount, 5, "the MAX row steps the bot ladder")
+    eq(#Lobby.seats(BR), 6, "and the seats follow")
     find(items, "FOG").onSelect()
     ok(BR.cycledFog, "the FOG row cycles the fog clock (POK-44)")
     -- BR_DEBUG could never work in the game (the mod sandbox hides the
     -- environment), so the deep tier is a row like any other knob
-    find(items, "DEBUG LOG: OFF").onSelect()
-    ok(BR:isDebug(), "the DEBUG LOG row turns the deep tier on (POK-86)")
+    find(items, "DEBUG: OFF").onSelect()
+    ok(BR:isDebug(), "the DEBUG row turns the deep tier on (POK-86)")
     items = BRMenu.items({}, BR, {})
-    ok(find(items, "DEBUG LOG: ON") ~= nil, "and the row says so next frame")
-    find(items, "DEBUG LOG: ON").onSelect()
+    ok(find(items, "DEBUG: ON") ~= nil, "and the row says so next frame")
+    find(items, "DEBUG: ON").onSelect()
     ok(not BR:isDebug(), "...and back off")
     ok(find(items, "SAFARI: 120s") ~= nil and find(items, "SAFARI: 120s").keepOpen,
        "the SAFARI row is a setting that keeps the screen")
-    ok(find(items, "BOTS").keepOpen, "changing BOTS keeps the screen")
+    ok(find(items, "MAX").keepOpen, "changing MAX keeps the screen")
     ok(not find(items, "START MATCH").keepOpen, "START MATCH is the way out")
     ok(not find(items, "LEAVE").keepOpen, "and so is LEAVE")
+    ok(not labels(items):find("SEND STATS", 1, true),
+       "SEND STATS is the launcher's now, not the lobby's")
+    ok(not labels(items):find("BOTS:", 1, true) and not labels(items):find("TRAINERS", 1, true),
+       "BOTS and TRAINERS are gone: the room IS the count")
 
     -- a hosted room with people in it
     BR.solo = false
+    BR.botCount = 0
+    BR.relay = room(true)
     BR.startsIn = function() return 12 end
     items = BRMenu.items({}, BR, {})
     eq(labels(items),
-       "CODE ABCDEF|- RED*|- BLUE|OPEN: NO|BOTS: 3|FOG: 120s|SAFARI: 120s|DEBUG LOG: OFF|SEND STATS: ON|FILL: OFF|TRAINERS: 5|START MATCH (12)|LEAVE",
-       "hosting: code, roster, OPEN, BOTS, the clocks, FILL TO, the total, the countdown")
+       "FILL: OFF|MAX: 30|OPEN: NO|FOG: 120s|SAFARI: 120s|DEBUG: OFF|START MATCH (12)|LEAVE",
+       "hosting: FILL, MAX, OPEN, the clocks, the log, the countdown")
+    eq(Lobby.header(BR), "CODE ABCDEF", "the code over the room")
+    eq(Lobby.status(BR), "STARTS IN 12", "the countdown under it, for everyone")
+    eq(Lobby.button(BR), "OPTIONS", "the host's button opens the box")
+    eq(names(Lobby.seats(BR)), "RED|BLUE|" .. ("_|"):rep(27) .. "_",
+       "FILL off: the room is who is here, and the open seats to thirty")
+    find(items, "FILL: OFF").onSelect()
+    items = BRMenu.items({}, BR, {})
+    eq(labels(items),
+       "FILL: ON|MAX: 30|OPEN: NO|FOG: 120s|SAFARI: 120s|DEBUG: OFF|START MATCH (12)|LEAVE",
+       "FILL on keeps the same rows, MAX at a full room by default")
+    eq(#Lobby.seats(BR), 30, "...and the room shows the seats bots will take")
+    ok(Lobby.seats(BR)[3].bot and Lobby.seats(BR)[2].id,
+       "humans first, the dealt bots after")
+    find(items, "MAX: 30").onSelect()
+    items = BRMenu.items({}, BR, {})
+    ok(find(items, "MAX: 2") ~= nil, "MAX wraps from a full room to the bottom rung: "
+       .. labels(items))
+    eq(#Lobby.seats(BR), 2, "two humans already fill a MAX of two")
+    find(items, "MAX: 2").onSelect()
+    ok(find(BRMenu.items({}, BR, {}), "MAX: 4") ~= nil, "and climbs")
+    find(BRMenu.items({}, BR, {}), "FILL: ON").onSelect()
+    items = BRMenu.items({}, BR, {})
+    ok(find(items, "FILL: OFF") ~= nil and find(items, "MAX: 4") ~= nil,
+       "FILL off keeps MAX: it is the room's size, with or without bots")
+    eq(names(Lobby.seats(BR)), "RED|BLUE|_|_", "...and the open seats stay, as seats")
+    find(items, "MAX: 4").onSelect()
+    ok(find(BRMenu.items({}, BR, {}), "MAX: 6") ~= nil, "MAX still steps with FILL off")
+    eq(names(Lobby.seats(BR)), "RED|BLUE|_|_|_|_", "...and the room grows, still open")
+    BR:setFillOn(true)
+    ok(find(BRMenu.items({}, BR, {}), "MAX: 6") ~= nil,
+       "...and FILL back on fills to the MAX it had")
+    ok(#Lobby.seats(BR) == 6 and Lobby.seats(BR)[3].bot, "which the room now shows as bots")
+    BR:setFillOn(false)
+    BR.startsIn = function() return nil end
 
-    -- a guest waits
+    -- a guest waits: their button is the way out, their status says why
     BR.relay = room(false)
     items = BRMenu.items({}, BR, {})
-    eq(labels(items), "CODE ABCDEF|- RED*|- BLUE|WAIT FOR HOST|LEAVE", "a guest waits for the host")
+    eq(labels(items), "WAIT FOR HOST|LEAVE", "a guest's rows are the wait and the way out")
+    eq(Lobby.button(BR), "LEAVE", "a guest's button leaves")
+    eq(Lobby.status(BR), "WAIT FOR HOST", "and the room says what they wait on")
+    -- ...unless the host's clock is running: the place message carried the
+    -- seconds left, pinned to this client's own wall clock on arrival, and
+    -- a quick guest is not waiting on anybody
+    BR.players[1] = { name = "RED", startsAt = 40 }
+    BR.now = function() return 0 end
+    eq(Lobby.status(BR), "STARTS IN 40", "the host's clock, on the guest's screen")
+    BR.now = function() return 12.4 end
+    eq(Lobby.status(BR), "STARTS IN 28", "...ticking on the guest's own wall clock")
+    BR.now = function() return 99 end
+    eq(Lobby.status(BR), "STARTS IN 0", "and never negative")
+    BR.players[1] = nil
+    BR.now = nil
+    ok(Lobby.seats(BR)[2].me and not Lobby.seats(BR)[2].host, "the guest's seat is theirs")
+    ok(not labels(Lobby.seatItems(BR, Lobby.seats(BR)[1])):find("REMOVE", 1, true),
+       "a guest cannot remove anyone")
 
-    -- POK-130: the host's roster rows arm, then remove
+    -- POK-130: the host removes a guest from the guest's seat card
     BR.relay = room(true)
     BR.kicked = nil
-    BR.kick = function(self, id) self.kicked = id self.armKick = nil return true end
-    items = BRMenu.items({}, BR, {})
-    find(items, "- BLUE").onSelect()
-    eq(BR.armKick, 2, "A on a guest arms the question")
-    items = BRMenu.items({}, BR, {})
-    ok(find(items, "REMOVE BLUE?") ~= nil, "which the next frame asks")
-    find(items, "REMOVE BLUE?").onSelect()
-    eq(BR.kicked, 2, "and A again removes them")
-    ok(find(BRMenu.items({}, BR, {}), "REMOVE") == nil, "the question is gone")
-    find(BRMenu.items({}, BR, {}), "- RED*").onSelect()
-    ok(BR.armKick ~= 1, "the host's own row never arms")
-    BR.armKick = 2
-    BR.relay = room(true, { members = { { id = 1, name = "RED" } } })
-    BRMenu.items({}, BR, {})
-    eq(BR.armKick, nil, "an arm on somebody who left is dropped")
+    local seats = Lobby.seats(BR)
+    local card = Lobby.seatItems(BR, seats[2])
+    eq(labels(card), "BLUE|REMOVE|BACK", "a guest's card, to the host")
+    find(card, "REMOVE").onSelect()
+    eq(BR.kicked, 2, "REMOVE shows them the door")
+    ok(not labels(Lobby.seatItems(BR, seats[1])):find("REMOVE", 1, true),
+       "the host's own card never offers it")
+    eq(labels(Lobby.seatItems(BR, seats[1])), "RED|HOST|WINS: 4|BACK",
+       "...and says HOST, with the career the place message carries")
+    BR.players[2] = { name = "BLUE", wins = 9, sprite = "SPRITE_LASS" }
+    seats = Lobby.seats(BR)
+    eq(seats[2].sprite, "SPRITE_LASS", "a peer's seat wears the sprite they sent")
+    eq(seats[2].wins, 9, "and carries the wins they sent")
+    BR.players[2] = nil
 
     -- POK-133: the offer face, and the seated watcher
     BR.relay = room(true, { status = "connecting",
@@ -3025,9 +3303,12 @@ do
                                          { id = 2, name = "LATE", spectate = true } } })
     BR.isSpectating = function() return true end
     items = BRMenu.items({}, BR, {})
-    eq(labels(items),
-       "CODE ABCDEF|- RED*|- LATE NEXT|MATCH RUNNING|YOU PLAY NEXT|LEAVE",
-       "a spectator knows the deal, and the roster marks them")
+    eq(labels(items), "MATCH RUNNING|YOU PLAY NEXT|LEAVE",
+       "a spectator knows the deal")
+    eq(Lobby.status(BR), "YOU PLAY NEXT", "and the room says so under the seats")
+    ok(Lobby.seats(BR)[2].next, "with their seat marked as next match's")
+    ok(labels(Lobby.seatItems(BR, Lobby.seats(BR)[2])):find("PLAYS NEXT", 1, true),
+       "and their card too")
     BR.isSpectating = nil
 
     -- POK-161 v2: the DAILY GAME lobby is a card, not a control panel
@@ -3037,25 +3318,15 @@ do
     BR.dailyLobby = true
     BR.dailyStartsIn = function() return 2 * 3600 + 5 * 60 end
     items = BRMenu.items({}, BR, {})
-    local card = labels(items)
-    eq(card, "STARTS IN 2H05M|- RED*|- BLUE|LEAVE",
-       "the daily lobby: countdown first, then players, then the way out")
-    ok(find(items, "OPEN:") == nil and find(items, "CODE") == nil
-       and find(items, "FOG:") == nil and find(items, "START MATCH") == nil,
-       "...no code, no rules rows, nothing pressable: the clock starts it")
-    -- information is not a control: plain rows carry the dead mark the
-    -- cursor slides past, and the actionable rows never do
-    ok(find(items, "STARTS IN").dead == true, "the countdown is not a cursor stop")
-    ok(find(items, "LEAVE").dead == nil, "...and LEAVE is")
-    for _, it in ipairs(items) do
-      ok(#it.label <= 17,
-         ("daily row fits the box (%d): %s"):format(#it.label, it.label))
-    end
+    eq(labels(items), "LEAVE", "the daily lobby has nothing to set: the clock starts it")
+    eq(Lobby.header(BR), "STARTS IN 2H05M", "the countdown leads the room")
+    eq(Lobby.button(BR), "LEAVE", "and even the host's button only leaves")
+    ok(#Lobby.header(BR) <= 20, "the header fits the canvas")
     BR.dailyStartsIn = function() return 154 end
-    ok(labels(BRMenu.items({}, BR, {})):find("STARTS IN 2:34", 1, true) ~= nil,
+    eq(Lobby.header(BR), "STARTS IN 2:34",
        "under an hour the countdown ticks in minutes and seconds")
     BR.dailyStartsIn = nil
-    ok(labels(BRMenu.items({}, BR, {})):find("AWAITING TIME...", 1, true) ~= nil,
+    eq(Lobby.header(BR), "AWAITING TIME...",
        "no schedule from the server yet reads as waiting, not as broken")
     BR.dailyLobby = nil
     BR.relay = room(false)
@@ -3095,25 +3366,26 @@ do
     -- ------- T8: the finished match lands on the LOBBY face, carrying its
     -- result (POK-144).  This is the screen every terminal route reaches
     -- now, so it is the screen that has to say what happened -- there is no
-    -- overworld under it to queue a say onto.
+    -- overworld under it to queue a say onto.  The room's status line is
+    -- where it says it; the OPTIONS box only changes its start row.
     BR.phase, BR.status, BR.relay = "lobby", "lobby", room(true)
     BR.solo = true
     BR.lastResult = { won = true, at = 0 }
     items, view = BRMenu.items({}, BR, {})
     eq(view, "lobby", "a finished match lands on the LOBBY face, not the match one")
-    ok(labels(items):find("YOU WIN!", 1, true), "and the lobby says so")
+    eq(Lobby.status(BR), "YOU WIN!", "and the room says so")
+    ok(not labels(items):find("YOU WIN!", 1, true), "...once, not in the box as well")
     ok(labels(items):find("PLAY AGAIN", 1, true),
        "the host's start row reads PLAY AGAIN")
     ok(not labels(items):find("START MATCH", 1, true), "...and not both")
     BR.lastResult = { won = false, name = "SAM", at = 0 }
-    items = BRMenu.items({}, BR, {})
-    ok(labels(items):find("MATCH OVER", 1, true), "a loss says so plainly")
-    ok(labels(items):find("SAM WON", 1, true),
-       "a loss names the trainer who did not lose")
+    eq(Lobby.status(BR), "SAM WON", "a loss names the trainer who did not lose")
+    BR.lastResult = { won = false, at = 0 }
+    eq(Lobby.status(BR), "MATCH OVER", "a loss with nobody named says so plainly")
     BR.lastResult = nil
     items = BRMenu.items({}, BR, {})
     ok(labels(items):find("START MATCH", 1, true), "a fresh room is a fresh room")
-    ok(not labels(items):find("MATCH OVER", 1, true), "...with nothing to report")
+    eq(Lobby.status(BR), nil, "...with nothing to report")
 
     -- ------- T9: and the first face too, when the room went with the
     -- match.  A relay that closed means there is nothing to go back to, so
@@ -3153,6 +3425,127 @@ do
          ("first-face row fits the box (%d): %s"):format(#it.label, it.label))
     end
     BR.lastResult = nil
+
+    -- ------- the room's own arithmetic (lib/lobby.lua)
+    do
+      -- two columns, four rows: what fits a cursor, a seven-letter name
+      -- and the door's "!" at eight pixels a glyph
+      eq(Lobby.COLS, 2, "two seats across")
+      eq(Lobby.ROWS, 4, "four rows down")
+      eq(Lobby.PAGE, 8, "eight a page")
+      eq(Lobby.NAME_MAX, 7, "a name is the Gen 1 name box")
+
+      -- the seats past the humans: MAX less who is here
+      eq(Lobby.emptySeats({ solo = true, botCount = 5 }, 1), 5,
+         "solo: MAX is the bot count outright")
+      local function hosted(max, fillTo)
+        return fakeBR({ relay = room(true), fillTarget = max, fillTo = fillTo })
+      end
+      eq(Lobby.emptySeats(hosted(8, 8), 3), 5, "hosted: MAX 8 with three here is five")
+      eq(Lobby.emptySeats(hosted(8, 8), 9), 0, "an over-full room shows no seats")
+      eq(Lobby.emptySeats(hosted(8, 0), 3), 5,
+         "FILL off shows the same five: the size of the game is on the screen")
+      ok(not Lobby.fillOn(hosted(8, 0)) and Lobby.fillOn(hosted(8, 8)),
+         "...and FILL is what says whether they are bots")
+      eq(names(Lobby.seats(hosted(8, 0))), "RED|BLUE|_|_|_|_|_|_",
+         "FILL off: open seats, faded")
+      local on = hosted(8, 8)
+      on.lobbySeed = 4242
+      ok(Lobby.seats(on)[3].bot, "FILL on: the same seats are bots")
+      eq(Lobby.emptySeats(hosted(30, 31), 1), 29, "MAX 30 alone is twenty-nine seats")
+      -- a guest reads the size off the roster and FILL off the host's
+      -- place, never their own settings
+      local guest = fakeBR({ relay = room(false), fillTo = 8, fillTarget = 8 })
+      eq(Lobby.emptySeats(guest, 2), 0, "a guest's own MAX and FILL mean nothing")
+      guest.relay.max = 8
+      eq(Lobby.emptySeats(guest, 2), 6, "the roster's size draws the seats")
+      eq(names(Lobby.seats(guest)), "RED|BLUE|_|_|_|_|_|_",
+         "...open, since the host has not said FILL is on")
+      guest.players[1] = { name = "RED", fill = 8 }
+      eq(names(Lobby.seats(guest)), "RED|BLUE|_|_|_|_|_|_",
+         "...and unknown bots until the host's seed arrives")
+      guest.relay.max = nil
+      eq(Lobby.emptySeats(guest, 2), 6,
+         "an older relay sends no size: the host's FILL target stands in")
+      guest.relay.max = 8
+      guest.players[1].lobbySeed = 4242
+      local dealt = Lobby.seats(guest)
+      ok(dealt[3].bot and dealt[3].name == Bots.name(4242, Bots.idFor(1)),
+         "with the seed, the seats are the bots the drop will hold: " .. names(dealt))
+      ok(dealt[8].sprite ~= nil and dealt[8].sprite:find("^SPRITE_"),
+         "each with the face it will wear (" .. tostring(dealt[8].sprite) .. ")")
+      eq(labels(Lobby.seatItems(guest, dealt[3])), dealt[3].name .. "|BOT|BACK",
+         "a bot's card says so, and offers nothing else")
+      guest.players[1].fill = 0
+      eq(Lobby.emptySeats(guest, 2), 6, "the host turning FILL off keeps the seats")
+      eq(names(Lobby.seats(guest)), "RED|BLUE|_|_|_|_|_|_", "...open again")
+
+      -- QUICK PLAY has no host to speak of: the button is LEAVE for
+      -- everyone, until the host has a match to run back
+      local quickHost = fakeBR({ relay = room(true), quick = true })
+      eq(Lobby.button(quickHost), "LEAVE", "a quick room's host sees no OPTIONS")
+      quickHost.lastResult = { won = true, at = 0 }
+      eq(Lobby.button(quickHost), "READY UP", "...until there is a match to run back")
+      quickHost.startsIn = function() return 42 end
+      eq(Lobby.button(quickHost), "LEAVE", "and LEAVE again while the clock runs")
+      eq(Lobby.status(quickHost), "STARTS IN 42", "which the room shows")
+      local quickGuest = fakeBR({ relay = room(false), quick = true,
+                                  lastResult = { won = false, at = 0 } })
+      eq(Lobby.button(quickGuest), "LEAVE", "a quick guest only ever leaves")
+
+      -- the daily says its clock once: the header has it
+      local daily = fakeBR({ relay = room(true), dailyLobby = true,
+                             dailyStartsIn = function() return 36146 end,
+                             startsIn = function() return 36146 end })
+      eq(Lobby.header(daily), "STARTS IN 10H02M", "the header")
+      eq(Lobby.status(daily), nil, "and not the status line as well")
+
+      -- the cursor: seats in reading order, the button below
+      eq(Lobby.move(0, 0, "up"), 0, "an empty room has only the button")
+      eq(Lobby.move(1, 5, "right"), 2, "right walks the seats")
+      eq(Lobby.move(2, 5, "right"), 3, "...across a row end")
+      eq(Lobby.move(5, 5, "right"), 5, "and stops at the last")
+      eq(Lobby.move(1, 5, "left"), 1, "left stops at the first")
+      eq(Lobby.move(3, 5, "left"), 2, "and walks back")
+      eq(Lobby.move(1, 5, "down"), 3, "down is one row")
+      eq(Lobby.move(3, 5, "down"), 5, "...and another")
+      eq(Lobby.move(5, 5, "down"), 0, "down off the last row is the button")
+      eq(Lobby.move(4, 5, "down"), 0, "from either column")
+      eq(Lobby.move(0, 5, "down"), 1, "down from the button is the first seat")
+      eq(Lobby.move(0, 5, "up"), 5, "up from the button is the last seat")
+      eq(Lobby.move(5, 5, "up"), 3, "up is one row")
+      eq(Lobby.move(1, 5, "up"), 0, "and up off the top row is the button")
+      eq(Lobby.move(2, 5, "up"), 0, "from either column")
+      -- ...so the room scrolls both ways: the page follows the wrap
+      eq(Lobby.scrollFor(11, Lobby.move(0, 30, "down"), 30), 0,
+         "down from the button on the last page shows the first")
+      eq(Lobby.scrollFor(0, Lobby.move(0, 30, "up"), 30), 11,
+         "up from the button on the first page shows the last")
+      eq(Lobby.move(0, 5, "left"), 0, "the button does not slide")
+      eq(Lobby.move(0, 5, "right"), 0, "either way")
+
+      -- scrolling: the cursor's row stays on screen
+      eq(Lobby.scrollFor(0, 1, 30), 0, "the first seat is on the first page")
+      eq(Lobby.scrollFor(0, 9, 30), 1, "the ninth seat scrolls one row")
+      eq(Lobby.scrollFor(1, 9, 30), 1, "and stays scrolled")
+      eq(Lobby.scrollFor(1, 1, 30), 0, "the first seat scrolls back up")
+      eq(Lobby.scrollFor(0, 30, 30), 11, "the last seat shows the last four rows")
+      eq(Lobby.scrollFor(11, 0, 30), 11, "the button keeps whatever page it was on")
+      eq(Lobby.scrollFor(5, 0, 4), 0, "a room that fits never scrolls")
+
+      -- the seat card in every shape
+      local plain = fakeBR({ relay = room(true) })
+      eq(labels(Lobby.seatItems(plain, { id = 2, name = "BLUE" })), "BLUE|REMOVE|BACK",
+         "a guest, to the host")
+      eq(labels(Lobby.seatItems(plain, { id = 1, name = "RED", me = true, host = true, wins = 0 })),
+         "RED|HOST|WINS: 0|BACK", "myself")
+      eq(labels(Lobby.seatItems(plain, { name = "GONE", absent = true, flag = true })),
+         "GONE|CANNOT BATTLE|BACK", "a trainer the door turned away: nothing to remove")
+      for _, it in ipairs(Lobby.seatItems(plain, { id = 2, name = "BLUE", flag = true,
+                                                   next = true, wins = 12 })) do
+        ok(#it.label <= 17, ("seat card row fits (%d): %s"):format(#it.label, it.label))
+      end
+    end
   end
 end
 
@@ -3363,6 +3756,18 @@ do
   for _, sp in ipairs({ "LAPRAS", "SNORLAX", "EEVEE", "PORYGON", "MR_MIME", "FARFETCHD",
                         "LICKITUNG", "TANGELA", "ELECTABUZZ", "MAGMAR", "JYNX", "DITTO" }) do
     ok(candSet[sp], "the one-offs the report missed are candidates: " .. sp)
+  end
+  -- POK-183: the starters in the open slice, the fossils and the Dojo's
+  -- two in the rare slice -- OAK's LAB is locked for the match, and the
+  -- lab and the Dojo hand out one copy each
+  for _, sp in ipairs({ "BULBASAUR", "CHARMANDER", "SQUIRTLE" }) do
+    ok(candSet[sp] and not rareSet[sp], "a starter is an open candidate: " .. sp)
+  end
+  for _, sp in ipairs({ "OMANYTE", "KABUTO", "AERODACTYL", "HITMONLEE", "HITMONCHAN" }) do
+    ok(candSet[sp] and rareSet[sp], "a fossil or Dojo prize is in the rare slice: " .. sp)
+  end
+  for _, sp in ipairs({ "MEWTWO", "MEW", "ARTICUNO", "ZAPDOS", "MOLTRES" }) do
+    ok(not candSet[sp], "no legendary in the zone: " .. sp)
   end
 
   -- with data that knows types, the seed picks a theme and the zone leans

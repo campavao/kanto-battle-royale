@@ -11,7 +11,11 @@
 // port is a deployment.
 //
 // Client -> server
-//   {type:"host_room", name}           -> room_hosted {code, id}, then a roster
+//   {type:"host_room", name, open?, max?} -> room_hosted {code, id}, then a roster
+//                                         (max: the room's size; joins past it
+//                                         are refused "full"; clamped to the
+//                                         member ceiling)
+//   {type:"set_max", max}              -> host only: the room's size, live
 //   {type:"join_room", code, name,     -> room_joined {code, id, host}, or
 //         spectate?}                      room_error {reason}; spectate:true
 //                                        enters a LOCKED room as a watcher
@@ -179,7 +183,7 @@ function makeCode(taken) {
 }
 
 class Room {
-  constructor(code, host) {
+  constructor(code, host, max) {
     this.code = code;
     this.host = host;
     this.members = new Map();
@@ -188,6 +192,9 @@ class Room {
     // an open room is one quick_join is allowed to hand strangers; a room
     // is private until its host says otherwise
     this.open = false;
+    // how many may be in it: the host's MAX (the lobby's row), never more
+    // than the relay's own member ceiling.  `full` past it.
+    this.max = max;
     // IPs the host has removed (POK-130).  Per-room and in-memory, like
     // everything else here: a removal lasts as long as the room does.  IP
     // is the only identity a connection has -- coarse (a shared NAT goes
@@ -215,7 +222,7 @@ class Room {
                      spectate: m.spectator || undefined });
     }
     return { type: "roster", code: this.code, host: this.host.id,
-             open: this.open, members };
+             open: this.open, max: this.max, members };
   }
 
   broadcast(msg, except) {
@@ -300,6 +307,10 @@ class Conn {
 
 export function createRelay(options = {}) {
   const limits = { ...DEFAULT_LIMITS, ...(options.limits || {}) };
+  // a host's MAX: a whole number from two up to the member ceiling; anything
+  // else (an older client sends nothing) is the ceiling
+  const cleanMax = (n) => Number.isInteger(n)
+    ? Math.max(2, Math.min(limits.members, n)) : limits.members;
   const log = options.log || (() => {});
   const motd = cleanMotd(options.motd ?? process.env.BR_MOTD);
   const daily = parseDaily(options.daily ?? process.env.BR_DAILY);
@@ -406,7 +417,7 @@ export function createRelay(options = {}) {
           return;
         }
         conn.name = cleanName(msg.name);
-        const room = new Room(makeCode(rooms), conn);
+        const room = new Room(makeCode(rooms), conn, limits.members);
         room.daily = true;
         room.open = true;   // discoverable for spectate; quick_join skips it
         rooms.set(room.code, room);
@@ -428,7 +439,7 @@ export function createRelay(options = {}) {
           return;
         }
         conn.name = cleanName(msg.name);
-        const room = new Room(makeCode(rooms), conn);
+        const room = new Room(makeCode(rooms), conn, cleanMax(msg.max));
         room.open = msg.open === true;
         rooms.set(room.code, room);
         room.add(conn);
@@ -454,7 +465,7 @@ export function createRelay(options = {}) {
         // rather than a trainer in this one.
         const spectate = msg.spectate === true;
         if (room.locked && !spectate) { conn.send({ type: "room_error", reason: "locked" }); return; }
-        if (room.members.size >= limits.members) { conn.send({ type: "room_error", reason: "full" }); return; }
+        if (room.members.size >= room.max) { conn.send({ type: "room_error", reason: "full" }); return; }
         conn.name = cleanName(msg.name);
         conn.spectator = spectate || undefined;
         room.add(conn);
@@ -475,7 +486,7 @@ export function createRelay(options = {}) {
           // a daily room waits for its hour; quick play wants a game NOW
           if (!room.open || room.locked || room.daily
               || room.banned.has(conn.ip)) continue;
-          if (room.members.size >= limits.members) continue;
+          if (room.members.size >= room.max) continue;
           if (!best || room.members.size > best.members.size) best = room;
         }
         if (!best) {
@@ -513,6 +524,15 @@ export function createRelay(options = {}) {
         room.open = msg.open === true;
         room.broadcast(room.roster());
         log(`room ${room.code} is now ${room.open ? "open" : "private"}`);
+        return;
+      }
+
+      case "set_max": {
+        const room = conn.room;
+        if (!room || room.host !== conn) return;
+        room.max = cleanMax(msg.max);
+        room.broadcast(room.roster());
+        log(`room ${room.code} seats ${room.max}`);
         return;
       }
 

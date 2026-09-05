@@ -40,9 +40,12 @@ local Safari = {}
 -- level-5 opening in a mode where your party is your health, so the list is
 -- things that can carry an early fight and grow into the rungs -- the
 -- common routes' catchables, the Safari's own residents, and the one-offs
--- that are worth the walk.  No legendaries, no starters, nothing that only
--- exists behind a fossil: a pool entry has to be somebody's reasonable
--- first catch, or the rotation is just a slot machine.
+-- that are worth the walk.  No legendaries: a pool entry has to be
+-- somebody's reasonable first catch, or the rotation is just a slot
+-- machine.  The starters, the fossils and the Dojo's two are in since
+-- POK-183 -- OAK's LAB is locked for the match (POK-51) and the lab and
+-- the Dojo hand out one copy each, so the zone was the only door left
+-- for lines a fifty-match veteran had never once met.
 --
 -- Every name is checked against live data before it reaches a player, so a
 -- build without one of these degrades rather than asserting mid-catch.
@@ -62,6 +65,9 @@ Safari.CANDIDATES = {
   -- the one-offs (POK-177): Kanto's gifts, trades and single nests
   "LICKITUNG", "TANGELA", "ELECTABUZZ", "MAGMAR", "JYNX", "LAPRAS",
   "PORYGON", "EEVEE", "MR_MIME", "FARFETCHD", "DITTO", "SNORLAX",
+  -- the starters, the fossils and the Dojo's prizes (POK-183)
+  "BULBASAUR", "CHARMANDER", "SQUIRTLE",
+  "OMANYTE", "KABUTO", "AERODACTYL", "HITMONLEE", "HITMONCHAN",
 }
 
 -- The entries a flat roll starved: every zone holds RARE_PER_POOL of
@@ -70,6 +76,7 @@ Safari.RARE = {
   "CHANSEY", "SCYTHER", "PINSIR", "TAUROS", "KANGASKHAN", "DRATINI",
   "LICKITUNG", "TANGELA", "ELECTABUZZ", "MAGMAR", "JYNX", "LAPRAS",
   "PORYGON", "EEVEE", "MR_MIME", "FARFETCHD", "DITTO", "SNORLAX",
+  "OMANYTE", "KABUTO", "AERODACTYL", "HITMONLEE", "HITMONCHAN",
 }
 
 -- How many species one match's zone holds.  Small enough that the pool has

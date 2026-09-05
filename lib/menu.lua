@@ -2,11 +2,16 @@
 --
 -- One lobby, not a menu round-trip (POK-32).  The screen is a Menu whose
 -- rows are rebuilt from BR every frame, so picking SOLO VS BOTS turns this
--- same screen into the lobby -- the roster filling in, BOTS / FILL TO,
--- OPEN, the countdown -- instead of closing and making you reopen it to
--- see what happened.  You leave it by starting the match or backing out.
--- Once the match is live it only reports; everything that happens then
--- happens in the overworld.
+-- same screen into the lobby instead of closing and making you reopen it
+-- to see what happened.  You leave it by starting the match or backing
+-- out.  Once the match is live it only reports; everything that happens
+-- then happens in the overworld.
+--
+-- The lobby face itself is a drawn room since 2026-09-05 (lib/lobby.lua):
+-- every trainer as their sprite and name, empty seats as outlines, and
+-- one button.  The rows this file builds for the "lobby" view are the
+-- host's OPTIONS box over that room -- FILL, MAX, OPEN, the clocks,
+-- DEBUG, START MATCH, LEAVE, in the order of the user's sketch.
 
 local Entry = require("mods.battle_royale.lib.entry")
 
@@ -74,7 +79,10 @@ function Menu.items(mod, BR, game)
   -- NOT on the first face, which has no rows to spare: it is exactly
   -- Menu.maxRows(2) long already and the result rides on its version row
   -- instead (see the bottom of this function).
-  if view ~= "match" and view ~= "menu" and BR.lastResult then
+  -- ...and not on the lobby face either, any more: the room draws the
+  -- result on its status line (lib/lobby.lua), and these rows are the
+  -- OPTIONS box over it.
+  if view ~= "match" and view ~= "menu" and view ~= "lobby" and BR.lastResult then
     row(BR.lastResult.won and "YOU WIN!" or "MATCH OVER")
     if BR.lastResult.name then row(tostring(BR.lastResult.name) .. " WON") end
   end
@@ -123,114 +131,39 @@ function Menu.items(mod, BR, game)
     }
 
   elseif view == "lobby" then
+    -- The host's OPTIONS box (the room itself is lib/lobby.lua).  A guest
+    -- never opens this: their button IS the way out, so their rows are
+    -- only what they would be told and LEAVE.
     local relay = BR.relay
     local host = relay:isHost()
-    -- A solo room has no code worth reading out, no roster to watch fill
-    -- and nobody to keep seats for, so it shows the two things that
-    -- actually decide the match and nothing else.
-    if not BR.solo then
-      -- THE DAILY GAME's lobby is three things, in this order (POK-161,
-      -- the user's spec): how long until it starts, who is here, the way
-      -- out.  No code -- the DAILY GAME row is the one door in -- no
-      -- label, no rules rows, nothing settable, no START: the clock
-      -- starts it, for host and guest alike.
-      if BR.dailyLobby then
-        local left = BR.dailyStartsIn and BR:dailyStartsIn()
-        if left then
-          local h = math.floor(left / 3600)
-          if h > 0 then
-            row(("STARTS IN %dH%02dM"):format(h,
-                math.floor((left % 3600) / 60)))
-          else
-            row(("STARTS IN %d:%02d"):format(math.floor(left / 60), left % 60))
-          end
-        else
-          row("AWAITING TIME...")
-        end
+    if BR.dailyLobby then
+      -- nothing settable, no START: the clock starts THE DAILY GAME, for
+      -- host and guest alike (POK-161)
+    elseif host then
+      -- MAX is the room's size: how many trainers the relay lets in
+      -- (it caps joins at this), and, with FILL: ON, how far bots top the
+      -- roster up at the start.  A solo room has nobody to fill around or
+      -- keep out, so its MAX is the bot count outright.  (BOTS and
+      -- TRAINERS were rows of their own until 2026-09-05; the room shows
+      -- the seats now, so the number is the picture.)
+      if not BR.solo then
+        setting("FILL: " .. (BR:fillOn() and "ON" or "OFF"),
+                function() BR:setFillOn(not BR:fillOn()) end)
+      end
+      if BR.solo then
+        -- steps the ladder 0,1,2,3,5,8,...,30 and wraps
+        setting("MAX: " .. tostring(BR.botCount),
+                function() BR.botCount = BR:nextBotCount() end)
       else
-        row("CODE " .. tostring(relay.code))
+        setting("MAX: " .. tostring(BR:fillMax()),
+                function() BR:cycleFillMax() end)
       end
-      -- A "!" against anyone the door flagged (POK-142): their engine
-      -- release, or their copy of this mod, is not ours -- so the room
-      -- works, the ghosts walk, and the FIGHT is the one thing that will
-      -- not.  Marked on the roster rather than only said in a text box,
-      -- for two reasons: the lobby is where somebody is actually looking
-      -- while they wait, and this screen opens from the TITLE as well as
-      -- from the start menu -- with no overworld under it there is nothing
-      -- to queue a say onto at all.
-      --
-      -- The "!" goes BEFORE the host's "*", which looks backwards and is
-      -- not: the Gen 1 font has no asterisk, so the host marker draws as a
-      -- blank cell (it always has -- this is not new).  With the "!" last
-      -- a flagged host read "- HOSTA !", the mark floating a space away
-      -- from the name it belongs to.  Caught in a screenshot from the
-      -- two-client `door` run, which is the only place it could be.
-      -- a stale arm dies with the member it pointed at
-      if BR.armKick then
-        local still = false
-        for _, m in ipairs(relay.members) do
-          if m.id == BR.armKick then still = true break end
-        end
-        if not still then BR.armKick = nil end
-      end
-      for _, m in ipairs(relay.members) do
-        local label = "- " .. m.name .. (BR:buildTrouble(m.id) and "!" or "")
-            .. ((m.id == relay.hostId) and "*" or "")
-            -- a watcher of this match, a player of the next (POK-133)
-            .. (m.spectate and " NEXT" or "")
-        -- keyed on hostId, not our own id: only the host sees these
-        -- settings, and the one row that must never arm is their own
-        if host and m.id ~= relay.hostId then
-          -- The way out of an open room (POK-130): A on a guest arms the
-          -- question, A again removes them -- two presses, so a slip of
-          -- the thumb never ejects a friend.  Their IP stays out for the
-          -- life of the room, so this is not a revolving door.
-          if BR.armKick == m.id then
-            setting("REMOVE " .. m.name .. "?", function() BR:kick(m.id) end)
-          else
-            setting(label, function() BR.armKick = m.id end)
-          end
-        else
-          row(label)
-        end
-      end
-      -- ...and, under the live roster, whoever the door turned away.  On
-      -- the host this is the only trace of them: a refused guest is out of
-      -- the room a moment after arriving, so without this a host running
-      -- something nobody else has just watches people fail to appear.
-      for _, f in ipairs(BR:flaggedAbsent()) do
-        row("! " .. tostring(f.name))
-      end
-      -- ...and when it has found something, our own two numbers under it,
-      -- because the next thing that happens is somebody reading them out
-      -- to somebody else.  Only under a warning: a fightable room needs
-      -- none of this, and the lobby grows a row per trainer already.
-      local trouble = BR:buildTroubleLabel()
-      if trouble then
-        row(trouble)
-        local mine = BR.buildOf and BR:buildOf()
-        if mine then
-          -- three short rows rather than two long ones: fit() sizes the
-          -- box to the widest label + 3 and the canvas is 20 tiles, so
-          -- anything past 17 characters is quietly clipped off the right
-          row("YOU ARE ON:")
-          row("ROYALE v" .. tostring(mine.mod or "?"))
-          if mine.engine then row("GAME v" .. tostring(mine.engine)) end
-        end
-      end
-      if host and not BR.dailyLobby then
+      if not BR.solo then
         -- an open room is one strangers can QUICK PLAY into without ever
-        -- being told the code (a DAILY room's openness is not a choice)
+        -- being told the code
         setting("OPEN: " .. (BR:isOpen() and "YES" or "NO"),
                 function() BR:setOpen(not BR:isOpen()) end)
       end
-    end
-    if BR.dailyLobby then
-      -- (the countdown already leads the face, above the roster)
-    elseif host then
-      -- steps the ladder 0,1,2,3,5,8,...,30 and wraps
-      setting("BOTS: " .. tostring(BR.botCount),
-              function() BR.botCount = BR:nextBotCount() end)
       -- the match's two clocks, right here in the lobby (POK-44)
       setting("FOG: " .. tostring(BR:fogSeconds()) .. "s",
               function() BR:cycleFog() end)
@@ -241,27 +174,10 @@ function Menu.items(mod, BR, game)
       -- It was an environment variable for one release, which a mod cannot
       -- read: the sandbox hides the environment.  The log it thickens is
       -- this client's own, so it sits with the host's other switches.
-      setting("DEBUG LOG: " .. (BR:isDebug() and "ON" or "OFF"),
+      -- (SEND STATS left this box for the launcher's mod options on
+      -- 2026-09-05: it is a once-per-install choice, not a per-match one.)
+      setting("DEBUG: " .. (BR:isDebug() and "ON" or "OFF"),
               function() BR:setDebug(not BR:isDebug()) end)
-      -- How many matches get played, so there is some idea whether anyone
-      -- is out there (POK-124).  A random install id, the version and a
-      -- count -- never the name you picked.  Off stops the counting as
-      -- well as the sending.
-      setting("SEND STATS: " .. (BR:statsOn() and "ON" or "OFF"),
-              function() BR:setStatsOn(not BR:statsOn()) end)
-      -- Only meaningful when humans might still arrive: it holds seats
-      -- open for them and lets bots take whatever is left.  In a solo
-      -- room nobody can arrive, so it would only ever be a second, more
-      -- confusing way to say BOTS.
-      if not BR.solo then
-        -- "TRAINERS", spelled out (POK-148): FILL TO counts the whole
-        -- roster, humans included, and the bare number read as a bot cap
-        -- -- a host saw "31" and reported the 30-bot clamp broken
-        setting(BR.fillTo > 0 and ("FILL: " .. BR.fillTo .. " TRAINERS")
-                  or "FILL: OFF",
-                function() BR:setFill(BR:nextFill()) end)
-        row("TRAINERS: " .. (#relay.members + BR:botsAtStart()))
-      end
       local countdown = BR:startsIn()
       -- PLAY AGAIN and START MATCH are the same button (POK-144): once
       -- every client returns to the lobby on its own, the host's "run it
@@ -468,49 +384,79 @@ local function fit(mod, menu)
   menu:clampScroll()
 end
 
+-- A Menu whose rows are rebuilt from itemsFn before every frame's input,
+-- sized to fit (POK-104), with the cursor never resting on a `dead` row.
+-- The ROYALE screen's text faces are one of these; so are the OPTIONS box
+-- and the seat box the room opens over itself (lib/lobby.lua).
+function Menu.live(mod, game, itemsFn, opts)
+  local o = { startCloses = true }
+  for k, v in pairs(opts or {}) do o[k] = v end
+  local menu = mod.ui.Menu.new(game, itemsFn(), o)
+  local baseUpdate = mod.ui.Menu.update
+  menu.update = function(self, dt)
+    local fresh = itemsFn()
+    self.items = fresh
+    if self.index > #fresh then self.index = math.max(1, #fresh) end
+    fit(mod, self)
+    local before = self.index
+    local r = baseUpdate(self, dt)
+    -- The cursor never rests on a dead row (information is not a
+    -- control): slide it onward in the direction it was travelling --
+    -- downward after a face change or when it did not move -- wrapping
+    -- until a selectable row.  Every face keeps at least one (LEAVE
+    -- at minimum), and the guard stops a hypothetical all-dead face
+    -- from spinning forever.
+    local n = #self.items
+    if n > 0 and self.items[self.index] and self.items[self.index].dead then
+      local down = self.index == before
+        or self.index == before + 1
+        or (before == n and self.index == 1)
+      local step = down and 1 or -1
+      for _ = 1, n do
+        self.index = ((self.index - 1 + step) % n) + 1
+        local it = self.items[self.index]
+        if not (it and it.dead) then break end
+      end
+      self:clampScroll()
+    end
+    return r
+  end
+  return menu
+end
+
+-- The ROYALE screen: one stack state with two faces.  The text faces
+-- (the first menu, connecting, the offer, a refusal, the match report)
+-- are the live Menu above; the lobby is the drawn room (lib/lobby.lua).
+-- Which one is up is re-read from BR every frame, and a change of face
+-- is what resets the cursor.  The state answers for the text menu's
+-- fields (items, index, th...) so a driver that reads the rows off the
+-- top of the stack still can.
 function Menu.build(mod, BR)
   return {
     new = function(game)
-      local items, view = Menu.items(mod, BR, game)
-      local menu = mod.ui.Menu.new(game, items, { startCloses = true })
-      local baseUpdate = mod.ui.Menu.update
-      menu.view = view
-      -- re-read BR before every frame's input: the rows, the box and --
-      -- when the face changes -- the cursor
-      menu.update = function(self, dt)
-        local fresh, now = Menu.items(mod, BR, game)
-        self.items = fresh
+      local Lobby = require("mods.battle_royale.lib.lobby")
+      local state = {}
+      local text = Menu.live(mod, game, function()
+        return (Menu.items(mod, BR, game))
+      end)
+      local room = Lobby.Screen.new(game, mod, BR, state)
+      state.room = room
+      state.view = Menu.view(BR)
+      state.isOpaque = state.view == "lobby"
+      function state:update(dt)
+        local now = Menu.view(BR)
         if now ~= self.view then
           self.view = now
-          self.index = 1
-        elseif self.index > #fresh then
-          self.index = math.max(1, #fresh)
+          text.index = 1
+          room.cur, room.scroll = 0, 0
         end
-        fit(mod, self)
-        local before = self.index
-        local r = baseUpdate(self, dt)
-        -- The cursor never rests on a dead row (information is not a
-        -- control): slide it onward in the direction it was travelling --
-        -- downward after a face change or when it did not move -- wrapping
-        -- until a selectable row.  Every face keeps at least one (LEAVE
-        -- at minimum), and the guard stops a hypothetical all-dead face
-        -- from spinning forever.
-        local n = #self.items
-        if n > 0 and self.items[self.index] and self.items[self.index].dead then
-          local down = self.index == before
-            or self.index == before + 1
-            or (before == n and self.index == 1)
-          local step = down and 1 or -1
-          for _ = 1, n do
-            self.index = ((self.index - 1 + step) % n) + 1
-            local it = self.items[self.index]
-            if not (it and it.dead) then break end
-          end
-          self:clampScroll()
-        end
-        return r
+        self.isOpaque = now == "lobby"
+        if now == "lobby" then room:update(dt) else text:update(dt) end
       end
-      return menu
+      function state:draw()
+        if self.view == "lobby" then room:draw() else text:draw() end
+      end
+      return setmetatable(state, { __index = text })
     end,
   }
 end

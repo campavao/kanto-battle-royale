@@ -126,9 +126,19 @@ end
 
 -- open = true lists the room for quick_join.  It stays private otherwise:
 -- being findable by strangers is something a host opts into.
+-- max = the room's size; the relay refuses joins past it (and clamps it
+-- to its own member ceiling).  Absent means the ceiling.
 function Relay:host(name, opts)
   return self:_open({ type = "host_room", name = name,
-                      open = (opts and opts.open) == true })
+                      open = (opts and opts.open) == true,
+                      max = opts and tonumber(opts.max) or nil })
+end
+
+-- the host's MAX, after the room is up (the lobby's MAX row)
+function Relay:setMax(n)
+  n = tonumber(n)
+  if not n then return false end
+  return self:_raw({ type = "set_max", max = math.floor(n) })
 end
 
 -- Ask the relay for any open room.  If there are none it answers
@@ -330,6 +340,7 @@ function Relay:_receive(msg)
   elseif t == "roster" then
     if type(msg.host) == "number" then self.hostId = msg.host end
     if type(msg.open) == "boolean" then self.open = msg.open end
+    if type(msg.max) == "number" then self.max = msg.max end
     self.members = cleanMembers(msg.members)
     self:_fire("roster", self.members)
   elseif t == "recv" then

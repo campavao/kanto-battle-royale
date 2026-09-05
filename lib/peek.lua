@@ -49,9 +49,13 @@ function Peek.botParty(Bots, seed, id, data, level, record)
   local okP, Pokemon = pcall(require, "src.pokemon.Pokemon")
   local rows = {}
   if record then
+    -- each line at what it has reached by this rung (POK-181), the same
+    -- derivation the fight makes
+    local stone, pick = Bots.stoneRung(seed, id)
     for _, m in ipairs(record) do
-      rows[#rows + 1] = { species = m.species, level = level,
-                          hpFrac = m.hpFrac }
+      rows[#rows + 1] = { species = Bots.evolveAt(data, m.species, level,
+                            { stoneRung = stone, pick = pick, traded = m.traded }),
+                          level = level, hpFrac = m.hpFrac }
     end
   else
     rows = Bots.party(seed, id, data, level) or {}

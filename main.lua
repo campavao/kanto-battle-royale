@@ -85,8 +85,10 @@ local FOG_SHELTER_SECONDS = 30    -- a bot fight blocks the fog this long (POK-6
 -- what SOLO VS BOTS fills an empty roster with: enough that the match has a
 -- shape to it, few enough that the first fight is not immediate
 local SOLO_BOTS = 8
--- QUICK PLAY aims at this many trainers and lets bots make up the shortfall
-local QUICK_FILL = 8
+-- QUICK PLAY fills the whole room and lets bots make up the shortfall: a
+-- full thirty, the same as the daily (the user's call, 2026-09-05 -- it
+-- was eight, and a quick game is meant to feel like the real thing)
+local QUICK_FILL = Bots.MAX
 -- ...and starts on its own after this long, so a newcomer who quick-plays
 -- into an empty relay is playing rather than staring at a roster of one.
 -- Sixty seconds, not thirty (POK-131): thirty meant the room was locked
@@ -165,6 +167,16 @@ local SAFARI_BEAT_SECONDS = 5     -- how often the host re-announces the clock
 -- (POK-92).  Long enough for a ball already in the air to land -- a throw
 -- and its shakes run about two seconds -- and far too short to hide in.
 local BUZZER_BATTLE_GRACE = 3
+-- The caught page, in a match (the user's call, 2026-09-05): "HORSEA was
+-- caught!" rather than "All right! HORSEA was caught!", and the page
+-- closes itself a second in -- the jingle is cut short and the prompt is
+-- pressed.  The wording rides the engine's string catalog
+-- (src/core/Strings.lua): the source is the id, and the match swaps the
+-- entry in at its start and back at its end, so a real playthrough with
+-- the mod enabled still reads the original.
+-- (Held as BR.caughtPage, below, rather than as a local: the mod's main
+-- function sits exactly at LuaJIT's sixty-upvalue cap, and a field on a
+-- table it already captures costs nothing.)
 -- How long a finished match stays standing (POK-144).  The banner gets read
 -- before the world goes, and nothing holds a match that is already over
 -- open past the deadline -- a screen that never goes quiet is exactly the
@@ -303,6 +315,10 @@ return function(mod)
     -- a RATTATA, which is what the smoke drivers still expect
     { key = "safari", label = "SAFARI SECONDS", type = "number",
       default = DEFAULT_SAFARI_SECONDS, min = 0, max = 600 },
+    -- POK-124's opt-out, here rather than in the lobby since 2026-09-05:
+    -- it is a once-per-install choice, and the lobby's OPTIONS box is the
+    -- match's.  Off stops the counting as well as the sending.
+    { key = "stats", label = "SEND STATS", type = "toggle", default = true },
   })
 
   -- The career (POK-120) comes off mod.cache, which is keyed by mod id
@@ -424,6 +440,13 @@ return function(mod)
   end
 
   local function mySprite()
+    -- The skin I picked, whether or not I am standing in a match world
+    -- yet.  The lobby draws every trainer from the place they sent
+    -- (lib/lobby.lua), and before applySkinWalk the field's own walk is
+    -- still the stock one -- so this used to advertise RED to a room you
+    -- were sitting in as a HIKER.
+    local walk = BR.skinWalk and BR:skinWalk()
+    if walk then return walk end
     local field = BR.game and BR.game.data and BR.game.data.field
     return field and field.playerSprites and field.playerSprites.walk
   end
@@ -445,13 +468,33 @@ return function(mod)
     return myBuild
   end
   BR.buildOf = build
+  BR.caughtPage = {
+    text = "All right!\n%s was\ncaught!",   -- the engine's, and the catalog id
+    match = "%s was\ncaught!",
+    seconds = 1,
+  }
 
   local function broadcastPlace()
     if not (BR.relay and BR.relay:isOpen()) then return end
     local h = here()
+    -- The host tells the room its FILL target and the seed its bots are
+    -- dealt from, so every lobby shows the seats the drop will hold
+    -- (lib/lobby.lua reads both off the host).  The seed is rolled HERE,
+    -- at the first place a host sends, rather than at START MATCH.
+    -- ...and the clock, as seconds left, so a guest of a quick room sees
+    -- STARTS IN rather than waiting on a host who is not going to press
+    -- anything (the guest's own clock is set from it on arrival)
+    local fill, seed, countdown
+    if BR.relay:isHost() then
+      fill = BR.fillTo or 0
+      BR.lobbySeed = BR.lobbySeed or BR:rollSeed()
+      seed = BR.lobbySeed
+      countdown = BR:startsIn()
+    end
     BR.relay:broadcast(Wire.place(h and h.mapId, h and h.x, h and h.y,
                                   h and h.facing, BR.status, mySprite(),
-                                  nil, build()))
+                                  nil, build(), BR:winCount(), fill, seed,
+                                  countdown))
     if h then BR.sentMap, BR.sentFacing = h.mapId, h.facing end
   end
 
@@ -518,7 +561,9 @@ return function(mod)
   -- The player's say in POK-124.  Off means nothing is counted and nothing
   -- is sent -- the solo counter stops moving too, so turning it off does
   -- not leave a backlog to be flushed the moment it goes back on.
-  function BR:statsOn() return not stats.off end
+  function BR:statsOn()
+    return not stats.off and mod.options:get("stats") ~= false
+  end
   function BR:setStatsOn(on)
     return not Stats.setOff(mod, stats, not on, log)
   end
@@ -546,6 +591,20 @@ return function(mod)
     if self.matchWorld then self:applySkinWalk() end
     if self.relay and self.relay:isOpen() then broadcastPlace() end
     return entry.id
+  end
+
+  -- The walk sheet my skin means on this build: what the lobby draws in
+  -- my seat and what every place message advertises.  A sheet this build
+  -- lacks falls back to the stock one, exactly as applySkinWalk does.
+  function BR:skinWalk()
+    local Skins = require("mods.battle_royale.lib.skins")
+    local data = self.game and self.game.data
+    local walk = Skins.get(self.skin).walk
+    if data and data.sprites and not data.sprites[walk] then
+      local ps = data.field and data.field.playerSprites
+      return self.stockWalk or (ps and ps.walk) or "SPRITE_RED"
+    end
+    return walk
   end
 
   function BR:applySkinWalk()
@@ -639,7 +698,7 @@ return function(mod)
       -- connection, which exists for its own reasons (POK-124).  Relay:stat
       -- refuses a LocalRoom, so a solo room cannot eat the count, and the
       -- counter is only cleared once the send is actually accepted.
-      local m = Stats.message(stats, mod.version)
+      local m = BR:statsOn() and Stats.message(stats, mod.version)
       if m and relay:stat(m) then Stats.flushed(mod, stats, log) end
       -- Say who we are AT THE JOIN (POK-142).  Until the door there was no
       -- reason to: the first place used to go out at the drop (onStart),
@@ -685,11 +744,15 @@ return function(mod)
         broadcastPlace()
       end
       BR.lastRoster = #members
-      -- forget anyone who left; the host recounts survivors
+      -- forget anyone who left; the host recounts survivors.  Anyone
+      -- HUMAN: a bot is never on the relay's roster, and forgetting the
+      -- bots here handed the host the match the moment a guest left --
+      -- twenty-eight bots standing and YOU WIN! on the lobby (found on
+      -- 2026-09-05's two-client run, present since bots existed).
       local present = {}
       for _, m in ipairs(members) do present[m.id] = true end
       for id in pairs(BR.players) do
-        if not present[id] then
+        if not present[id] and not Bots.isBot(id) then
           -- if the one who left is who we are fighting, end the battle as a
           -- pulled cable rather than waiting on a move that never comes
           if BR.battle and BR.battle.opponentId == id then
@@ -758,7 +821,7 @@ return function(mod)
     -- is the opt-out for a private game with friends, and POK-130's
     -- REMOVE row is the way out if the open door lets somebody in you
     -- did not want.
-    local ok, err = relay:host(myName(), { open = true })
+    local ok, err = relay:host(myName(), { open = true, max = self:fillMax() })
     if not ok then return false, err end
     self.relay = relay
     return true
@@ -794,10 +857,58 @@ return function(mod)
 
   function BR:setFill(n)
     self.fillTo = math.max(0, math.min(Bots.MAX + 1, math.floor(tonumber(n) or 0)))
+    -- a number set is a number remembered: FILL: OFF then ON comes back
+    -- to the MAX it had, not to the default
+    if self.fillTo > 0 then
+      self.fillTarget = self.fillTo
+      self:announceMax()
+    end
+    -- the room's guests draw their seats from this
+    if self.relay and self.relay:isOpen() then broadcastPlace() end
     return self.fillTo
   end
 
+  -- MAX is the room's size on the relay too: it refuses the join past it
+  -- (set_max / host_room.max, relay/server.js), which is how a host gates
+  -- a game with friends without FILL.  The relay clamps to its own
+  -- member ceiling; an older relay ignores the message and the cap is
+  -- its ceiling alone.
+  function BR:announceMax()
+    local relay = self.relay
+    if relay and relay:isOpen() and relay:isHost() and relay.setMax then
+      relay:setMax(self:fillMax())
+    end
+  end
+
+  -- a match seed; the room rolls one when it opens (broadcastPlace) and
+  -- startMatch uses that one, so the lobby's bots are the drop's bots
+  function BR:rollSeed()
+    local rand = (love and love.math and love.math.random) or math.random
+    return rand(1, 2 ^ 30)
+  end
+
   function BR:nextFill() return Bots.nextFill(self.fillTo) end
+
+  -- The lobby's two rows (the user's sketch, 2026-09-05): MAX: n is the
+  -- room's size, FILL: ON/OFF is whether bots take the seats humans have
+  -- not.  fillTo stays the one number botsAtStart reads -- MAX while FILL
+  -- is on, zero while it is off -- so nothing downstream learns a second
+  -- representation; fillTarget remembers MAX either way.
+  function BR:fillOn() return (self.fillTo or 0) > 0 end
+  function BR:fillMax() return self.fillTarget or Bots.MAX end
+  function BR:setFillOn(on)
+    if on then self:setFill(self:fillMax()) else self:setFill(0) end
+    return self:fillOn()
+  end
+  function BR:cycleFillMax()
+    self.fillTarget = Bots.nextMax(self:fillMax())
+    if self:fillOn() then
+      self:setFill(self.fillTarget)       -- announces on the way
+    else
+      self:announceMax()
+    end
+    return self:fillMax()
+  end
 
   -- QUICK PLAY: join whatever is open, and if nothing is, become the thing
   -- that is open.  The fallback rides the SAME connection -- no_open_rooms
@@ -820,7 +931,7 @@ return function(mod)
     local ok, err = relay:quickJoin(myName())
     if not ok then return false, err end
     self.relay = relay
-    self.fillTo = QUICK_FILL
+    self:setFill(QUICK_FILL)
     self.quick = true
     return true
   end
@@ -845,7 +956,7 @@ return function(mod)
     if not ok then return false, err end
     self.relay = relay
     self.dailyLobby = true
-    self.fillTo = DAILY_FILL
+    self:setFill(DAILY_FILL)
     return true
   end
 
@@ -1102,6 +1213,10 @@ return function(mod)
     -- state, and losing that costs a match, while losing this costs a
     -- stranger their overworld for the session (POK-134).  Idempotent, so
     -- the save-event net behind it is still free to arrive.
+    do  -- the caught page's original wording, for a real playthrough
+      local Data = require("src.core.Data")
+      if type(Data.strings) == "table" then Data.strings[self.caughtPage.text] = self.caughtPage.text end
+    end
     self:unsuspendMods()
     self:restoreSpeed()
     -- ...and the ENGINE gets its cheap script dispatch back (POK-155).  This
@@ -1217,6 +1332,7 @@ return function(mod)
     self.wasHost = false
     self.runningMatch = nil   -- the POK-133 offer dies with the connection
     self.armKick = nil
+    self.lobbySeed = nil
     self.dailyLobby = nil
     self.lootMenu = nil
   end
@@ -1422,7 +1538,7 @@ return function(mod)
     -- Net:connectTCP blocks for up to five seconds and the player just
     -- asked for the offline mode.  The count rides the next real relay
     -- connection instead.
-    if self.solo then Stats.recordSolo(mod, stats, log) end
+    if self.solo and self:statsOn() then Stats.recordSolo(mod, stats, log) end
     local ids = {}
     for _, m in ipairs(relay.members) do ids[#ids + 1] = m.id end
     table.sort(ids)
@@ -1431,7 +1547,10 @@ return function(mod)
     for i = 1, self:botsAtStart() do
       ids[#ids + 1] = Bots.idFor(i)
     end
-    local seed = love.math.random(1, 2 ^ 30)
+    -- the seed the lobby already showed (rolled at the room's first
+    -- place), spent here so the NEXT lobby deals fresh bots
+    local seed = self.lobbySeed or self:rollSeed()
+    self.lobbySeed = nil
     local rng = Spawn.rng(seed)
     local data = self.game.data
     -- the Safari opening: everyone on one map, together.  0 seconds is the
@@ -1648,6 +1767,9 @@ return function(mod)
       save.pokedex.seen[id] = true
       save.pokedex.owned[id] = true
     end
+    -- ...and the caught page says less (CAUGHT_TEXT_MATCH); resetMatch
+    -- puts the original back
+    if type(Data.strings) == "table" then Data.strings[BR.caughtPage.text] = BR.caughtPage.match end
     -- Every town is a FLY destination from frame one (POK-52): the map is
     -- the arena, and travel is strategy, not a diary of where you have
     -- been.  The same trick as the dex above.
@@ -1935,6 +2057,14 @@ return function(mod)
       self.players[actor] = p
       p.map, p.x, p.y, p.facing = msg.map, msg.x, msg.y, msg.facing
       p.sprite = msg.sprite or p.sprite
+      p.wins = msg.wins or p.wins
+      if msg.fill ~= nil then p.fill = msg.fill end
+      if msg.lobbySeed ~= nil then p.lobbySeed = msg.lobbySeed end
+      -- the host's clock, pinned to OUR wall clock at arrival (theirs is
+      -- not ours); nil from a host with no clock running clears it
+      if fromId == self.relay.hostId and actor == fromId and self.phase == "lobby" then
+        p.startsAt = msg.countdown and (love.timer.getTime() + msg.countdown) or nil
+      end
       p.status = msg.status
       -- keep the first answer rather than the latest: a resync from a bot
       -- the host is puppeting carries no build, and "no build in this
@@ -2816,6 +2946,12 @@ return function(mod)
   -- mon from the seed at the floor rung -- so no message is needed until
   -- the record actually changes; every change after that arrives as a
   -- botrec broadcast and replaces the copy wholesale.
+  -- This bot's stone rung and pick (POK-181): the seeded moment its
+  -- stone line "used a stone", handed to every read of its record.
+  function BR:botEvo(id)
+    return Bots.stoneRung(self.matchSeed, id)
+  end
+
   function BR:botRecord(id)
     local rec = self.botRecords[id]
     if not rec then
@@ -2881,7 +3017,10 @@ return function(mod)
       log:say("LOOTED: %s took %s's bag", tostring(p.name),
               tostring(ball.name or "someone"))
     elseif ball.species and #rec < Bots.recordCap() then
-      rec[#rec + 1] = { species = ball.species, hpFrac = 1 }
+      -- a ball somebody else dropped is a change of hands (POK-181, the
+      -- bots' half of POK-179): the row's trade line finishes
+      rec[#rec + 1] = { species = ball.species, hpFrac = 1,
+                        traded = (not Spills.isOwn(key, id)) or nil }
       log:say("LOOTED: %s took %s (%d mons)", tostring(p.name),
               tostring(ball.species), #rec)
     else
@@ -3543,6 +3682,10 @@ return function(mod)
   function BR:closeLiveBattle(since, grace, why)
     local battle = self:liveLocalBattle()
     if not battle then return "none" end
+    -- never over a catch that has not landed: the ball has closed, the
+    -- page is being pressed through (tickAutoResolve), and Party.add is
+    -- a moment away -- closing here is what lost the MAGMAR
+    if self.catchPending == battle then return "waiting" end
     local game, now = self.game, clock()
     if not (game and now and since) then return "waiting" end
     if (now - since) < (grace or 0) then return "waiting" end
@@ -4558,10 +4701,30 @@ return function(mod)
     -- them out on its own, and the move menu is not "messages" at all.
     local lb = self.localBattle
     if lb and top == lb then
+      -- the caught page's jingle holds the queue until it stops sounding
+      -- (BattleState.waitingSound); in a match it gets caughtPage.seconds
+      -- and is cut, and the prompt that follows is pressed at once below
+      if self.catchPending == lb and lb.waitingSound then
+        self.catchPageSince = self.catchPageSince or now
+        local src = lb.waitingSound
+        if (now - self.catchPageSince) >= self.caughtPage.seconds and src.stop then
+          pcall(src.stop, src)
+        end
+      else
+        self.catchPageSince = nil
+      end
       local waiting = lb.phase == "messages" and (lb.msgWaiting or lb.msgPrompt)
       if waiting then
         self.battleTextSince = self.battleTextSince or now
-        if (now - self.battleTextSince) >= AUTO_ADVANCE_SECONDS then
+        -- A catch on its way into the party gets no three seconds: the
+        -- "was caught!" page is the one thing between the ball closing
+        -- and Party.add, and under the Safari clock a MAGMAR sat on that
+        -- page until the buzzer's grace ran out and closed the battle
+        -- over it -- caught, never stored, "You caught nothing" (the
+        -- user's 2026-09-05 match).  The page is pressed through the
+        -- frame it can be; the jingle still plays under it.
+        if self.catchPending == lb
+           or (now - self.battleTextSince) >= AUTO_ADVANCE_SECONDS then
           self.battleTextSince = nil
           press("b")
         end
@@ -5282,7 +5445,8 @@ return function(mod)
     if not (data and p and p.map and p.x and p.y) then return end
     -- the team it actually built (POK-158), fainted included -- what hits
     -- the ground is the record, not a synth
-    local party = Bots.spillRows(self:botRecord(id), self:level())
+    local stone, pick = self:botEvo(id)
+    local party = Bots.spillRows(self:botRecord(id), self:level(), data, stone, pick)
     local bag = self:botBag(id)
     bag.name = p.name
     -- A surfing bot can die ON the water (the fog mid-crossing), and the
@@ -5393,13 +5557,15 @@ return function(mod)
     -- come from the bot's RECORD (POK-158) -- the team it has actually
     -- built and the wounds it is actually carrying -- not a fresh synth.
     local rec = self:botRecord(botId)
-    local rows, idx = Bots.fightRows(rec, self:level())
+    -- each line at what it has reached by this rung (POK-181)
+    local stone, pick = self:botEvo(botId)
+    local rows, idx = Bots.fightRows(rec, self:level(), game.data, stone, pick)
     if #rows == 0 then
       -- cannot happen short of a desynced record (a wiped team is an
       -- eliminated bot); heal it rather than opening an unwinnable fight
       mod.log:warn("bot %s had no healthy mon; record reset", tostring(botId))
       for _, m in ipairs(rec) do m.hpFrac = 1 end
-      rows, idx = Bots.fightRows(rec, self:level())
+      rows, idx = Bots.fightRows(rec, self:level(), game.data, stone, pick)
     end
     self.botParty = rows
     self.botFightIdx = idx
@@ -5841,8 +6007,17 @@ return function(mod)
   end)
 
 
+  -- A ball that closed is a catch in flight until Party.add runs: the
+  -- engine says "was caught!" first and stores the mon after the page
+  -- (BattleState.storeCaughtMon).  Held here so the buzzer's close waits
+  -- for it and the page is not left to a player's thumb.
+  mod.events:on("battle.ball_thrown", function(ev)
+    if ev and ev.caught and BR:inRound() then BR.catchPending = ev.battle end
+  end)
+
   -- the record keeps count (POK-47)
   mod.events:on("pokemon.caught", function()
+    BR.catchPending = nil   -- landed
     if BR:inRound() and BR.stats then
       BR.stats.catches = BR.stats.catches + 1
     end
@@ -5853,6 +6028,7 @@ return function(mod)
   -- out, which world.blacked_out below turns into elimination.
   mod.events:on("battle.ended", function(ev)
     BR.localBattle = nil
+    BR.catchPending = nil
     BR:reclaimGhostLead()   -- the Safari's stand-in leaves with the screen
     -- a breather after any fight in a match (POK-174): a bot's, a route
     -- trainer's, a wild one's -- the queue of bots outside does not care
@@ -6490,6 +6666,14 @@ return function(mod)
   -- ScriptRunner under it, so script.command never fires for it.
   mod.events:on("pokemon.before_give", function(gift)
     if not (inMatch() and gift and gift.ctx) then return end
+    -- A gift lands AT the rung (POK-182).  Kanto's givers hand out the
+    -- levels the story wants -- the Celadon EEVEE at 25, the Dojo's two
+    -- and the revived fossils at 30 -- and the rung only ever pulls a mon
+    -- UP (Levels.needsScaling), so a level-25 gift at rung 5 was a free
+    -- early lead nobody could match.  The gift table is the engine's own
+    -- seam for changing what is about to be created.
+    local rung = BR:level()
+    if tonumber(gift.level) and gift.level > rung then gift.level = rung end
     local save = BR.game and BR.game.save
     if not (save and #(save.party or {}) >= 6) then return end
     BR.pendingGift = { ctx = gift.ctx }
@@ -7240,6 +7424,9 @@ return function(mod)
   -- ------- reaching it from START
 
   mod.content.screens:register(SCREEN, BRMenu.build(mod, BR))
+  -- an identity entry, so the catalog is live and the match can swap the
+  -- caught page's wording in and out (CAUGHT_TEXT_MATCH)
+  pcall(function() mod.content.strings:override(BR.caughtPage.text, BR.caughtPage.text) end)
 
   mod.hooks:wrap("ui.start_menu.items", function(next, game, items)
     local out = next(game, items)
@@ -7413,6 +7600,11 @@ return function(mod)
   mod.exports.setOpen = function(v) return BR:setOpen(v ~= false) end
   mod.exports.isOpen = function() return BR:isOpen() end
   mod.exports.setFill = function(n) return BR:setFill(n) end
+  mod.exports.setFillOn = function(on) return BR:setFillOn(on ~= false) end
+  -- the room as the lobby draws it (lib/lobby.lua), for a driver
+  mod.exports.lobbySeats = function()
+    return require("mods.battle_royale.lib.lobby").seats(BR)
+  end
   mod.exports.botsAtStart = function() return BR:botsAtStart() end
   mod.exports.startsIn = function() return BR:startsIn() end
   mod.exports.readyUp = function() return BR:readyUp() end
@@ -7936,6 +8128,14 @@ return function(mod)
   mod.exports.safariPool = function() return BR.safariPool, BR.safariTheme end
   mod.exports.myId = function() return BR.myId end
   mod.exports.botRecord = function(id) return BR:botRecord(id) end
+  -- the rows a fight with this bot would open on, at the current rung or
+  -- the one given (POK-181), and its seeded stone rung
+  mod.exports.botRows = function(id, rung)
+    local stone, pick = BR:botEvo(id)
+    return (Bots.fightRows(BR:botRecord(id), rung or BR:level(),
+                           BR.game and BR.game.data, stone, pick))
+  end
+  mod.exports.botStone = function(id) return BR:botEvo(id) end
   mod.exports.dailyPlay = function() return BR:dailyPlay() end
   mod.exports.dailyStartsIn = function() return BR:dailyStartsIn() end
   mod.exports.isDailyLobby = function() return BR.dailyLobby == true end
