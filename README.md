@@ -51,18 +51,23 @@ Here are the available options:
     - Creates a game if none are available, or joins an open game
     - Picks the fullest room available to join
     - Game auto-starts after a while
-2. **Solo VS Bots**
+2. **Daily Game**
+    - One official match a day, at a set time - the lobby shows the countdown
+    - Everyone who presses it lands in the same room, and it starts on the clock whether or not anyone presses anything
+    - Fills to 30 trainers with bots and runs on the stock Fog and Safari clocks, so it's the same game for everyone
+    - Press it while the day's match is running and you can watch it and play the next one
+3. **Solo VS Bots**
     - Solo game which fills the game with bots, up to 30
-3. **Host Game**
+4. **Host Game**
     - Creates a game with a code that you can invite others to
     - If you enable the option "OPEN" to "YES" then players will be able to join via Quick Play
-4. **Join By Code**
+5. **Join By Code**
     - Allows you to join a game if you know the code
-5. **Name**
+6. **Name**
     - This is your name! It's what shows up in game
-6. **Skin**
+7. **Skin**
     - This is your Sprite. Default is RED. You can unlock more as you keep winning.
-7. **Server...**
+8. **Server...**
     - I have a dedicated host right now, but you can load up your own server and direct your client via updating this setting.
 
 Info on each game settings can be seen down in the Game lobby options section down below.
