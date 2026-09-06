@@ -189,6 +189,9 @@ return function(game)
 
   -- hold it in the lane until the eyeline takes; once the stride begins
   -- the roam has let go of it (tickBots skips a bot that is walking over)
+  -- ...and wounded to half (POK-158 wounds), so the fight below can prove
+  -- the bar OPENS at half rather than dropping there after the intro
+  E.debugScarBot(victim.id, 0.5)
   local striding = false
   for attempt = 1, 40 do
     if E.status() == "battle" or E.walkUp() then striding = true break end
@@ -245,12 +248,30 @@ return function(game)
   -- --------------------------------------------------------- 3. the name
   -- the battle is the state on the stack carrying a trainer
   local battle
-  for _ = 1, 200 do
+  for _ = 1, 1000 do
     local top = game.stack:top()
     if type(top) == "table" and top.trainer and top.enemy then battle = top break end
-    U.wait(5)
+    U.wait(1)
   end
   if not battle then return C.fail("the bot battle never reached the stack") end
+  -- the very first frame the battle exists, its lead already carries the
+  -- record's wound: a bar drawn full and then cut is what the user saw
+  local lead = battle.enemyParty and battle.enemyParty[1]
+  local maxHp = lead and lead.stats and lead.stats.hp
+  if not (lead and maxHp) then return C.fail("the bot battle has no enemy lead to read") end
+  -- the record as it stands NOW, not the 0.5 staged above: a hurt bot
+  -- that spots a trainer drinks from its bag on the way over (BR-30)
+  local frac
+  for _, m in ipairs(E.botRecord(victim.id) or {}) do
+    if (m.hpFrac or 0) > 0 then frac = m.hpFrac break end
+  end
+  if not frac then return C.fail("the bot's record has no standing mon") end
+  if frac >= 1 then return C.fail("the bot healed all the way; nothing to prove") end
+  local want = math.max(1, math.floor(maxHp * frac + 0.5))
+  if lead.hp ~= want then
+    return C.fail(("the bot's lead opened at %d/%d HP, not the record's %d (frac %.2f)"):format(lead.hp, maxHp, want, frac))
+  end
+  U.log(("BOT: the lead opened at %d/%d, the record's wound (%.2f), before the intro drew it"):format(lead.hp, maxHp, frac))
   shot("intro")
 
   local shown = tostring(battle.trainer and battle.trainer.name)

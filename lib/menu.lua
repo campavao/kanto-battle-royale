@@ -170,14 +170,20 @@ function Menu.items(mod, BR, game)
       setting(BR:safariSeconds() > 0
               and ("SAFARI: " .. BR:safariSeconds() .. "s") or "SAFARI: OFF",
               function() BR:cycleSafari() end)
-      -- the log's deep tier, where the other knobs already are (POK-86).
-      -- It was an environment variable for one release, which a mod cannot
-      -- read: the sandbox hides the environment.  The log it thickens is
-      -- this client's own, so it sits with the host's other switches.
-      -- (SEND STATS left this box for the launcher's mod options on
-      -- 2026-09-05: it is a once-per-install choice, not a per-match one.)
-      setting("DEBUG: " .. (BR:isDebug() and "ON" or "OFF"),
-              function() BR:setDebug(not BR:isDebug()) end)
+      -- The match's pace (POK-186): TEXT SPEED and BATTLE ANIMATION for
+      -- everyone in it, in a box of its own over this one.  This box is
+      -- exactly Menu.maxRows(2) long for a hosted room and may not scroll
+      -- (POK-104: a box that scrolls over a room is a box with something
+      -- hidden), so the DEBUG row went down into that box with them --
+      -- the log's deep tier (POK-86), which was here because a mod cannot
+      -- read an environment variable and it sits best with the host's
+      -- other switches; it still does, one press further.  (SEND STATS
+      -- left for the launcher's mod options on 2026-09-05: a once-per-
+      -- install choice, not a per-match one.)  Solo and hosted rooms
+      -- only: quick play shows no OPTIONS at all and the daily has
+      -- nothing settable, so this branch is exactly the rooms the host
+      -- is allowed to shape.
+      setting("MATCH OPTIONS", function() Menu.openPace(mod, BR, game) end)
       local countdown = BR:startsIn()
       -- PLAY AGAIN and START MATCH are the same button (POK-144): once
       -- every client returns to the lobby on its own, the host's "run it
@@ -422,6 +428,40 @@ function Menu.live(mod, game, itemsFn, opts)
     return r
   end
   return menu
+end
+
+-- The host's match options (POK-186) as rows: the pace every client plays
+-- the match at.  Pure over BR.pace, so the suite can read them; the
+-- verbs are BR's, which save the choice as they change it.  BACK is the
+-- one row that does not keep the box open, so Menu's own rule pops it.
+function Menu.paceItems(mod, BR)
+  local Pace = require("mods.battle_royale.lib.pace")
+  local pace = Pace.clean(BR.pace)
+  local items = {}
+  local function setting(label, onPress)
+    items[#items + 1] = { label = label, keepOpen = true, onSelect = onPress }
+  end
+  -- "TEXT SPEED: MEDIUM" is eighteen, one over the box (Menu.MAX_LABEL)
+  setting("TEXT: " .. Pace.speedLabel(pace),
+          function() BR:cyclePaceSpeed() end)
+  setting("ANIMATION: " .. (pace.animations and "ON" or "OFF"),
+          function() BR:togglePaceAnimations() end)
+  -- the log's deep tier (POK-86): this client's own, not the match's,
+  -- and not saved -- but it is a switch, and the core settings have it off
+  setting("DEBUG: " .. (BR:isDebug() and "ON" or "OFF"),
+          function() BR:setDebug(not BR:isDebug()) end)
+  setting("REVERT TO DEFAULT", function()
+    BR:revertPace()
+    BR:setDebug(false)
+  end)
+  items[#items + 1] = { label = "BACK", onSelect = function() end }
+  return items
+end
+
+function Menu.openPace(mod, BR, game)
+  game.stack:push(Menu.live(mod, game, function()
+    return Menu.paceItems(mod, BR)
+  end))
 end
 
 -- The ROYALE screen: one stack state with two faces.  The text faces

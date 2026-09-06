@@ -1242,6 +1242,11 @@ Bots.HMS = { "SURF", "FLY" }
 
 Bots.FLY_FAR = 9
 
+-- ...and only once the ring is this small (its radius in town-map
+-- squares): the early rings cover most of Kanto, and "get to the eye"
+-- is a late-game instinct, not a first-minute one.
+Bots.FLY_RING = 7
+
 -- Which of `towns` to fly to: the one with the least `distOf`.  With
 -- `hereDist` given the flight has to be worth it -- here is at least
 -- FLY_FAR out and the town strictly closer -- so a bot a square off the

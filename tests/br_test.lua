@@ -3244,6 +3244,17 @@ do
         isDebug = function(self) return self.debugOn end,
         setDebug = function(self, on) self.debugOn = on and true or false end,
         cycleSafari = function(self) self.cycledSafari = true end,
+        -- the match options (POK-186), the shape main.lua gives them
+        pace = nil,
+        cyclePaceSpeed = function(self)
+          self.pace = require("mods.battle_royale.lib.pace").cycleSpeed(self.pace)
+        end,
+        togglePaceAnimations = function(self)
+          self.pace = require("mods.battle_royale.lib.pace").toggleAnimations(self.pace)
+        end,
+        revertPace = function(self)
+          self.pace = require("mods.battle_royale.lib.pace").clean(nil)
+        end,
         -- FILL / MAX, the shape main.lua gives them
         fillOn = function(self) return (self.fillTo or 0) > 0 end,
         fillMax = function(self) return self.fillTarget or 30 end,
@@ -3463,8 +3474,32 @@ do
     BR.solo = true
     items, view = BRMenu.items({}, BR, {})
     eq(view, "lobby", "an open room is the lobby")
-    eq(labels(items), "MAX: 3|FOG: 120s|SAFARI: 120s|DEBUG: OFF|START MATCH|LEAVE",
-       "solo: max, the two clocks, the log, start, leave")
+    eq(labels(items), "MAX: 3|FOG: 120s|SAFARI: 120s|MATCH OPTIONS|START MATCH|LEAVE",
+       "solo: max, the two clocks, the match options, start, leave")
+    -- MATCH OPTIONS (POK-186) is a box of its own over this one, and the
+    -- DEBUG row lives in it now (the outer box may not scroll, POK-104)
+    ok(find(items, "MATCH OPTIONS").keepOpen, "MATCH OPTIONS keeps the box open")
+    ok(not find(items, "DEBUG: OFF"), "DEBUG is not in the outer box any more")
+    local pace = BRMenu.paceItems({}, BR)
+    eq(labels(pace), "TEXT: MEDIUM|ANIMATION: ON|DEBUG: OFF|REVERT TO DEFAULT|BACK",
+       "the match options box: the game's own defaults until the host says otherwise")
+    for _, it in ipairs(pace) do
+      ok(#it.label <= 17, ("match options row fits the box (%d): %s"):format(#it.label, it.label))
+    end
+    ok(#pace <= BRMenu.maxRows(2), "and the box itself fits (" .. #pace .. " rows)")
+    find(pace, "TEXT: MEDIUM").onSelect()
+    find(BRMenu.paceItems({}, BR), "ANIMATION: ON").onSelect()
+    eq(labels(BRMenu.paceItems({}, BR)), "TEXT: SLOW|ANIMATION: OFF|DEBUG: OFF|REVERT TO DEFAULT|BACK",
+       "TEXT steps the OPTION screen's ladder, ANIMATION toggles")
+    -- BR_DEBUG could never work in the game (the mod sandbox hides the
+    -- environment), so the deep tier is a row like any other knob
+    find(BRMenu.paceItems({}, BR), "DEBUG: OFF").onSelect()
+    ok(BR:isDebug(), "the DEBUG row turns the deep tier on (POK-86)")
+    ok(find(BRMenu.paceItems({}, BR), "DEBUG: ON") ~= nil, "and the row says so next frame")
+    find(BRMenu.paceItems({}, BR), "REVERT TO DEFAULT").onSelect()
+    eq(labels(BRMenu.paceItems({}, BR)), "TEXT: MEDIUM|ANIMATION: ON|DEBUG: OFF|REVERT TO DEFAULT|BACK",
+       "and REVERT TO DEFAULT is the core settings again, DEBUG off included")
+    ok(not find(BRMenu.paceItems({}, BR), "BACK").keepOpen, "BACK is the way out of the box")
     eq(Lobby.header(BR), "SOLO VS BOTS", "a solo room has no code to read out")
     eq(names(Lobby.seats(BR)), "RED|_|_|_",
        "...and MAX: 3 is three seats, unknown until the room has a seed")
@@ -3479,14 +3514,6 @@ do
     eq(#Lobby.seats(BR), 6, "and the seats follow")
     find(items, "FOG").onSelect()
     ok(BR.cycledFog, "the FOG row cycles the fog clock (POK-44)")
-    -- BR_DEBUG could never work in the game (the mod sandbox hides the
-    -- environment), so the deep tier is a row like any other knob
-    find(items, "DEBUG: OFF").onSelect()
-    ok(BR:isDebug(), "the DEBUG row turns the deep tier on (POK-86)")
-    items = BRMenu.items({}, BR, {})
-    ok(find(items, "DEBUG: ON") ~= nil, "and the row says so next frame")
-    find(items, "DEBUG: ON").onSelect()
-    ok(not BR:isDebug(), "...and back off")
     ok(find(items, "SAFARI: 120s") ~= nil and find(items, "SAFARI: 120s").keepOpen,
        "the SAFARI row is a setting that keeps the screen")
     ok(find(items, "MAX").keepOpen, "changing MAX keeps the screen")
@@ -3504,8 +3531,8 @@ do
     BR.startsIn = function() return 12 end
     items = BRMenu.items({}, BR, {})
     eq(labels(items),
-       "FILL: OFF|MAX: 30|OPEN: NO|FOG: 120s|SAFARI: 120s|DEBUG: OFF|START MATCH (12)|LEAVE",
-       "hosting: FILL, MAX, OPEN, the clocks, the log, the countdown")
+       "FILL: OFF|MAX: 30|OPEN: NO|FOG: 120s|SAFARI: 120s|MATCH OPTIONS|START MATCH (12)|LEAVE",
+       "hosting: FILL, MAX, OPEN, the clocks, the match options, the countdown")
     eq(Lobby.header(BR), "CODE ABCDEF", "the code over the room")
     eq(Lobby.status(BR), "STARTS IN 12", "the countdown under it, for everyone")
     eq(Lobby.button(BR), "OPTIONS", "the host's button opens the box")
@@ -3514,7 +3541,7 @@ do
     find(items, "FILL: OFF").onSelect()
     items = BRMenu.items({}, BR, {})
     eq(labels(items),
-       "FILL: ON|MAX: 30|OPEN: NO|FOG: 120s|SAFARI: 120s|DEBUG: OFF|START MATCH (12)|LEAVE",
+       "FILL: ON|MAX: 30|OPEN: NO|FOG: 120s|SAFARI: 120s|MATCH OPTIONS|START MATCH (12)|LEAVE",
        "FILL on keeps the same rows, MAX at a full room by default")
     eq(#Lobby.seats(BR), 30, "...and the room shows the seats bots will take")
     ok(Lobby.seats(BR)[3].bot and Lobby.seats(BR)[2].id,
@@ -4453,6 +4480,100 @@ do
   local okSave, why = KeyFile.save(nil, "k", "a=1\n", nil, "thing")
   eq(okSave, false, "no cache is a failed save")
   ok(type(why) == "string", "...with a reason")
+end
+
+-- POK-186: the host's match options -- TEXT SPEED and BATTLE ANIMATION for
+-- everyone in the match, saved beside the career, carried on the start
+do
+  local Pace = require("mods.battle_royale.lib.pace")
+
+  local d = Pace.clean(nil)
+  eq(d.textSpeed, 3, "the core text speed is the game's MEDIUM")
+  eq(d.animations, true, "and animation is ON")
+  ok(Pace.isDefault(d), "which is the default")
+  eq(Pace.speedLabel(d), "MEDIUM", "labelled the OPTION screen's way")
+  eq(Pace.clean({ textSpeed = 2, animations = "no" }).textSpeed, 3,
+     "a delay the engine would not honour is MEDIUM")
+  eq(Pace.clean({ textSpeed = 5, animations = false }).textSpeed, 5, "SLOW is SLOW")
+  eq(Pace.clean({ animations = false }).animations, false, "OFF is OFF")
+  eq(Pace.clean({ animations = nil }).animations, true, "unset is ON")
+
+  local p = Pace.cycleSpeed(d)
+  eq(p.textSpeed, 5, "MEDIUM steps to SLOW")
+  eq(Pace.cycleSpeed(p).textSpeed, 1, "SLOW wraps to FAST")
+  eq(Pace.cycleSpeed(Pace.cycleSpeed(p)).textSpeed, 3, "FAST to MEDIUM")
+  ok(d.textSpeed == 3, "cycling hands back a new table, the old one stands")
+  eq(Pace.toggleAnimations(d).animations, false, "ON toggles OFF")
+  eq(Pace.toggleAnimations(Pace.toggleAnimations(d)).animations, true, "and back")
+  ok(not Pace.isDefault(Pace.toggleAnimations(d)), "which is not the default")
+  eq(Pace.describe({ textSpeed = 1, animations = false }), "text FAST, animation OFF",
+     "one line for the log")
+
+  -- the file
+  eq(Pace.encode({ textSpeed = 1, animations = false }), "text=1\nanim=off\n",
+     "two lines, fixed order")
+  local rt = Pace.decode(Pace.encode({ textSpeed = 5, animations = false }))
+  eq(rt.textSpeed, 5, "text speed round-trips")
+  eq(rt.animations, false, "animation round-trips")
+  eq(Pace.decode("").textSpeed, 3, "an empty file is the default")
+  eq(Pace.decode("text=99\nanim=maybe\n").textSpeed, 3, "a poked file is the default too")
+  eq(Pace.decode("text=99\nanim=maybe\n").animations, true, "...both halves")
+  eq(Pace.decode(nil).textSpeed, 3, "and no file at all")
+
+  -- the store, through a fake cache
+  local disk = {}
+  local fakeMod = { cache = {
+    read = function(_, key) return disk[key] end,
+    write = function(_, key, text) disk[key] = text return true end,
+  } }
+  ok(Pace.save(fakeMod, { textSpeed = 1, animations = false }), "a save writes")
+  eq(disk[Pace.KEY], "text=1\nanim=off\n", "under the versioned key")
+  eq(Pace.load(fakeMod).textSpeed, 1, "and loads back")
+  eq(Pace.load({}).textSpeed, 3, "no cache on this engine is the default, not a throw")
+
+  -- the wire
+  local ts, an = Pace.toWire({ textSpeed = 5, animations = false })
+  eq(ts, 5, "toWire: the delay")
+  eq(an, false, "...and the toggle, false included")
+  eq(Pace.fromWire(5, false).textSpeed, 5, "fromWire: a pace")
+  eq(Pace.fromWire(2, true), nil, "a delay the engine would not honour is no pace")
+  eq(Pace.fromWire(3, 1), nil, "a toggle that is not a boolean is no pace")
+  eq(Pace.fromWire(nil, nil), nil, "an older host sends neither")
+  local spawns = { { id = 1, map = "ROUTE_1", x = 1, y = 1 } }
+  local paced = Wire.decode(Wire.start(9, spawns, 0, 120, { textSpeed = 1, animations = false }))
+  eq(paced.pace and paced.pace.textSpeed, 1, "a start carries the host's text speed")
+  eq(paced.pace and paced.pace.animations, false, "...and the animation toggle, false included")
+  eq(Wire.decode(Wire.start(9, spawns, 0, 120)).pace, nil,
+     "a start with no pace carries none, and the reader keeps its own")
+  eq(Wire.start(9, spawns, 0, 120).ts, nil, "...and sends neither field")
+  eq(Wire.decode({ t = "start", seed = 9, spawns = spawns, ts = 2, an = true }).pace, nil,
+     "a nonsense delay drops the pace whole rather than half of it")
+  eq(Wire.decode({ t = "start", seed = 9, spawns = spawns, ts = 3, an = "on" }).pace, nil,
+     "so does a toggle that is not a boolean")
+
+  -- the game: apply holds what was there, nil included; restore hands it
+  -- back and rewrites options.lua so a hotkey's write mid-match is undone
+  local writes = 0
+  local game = { save = { options = {} },
+                 writeOptions = function() writes = writes + 1 end }
+  local held = Pace.apply(game, { textSpeed = 1, animations = false })
+  eq(game.save.options.textSpeed, 1, "apply writes the text speed")
+  eq(game.save.options.animations, false, "...and the toggle")
+  ok(held and held.textSpeed == nil and held.animations == nil,
+     "and holds the unset rows as unset")
+  ok(Pace.restore(game, held), "restore takes the held rows")
+  eq(game.save.options.textSpeed, nil, "an unset text speed is unset again, not MEDIUM")
+  eq(game.save.options.animations, nil, "and so is the toggle")
+  eq(writes, 1, "and options.lua is written once, with the player's own rows in it")
+  game.save.options = { textSpeed = 5, animations = true, colors = "og" }
+  held = Pace.apply(game, { textSpeed = 1, animations = false })
+  eq(held.textSpeed, 5, "a set row is held as set")
+  Pace.restore(game, held)
+  eq(game.save.options.textSpeed, 5, "and comes back")
+  eq(game.save.options.animations, true, "...both of them")
+  eq(game.save.options.colors, "og", "and nothing else in the table is touched")
+  eq(Pace.apply({}, { textSpeed = 1 }), nil, "no options table is nothing to hold")
+  eq(Pace.restore({ save = { options = {} } }, nil), false, "and nothing held is nothing to restore")
 end
 
 -- POK-120: the career that outlives a playthrough

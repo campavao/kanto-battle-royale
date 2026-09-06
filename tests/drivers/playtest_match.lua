@@ -67,6 +67,20 @@ return function(game)
   quiet(60)
   U.log(("MATCH: posted on %s at %s,%s"):format(
     tostring(C.map()), tostring(C.x()), tostring(C.y())))
+  -- the bots hunt the nearest trainer once the roster is small, and a
+  -- Lv5 RATTATA loses that fight: two runs whited out mid-probe and were
+  -- carried round Kanto as a spectator.  Park them a sea away, apart, so
+  -- nothing walks in on the probes; the ghost probe places its own.
+  do
+    local FAR = { { "CINNABAR_ISLAND", 8, 12 }, { "SEAFOAM_ISLANDS_1F", 6, 6 },
+                  { "CINNABAR_ISLAND", 3, 12 } }
+    local parked = E.bots() or {}
+    table.sort(parked, function(a, b) return a.id < b.id end)
+    for i, b in ipairs(parked) do
+      local f = FAR[(i - 1) % #FAR + 1]
+      E.debugPlaceBot(b.id, f[1], f[2], f[3])
+    end
+  end
 
   -- ------------------------------------------ POK-94: spills stay off doors
   --
@@ -251,6 +265,34 @@ return function(game)
   -- the START menu went up.  The mod's own tick never stops, so it walks
   -- them itself while anything sits above the world.
   if not quiet(120) then return C.fail("could not settle before the menu test") end
+  -- A bot beside the player has arrived: a stalk stops adjacent and a
+  -- trainer who has reached you stands there (POK-153), so a ghost one
+  -- cell away has nothing to walk under the menu.  Put it back down the
+  -- block, out of the eyeline, so the walk over IS what the menu covers.
+  do
+    local far
+    for radius = 6, 4, -1 do
+      for _, d in ipairs({ { 0, 1 }, { 0, -1 }, { -1, 0 }, { 1, 0 } }) do
+        local bx, by = myX + d[1] * radius, myY + d[2] * radius
+        local infront = (d[1] == ahead[1] and d[2] == ahead[2])
+        if not infront and not far
+           and Spawn.walkable(maps, tilesets, myMap, bx, by)
+           and not Spawn.isWarp(maps, myMap, bx, by) then
+          far = { x = bx, y = by }
+        end
+      end
+    end
+    if far and E.debugPlaceBot(botId, myMap, far.x, far.y) then
+      ghost = nil
+      for _ = 1, 60 do
+        U.wait(3)
+        ghost = findGhost()
+        if ghost then break end
+      end
+      if not ghost then return C.fail("the ghost did not respawn down the block for the menu test") end
+      U.log(("MATCH: the ghost is back at %d,%d for the menu test"):format(far.x, far.y))
+    end
+  end
   local menu
   for _ = 1, 20 do
     U.tap(game, "start")
@@ -343,6 +385,9 @@ return function(game)
 
   -- collapse the interval: the next tickRing jumps to a late phase
   E.setFog(1)
+  -- ...which since POK-116 is the NEXT round's setting; the running
+  -- round's clock is pinned at start, so collapse that one directly
+  if E.debugRoundFog then E.debugRoundFog(1) end
   local target, jumped = nil, false
   for _ = 1, 240 do
     U.wait(15)

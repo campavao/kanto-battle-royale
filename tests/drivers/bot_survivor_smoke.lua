@@ -81,12 +81,21 @@ return function(game)
   if not pair then return C.fail("no adjacent pair on " .. ARENA) end
 
   local fought = false
-  for i = 1, 120 do
+  -- A fight between two bots is a real battle now, at a person's pace
+  -- (lib/mirror.lua), so once a duel is running the pair is left alone
+  -- and given the wall clock a fight can take (DUEL_LIMIT is 420s).
+  local t0 = love.timer.getTime()
+  local i, sawDuel = 0, false
+  while love.timer.getTime() - t0 < 480 do
+    i = i + 1
     local a, b = botById(one.id), botById(two.id)
     if not (a and b) then return C.fail("lost a bot before the fight") end
     if a.status == "out" or b.status == "out" then fought = true break end
-    E.debugPlaceBot(one.id, ARENA, pair.a.x, pair.a.y)
-    E.debugPlaceBot(two.id, ARENA, pair.b.x, pair.b.y)
+    if #(E.botDuels() or {}) > 0 then sawDuel = true end
+    if #(E.botDuels() or {}) == 0 then
+      E.debugPlaceBot(one.id, ARENA, pair.a.x, pair.a.y)
+      E.debugPlaceBot(two.id, ARENA, pair.b.x, pair.b.y)
+    end
     U.wait(15)
     if i % 20 == 0 then
       local pr = E.debugFightProbe() or {}
@@ -101,7 +110,7 @@ return function(game)
                 table.concat(rows, " / "), tostring(E.tickError())))
     end
   end
-  if not fought then return C.fail("adjacent for a minute and no fight") end
+  if not fought then return C.fail("adjacent for eight minutes and no fight settled") end
   local winner = (botById(one.id).status == "alive") and one or two
   local rec = E.botRecord(winner.id)
   if not rec then return C.fail("the winner has no record") end
@@ -109,7 +118,9 @@ return function(game)
   for _, m in ipairs(rec) do
     if (m.hpFrac or 1) < 1 then hurt = true break end
   end
-  if not hurt then
+  -- a REAL fight can be won clean -- a two-turn KO leaves no scratch --
+  -- so unscathed is only the coin's tell when no duel was ever seen
+  if not hurt and not sawDuel then
     return C.fail("the fight cost the winner nothing -- the coin is back")
   end
   U.log(("SURVIVOR: %s won and its lead is at %d%%"):format(
@@ -159,7 +170,9 @@ return function(game)
   for i = 1, 240 do
     local b = botById(winner.id)
     if not b or b.status ~= "alive" then return C.fail("the winner died healing") end
-    if b.map ~= "PEWTER_CITY" then
+    -- inside the Centre is where it heals now (BR-35): only a bot that
+    -- has wandered off both maps is put back on the doorstep
+    if b.map ~= "PEWTER_CITY" and b.map ~= "PEWTER_POKECENTER" then
       E.debugPlaceBot(winner.id, "PEWTER_CITY", DOOR.x, DOOR.y)
     end
     U.wait(30)

@@ -9,7 +9,7 @@
 --   1. the ROYALE screen becomes the room when a solo room opens
 --   2. thirteen seats (me + MAX 12) page as 2 x 4, the cursor reaches the
 --      last one and the button, and the room scrolls to keep up
---   3. OPTIONS opens the box with MAX / FOG / SAFARI / DEBUG / START / LEAVE
+--   3. OPTIONS opens the box with MAX / FOG / SAFARI / MATCH OPTIONS / START / LEAVE
 --   4. A on my own seat opens my card
 --   5. START MATCH from the box closes the box AND the room and starts
 --
@@ -175,8 +175,8 @@ return function(game)
   end
   rows = labels(box.items)
   U.log("ROOM: options | " .. rows)
-  if rows ~= "MAX: 12|FOG: 240s|SAFARI: 120s|DEBUG: OFF|START MATCH|LEAVE" then
-    return C.fail("the solo OPTIONS box is not MAX / FOG / SAFARI / DEBUG / START / LEAVE")
+  if rows ~= "MAX: 12|FOG: 240s|SAFARI: 120s|MATCH OPTIONS|START MATCH|LEAVE" then
+    return C.fail("the solo OPTIONS box is not MAX / FOG / SAFARI / MATCH OPTIONS / START / LEAVE")
   end
   shot("options")
   -- MAX steps the ladder and the room follows, live under the box

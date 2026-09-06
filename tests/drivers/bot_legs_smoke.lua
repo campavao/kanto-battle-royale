@@ -92,6 +92,16 @@ return function(game)
     local b = botAt(id)
     return b and b.status == "alive"
   end
+  -- a bot that is alive and not in a duel: a duel at a person's pace can
+  -- outlast a leg, and a duelist stands frozen for all of it
+  local function freeBot()
+    local busy = {}
+    for _, d in ipairs(E.botDuels() or {}) do busy[d.a], busy[d.b] = true, true end
+    for _, b in ipairs(E.bots() or {}) do
+      if b.status == "alive" and not busy[b.id] then return b end
+    end
+    return nil
+  end
   local function walkable(map, x, y)
     return Spawn.walkable(data.maps, data.tilesets, map, x, y)
        and not Spawn.isWarp(data.maps, map, x, y)
@@ -285,22 +295,14 @@ return function(game)
     end
     shot("walkup_duel")
     U.log(("WALKUP: %s walked up to %s; they face each other and the duel is open"):format(a.name, b.name))
-    -- let it settle so the next leg has two free bots
-    for _ = 1, 6000 do
-      U.wait(10)
-      if #(E.botDuels() or {}) == 0 then break end
-    end
-    U.log("WALKUP: the duel settled")
+    U.log("WALKUP: the duel runs on; the next legs use a bot that is not in it")
   end
 
   -- ------------------------------------------------------------ surf
   if leg("surf") then
     -- A may have fallen in the duel: the surfer is whichever is standing
-    local swimmer
-    for _, b in ipairs(E.bots() or {}) do
-      if b.status == "alive" then swimmer = b break end
-    end
-    if not swimmer then return C.fail("no bot left to swim") end
+    local swimmer = freeBot()
+    if not swimmer then return C.fail("no free bot left to swim") end
     if not watch(swimmer.id) then return C.fail("could not watch the swimmer") end
     local others = {}
     for _, b in ipairs(E.bots() or {}) do
@@ -343,11 +345,8 @@ return function(game)
 
   -- ------------------------------------------------------------ fly
   if leg("fly") then
-    local flier
-    for _, b in ipairs(E.bots() or {}) do
-      if b.status == "alive" then flier = b break end
-    end
-    if not flier then return C.fail("no bot left to fly") end
+    local flier = freeBot()
+    if not flier then return C.fail("no free bot left to fly") end
     if not watch(flier.id) then return C.fail("could not watch the flier") end
     local others = {}
     for _, b in ipairs(E.bots() or {}) do
@@ -396,6 +395,10 @@ return function(game)
 
   -- ------------------------------------------------------------ endgame
   if leg("endgame") then
+    -- the walk-up's duel has to be over first: it can run minutes
+    local t0 = love.timer.getTime()
+    while #(E.botDuels() or {}) > 0 and love.timer.getTime() - t0 < 480 do U.wait(10) end
+    if #(E.botDuels() or {}) > 0 then return C.fail("the walk-up's duel never settled") end
     local standing = {}
     for _, b in ipairs(E.bots() or {}) do
       if b.status == "alive" then standing[#standing + 1] = b end

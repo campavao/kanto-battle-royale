@@ -25,7 +25,8 @@
 -- by me".  The host uses it to move its bots, since a bot has no connection
 -- of its own for the relay to attribute a message to.  Only the host's `as`
 -- is honoured (see main.lua), so a guest cannot puppet anyone.
---   {t="start", seed=, spawns={{id=,map=,x=,y=}}} host: the match begins
+--   {t="start", seed=, spawns={{id=,map=,x=,y=}}, host: the match begins
+--             safari=, fog=, ts=, an=}          (ts/an: the host's pace)
 --   {t="challenge", n=}                           I am facing you: fight
 --   {t="accept", n=} / {t="decline", n=, why=}    the reply
 --   {t="bt", m={...}}                             one link-battle message
@@ -95,6 +96,10 @@ local Wire = {}
 -- 10: botrec -- a bot's persistent team (POK-158).  Two clients that
 --    disagree about a bot's record disagree about who wins a fight with
 --    it, so the message is load-bearing, not cosmetic.
+-- 11, additive (2026-09-05): a start carries the host's PACE -- TEXT
+--    SPEED (`ts`) and BATTLE ANIMATION (`an`), for every client in the
+--    match (POK-186).  No bump: an older reader drops the two fields and
+--    plays at its own settings, which is exactly what it did before.
 Wire.PROTOCOL = 11
 
 Wire.DIRS = { up = true, down = true, left = true, right = true }
@@ -197,9 +202,13 @@ end
 -- host who started the match rather than to whoever is reading -- otherwise
 -- an heir with a different setting would carry the ring on at its own pace
 -- (POK-116).
-function Wire.start(seed, spawns, safari, fog)
+-- `pace` is { textSpeed = 1|3|5, animations = boolean }, the host's match
+-- options (lib/pace.lua, POK-186); nil sends neither field.
+function Wire.start(seed, spawns, safari, fog, pace)
   return { t = "start", seed = seed, spawns = spawns, safari = safari,
-           fog = fog }
+           fog = fog,
+           ts = pace and pace.textSpeed or nil,
+           an = pace and pace.animations }
 end
 
 function Wire.challenge(nonce) return { t = "challenge", n = nonce } end
@@ -424,8 +433,14 @@ decoders.start = function(m)
                          and fog > 0 and fog <= 86400) then
     fog = nil
   end
+  -- the host's pace (POK-186), both fields or neither: absent or nonsense
+  -- is an older host, and the reader keeps its own settings
+  local pace
+  if (m.ts == 1 or m.ts == 3 or m.ts == 5) and type(m.an) == "boolean" then
+    pace = { textSpeed = m.ts, animations = m.an }
+  end
   return { t = "start", seed = math.floor(m.seed), spawns = spawns,
-           safari = math.floor(safari or 0), fog = fog }
+           safari = math.floor(safari or 0), fog = fog, pace = pace }
 end
 
 local function nonce(m)
