@@ -1,6 +1,18 @@
 {
-  "readAt": "2026-09-05T23:17:02.557Z",
+  "readAt": "2026-09-06T01:08:59.261Z",
   "list": [
+    {
+      "tag": "v0.46.1",
+      "name": "USE returns to the bag, bots click their attacks",
+      "at": "2026-09-06T00:25:09Z",
+      "dl": 1
+    },
+    {
+      "tag": "v0.46.0",
+      "name": "bots move like players",
+      "at": "2026-09-06T00:12:02Z",
+      "dl": 2
+    },
     {
       "tag": "v0.45.0",
       "name": "the lobby is a room",
