@@ -158,17 +158,65 @@ return function(game)
       :format(game.save.inventory.POTION or 0, potions0))
   end
   U.log("LOOT: USE healed the MACHOP through the PACK's own flow and consumed the POTION")
-  -- B out of the PACK lands back on the loot list, money still there
-  for _ = 1, 40 do
-    if top() == list then break end
-    U.tap(game, "b") U.wait(8)
+  -- ...and the flow lands back on the loot list BY ITSELF (POK-184): the
+  -- PACK it ran through is popped the moment the use is over, so nobody
+  -- is stranded in their own bag.  No B pressed here on purpose.
+  -- The flow's own text ("MACHOP recovered ...") still wants A, so A is
+  -- pressed on anything that is neither the loot list nor the PACK;
+  -- the PACK itself gets no press, and stranding is the PACK on top for
+  -- more than a few frames.
+  local function backToList(what)
+    local packFrames = 0
+    for i = 1, 600 do
+      U.wait(1)
+      local t = top()
+      if t == list then return true end
+      if t and t.kind == "bag" then
+        packFrames = packFrames + 1
+        if packFrames > 6 then
+          return C.fail(what .. " stranded the player in their own PACK (POK-184)")
+        end
+      else
+        packFrames = 0
+        if i % 8 == 0 then U.tap(game, "a") end
+      end
+    end
+    return false
   end
-  if top() ~= list or #list.items ~= 2 or list.items[2].value ~= "money" then
-    return C.fail("after USE the loot list is not back with the money row (top " .. tostring(top() and top().kind) .. ")")
+  local backOnList = backToList("USE")
+  if not backOnList or #list.items ~= 2 or list.items[2].value ~= "money" then
+    local kinds = {}
+    for _, s in ipairs(game.stack.states or {}) do
+      kinds[#kinds + 1] = tostring(s.kind or (s == C.ow() and "overworld") or (s == list and "LOOT") or "?")
+    end
+    return C.fail(("after USE the loot list is not back with the money row (stack: %s; rows %d; bag %s)")
+      :format(table.concat(kinds, " > "), #list.items, tostring(myBag() ~= nil)))
   end
-  U.log("LOOT: back on the loot list, the money still on the ground")
+  U.log("LOOT: back on the loot list with no B pressed, the money still on the ground")
   if not settle() then return C.fail("could not leave the loot list") end
   if not myBag() then return C.fail("a bag with money left in it vanished") end
+
+  -- ------- 2b. USE, then back out of the target picker (POK-184)
+  list = dropBag()
+  if not list then return end
+  potions0 = game.save.inventory.POTION or 0
+  U.tap(game, "down") U.wait(6)          -- past TAKE ALL
+  U.tap(game, "a") U.wait(10)            -- USE / TAKE / CANCEL
+  U.tap(game, "a") U.wait(20)            -- USE: the party picker opens
+  local picker = top()
+  if picker == list or (picker and picker.kind == "bag") then
+    return C.fail("USE did not open the target picker (top " .. tostring(picker and picker.kind) .. ")")
+  end
+  U.tap(game, "b") U.wait(2)             -- change your mind
+  backOnList = backToList("backing out of the picker")
+  if not backOnList then
+    return C.fail("backing out of the picker did not return to the loot list (top " .. tostring(top() and top().kind) .. ")")
+  end
+  if (game.save.inventory.POTION or 0) ~= potions0 + 1 then
+    return C.fail("the POTION taken for USE was not kept after backing out")
+  end
+  U.log("LOOT: backed out of USE and landed on the loot list, the POTION kept")
+  if not settle() then return C.fail("could not leave the loot list after backing out") end
 
   -- ------- 3. TAKE ALL (BR-31)
   -- the bag on the ground still holds the money; a fresh one beside it

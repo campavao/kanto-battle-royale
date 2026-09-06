@@ -245,6 +245,34 @@ local function expectedHit(def, user, target)
   return def.power * eff * stab, eff
 end
 
+-- STATUS MOVES ARE NOT SUPER-EFFECTIVE (POK-185).  Gen 1's layer 3 reads
+-- one type row and applies its -1 to non-damaging moves too -- the ROM
+-- quirk that has its trainers spam AGILITY and AMNESIA into Fighting
+-- types.  A bot's SNORLAX under level 15 clicked only AMNESIA and REST
+-- against a HITMONCHAN, turn after turn, because PSYCHIC beats FIGHTING
+-- and both sat at 9 while HEADBUTT sat at 10.  Every bot's layer cancels
+-- that nudge, and adds two things Gen 1 never checked: a stat-up at +6
+-- and REST at (near) full HP are wasted turns.
+local function statOf(effect)
+  local stat = type(effect) == "string" and effect:match("^(%u+)_UP2?_EFFECT$")
+  return stat and stat:lower() or nil
+end
+
+local function statusScore(view, def, score)
+  local row = TypeChart.rows(def.type, view.target.curTypes or {})[1]
+  if row and row > 10 then score = score + 1 end
+  local stat = statOf(def.effect)
+  local stages = view.user.stages or {}
+  if stat and (stages[stat] or 0) >= 6 then score = score + 5 end
+  if def.effect == "HEAL_EFFECT" then
+    local mon = view.user.mon or view.user
+    local hp = tonumber(mon.hp)
+    local mx = tonumber((mon.stats and mon.stats.hp) or mon.maxHp)
+    if hp and mx and mx > 0 and hp >= mx * 0.9 then score = score + 5 end
+  end
+  return score
+end
+
 Bots.MOVE_LAYER = {
   kind = "layer",
   score = function(view, def, score)
@@ -258,12 +286,27 @@ Bots.MOVE_LAYER = {
       view.brBest = best
     end
     local exp, eff = expectedHit(def, view.user, view.target)
-    if not exp then return score end          -- status: the vanilla passes rule
+    if not exp then return statusScore(view, def, score) end  -- status (POK-185)
     if eff == 0 then return score + 10 end    -- an immune move is never the pick
     if view.brBest > 0 and exp >= view.brBest then
       return score - 3                        -- the biggest hit outbids any nudge
     end
     if eff < 10 then return score + 1 end     -- resisted filler waits its turn
+    return score
+  end,
+}
+
+-- A ROOKIE's layer (POK-185): the same status rules -- the quirk is not
+-- what makes a rookie weak -- but no edge on its best hit, so it still
+-- picks among its attacks the way the ROM's trainers do.  It does not
+-- click a move the foe is immune to; nobody does that twice.
+Bots.ROOKIE_LAYER = {
+  kind = "layer",
+  score = function(view, def, score)
+    if not def then return score end
+    local exp, eff = expectedHit(def, view.user, view.target)
+    if not exp then return statusScore(view, def, score) end
+    if eff == 0 then return score + 10 end
     return score
   end,
 }

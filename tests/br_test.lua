@@ -4896,6 +4896,61 @@ do
         target = { curTypes = { "ROCK" } } }
   eq(layer.score(v, data.moves.TACKLE, 10), 7,
      "the best available hit is the pick even when resisted")
+
+  -- POK-185: status moves are never "super-effective", and a wasted turn
+  -- scores like a dud.  SNORLAX under level 15 (HEADBUTT / AMNESIA /
+  -- REST) against a FIGHTING lead, through the engine's own chooseMove
+  -- with the vanilla three passes -- the quirk -- and then with each
+  -- bot layer on top.
+  TypeChart.load({ type_chart = { types = {}, matchups = {
+    { attacker = "PSYCHIC_TYPE", defender = "FIGHTING", multiplier = 20 },
+  } } })
+  local TrainerAI = require("src.battle.TrainerAI")
+  local moves = {
+    HEADBUTT = { power = 70, type = "NORMAL", effect = "FLINCH_SIDE_EFFECT2" },
+    AMNESIA  = { power = 0, type = "PSYCHIC_TYPE", effect = "SPECIAL_UP2_EFFECT" },
+    REST     = { power = 0, type = "PSYCHIC_TYPE", effect = "HEAL_EFFECT" },
+  }
+  local function snorlax(hp, special)
+    return { curTypes = { "NORMAL" },
+             curMoves = { { id = "HEADBUTT", pp = 10 }, { id = "AMNESIA", pp = 10 },
+                          { id = "REST", pp = 10 } },
+             mon = { hp = hp, stats = { hp = 100 } },
+             stages = { special = special or 0 }, aiLayer2 = 5 }
+  end
+  local function fight(mods, layerRecs)
+    return { enemyAIMods = mods, ruleset = { enemyUnlimitedPP = true },
+             player = { curTypes = { "FIGHTING" }, mon = {} },
+             data = { moves = moves, ai_classes = layerRecs } }
+  end
+  local first = function(a, b) return a == nil and 0 or a end
+  local picks = {}
+  for _ = 1, 20 do
+    local mv = TrainerAI.chooseMove(snorlax(50), first, fight({ 1, 3 }, {}))
+    picks[mv.id] = true
+  end
+  ok(picks.AMNESIA or picks.REST, "the vanilla passes alone show the quirk: a status move wins")
+  ok(not picks.HEADBUTT, "...and the one attack is never clicked")
+  local ace = fight({ 1, 3, "BR_BOT_MOVES" }, { BR_BOT_MOVES = Bots.MOVE_LAYER })
+  eq(TrainerAI.chooseMove(snorlax(50), first, ace).id, "HEADBUTT",
+     "with the bot layer SNORLAX clicks HEADBUTT")
+  local rookie = fight({ 1, 3, "BR_ROOKIE_MOVES" }, { BR_ROOKIE_MOVES = Bots.ROOKIE_LAYER })
+  eq(TrainerAI.chooseMove(snorlax(50), first, rookie).id, "HEADBUTT",
+     "and so does a ROOKIE's")
+  -- the scores themselves
+  local view = { data = { moves = moves }, user = snorlax(50), target = { curTypes = { "FIGHTING" } } }
+  eq(Bots.ROOKIE_LAYER.score(view, moves.AMNESIA, 9), 10,
+     "a Psychic status move against FIGHTING gets the vanilla -1 back")
+  eq(Bots.ROOKIE_LAYER.score(view, moves.HEADBUTT, 10), 10, "a rookie's attack sits at par")
+  eq(Bots.MOVE_LAYER.score(view, moves.HEADBUTT, 10), 7, "an ace's best hit is encouraged")
+  view = { data = { moves = moves }, user = snorlax(50, 6), target = { curTypes = { "FIGHTING" } } }
+  eq(Bots.MOVE_LAYER.score(view, moves.AMNESIA, 9), 15, "a stat-up at +6 is a wasted turn")
+  view = { data = { moves = moves }, user = snorlax(95), target = { curTypes = { "FIGHTING" } } }
+  eq(Bots.MOVE_LAYER.score(view, moves.REST, 9), 15, "REST at full HP is a wasted turn")
+  view = { data = { moves = moves }, user = snorlax(20), target = { curTypes = { "FIGHTING" } } }
+  eq(Bots.MOVE_LAYER.score(view, moves.REST, 9), 10, "REST when hurt is merely not super-effective")
+  view = { data = { moves = moves }, user = snorlax(50), target = { curTypes = { "NORMAL" } } }
+  eq(Bots.MOVE_LAYER.score(view, moves.AMNESIA, 10), 10, "a neutral status move is left alone")
 end
 
 -- POK-85: the walk over.  Bots.wander is a roam; this is a stride.

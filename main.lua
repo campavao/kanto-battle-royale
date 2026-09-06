@@ -296,9 +296,12 @@ return function(mod)
   -- live in, named from the trainer overlay in startBotBattle.  Inert
   -- for every other battle -- nothing else's aiMods names it.  A
   -- registry that will not take it degrades to the vanilla passes.
+  -- ...and a ROOKIE's (POK-185), which only keeps a status move from
+  -- being "super-effective" and a stat-up from going past +6.
   do
     local ok, err = pcall(function()
       mod.content.ai_classes:register("BR_BOT_MOVES", Bots.MOVE_LAYER)
+      mod.content.ai_classes:register("BR_ROOKIE_MOVES", Bots.ROOKIE_LAYER)
     end)
     if not ok then
       mod.log:warn("bot move layer not registered (%s); vanilla AI stands in",
@@ -5869,7 +5872,45 @@ return function(mod)
       game.stack:pop()
       sub.items[1].onSelect()
     end
+    -- The PACK is scaffolding (POK-184): the engine's use flow returns
+    -- to the menu that asked, and that used to strand a player in their
+    -- own PACK when they backed out of the target picker or read OAK's
+    -- refusal -- the loot list was one more B away and nobody knew.  So
+    -- the moment the flow lands back on the PACK, tickLootPack pops it
+    -- and the loot list is on top again, whatever the flow's outcome.
+    self.lootPack = { pack = pack, key = key, frames = 0 }
     return true
+  end
+
+  -- Per frame while a loot USE is in flight.  The pop waits until the
+  -- engine's flow has actually put something ABOVE the pack (the target
+  -- picker, a text box) and then come back to it: the picker's push can
+  -- land a frame after USE, and popping the pack under it left the flow
+  -- closing the loot list instead.  A flow that never pushes anything at
+  -- all is given a moment, then the pack goes the same way.
+  function BR:tickLootPack()
+    local w = self.lootPack
+    if not w then return end
+    local stack = self.game and self.game.stack
+    if not stack then self.lootPack = nil return end
+    w.frames = (w.frames or 0) + 1
+    local top = stack:top()
+    if top ~= w.pack then
+      -- something of the flow's is up: the pack has been asked
+      local present = false
+      for _, s in ipairs(stack.states or {}) do
+        if s == w.pack then present = true break end
+      end
+      if not present then self.lootPack = nil return end
+      w.armed = true
+      return
+    end
+    if w.armed or w.frames > 30 then
+      stack:pop()
+      self.lootPack = nil
+      self:refreshLoot(w.key)
+      return
+    end
   end
 
   function BR:lootChoose(key, id)
@@ -6655,20 +6696,19 @@ return function(mod)
     -- aiUses (wAICount) was already baked from the face's class at
     -- newTrainer time, so it is re-asked once the overlay is on.
     local aiClass = Bots.fightAI(self.matchSeed, botId)
-    if bp and (bp.name or aiClass) then
+    if bp then
       local was = battle.trainer and battle.trainer.name
-      -- ...and an ai-tier bot also PICKS its moves (POK-160 item 3): the
-      -- face's own vanilla passes, plus the mod's BR_BOT_MOVES layer on
-      -- top.  A ROOKIE keeps whatever move choice its face class shipped
-      -- with -- no field, so the chassis answers through __index.
-      local aiMods
-      if aiClass then
-        aiMods = {}
-        for _, m in ipairs((battle.trainer and battle.trainer.aiMods) or {}) do
-          aiMods[#aiMods + 1] = m
-        end
-        aiMods[#aiMods + 1] = "BR_BOT_MOVES"
+      -- ...and every bot PICKS its moves (POK-160 item 3, POK-185): the
+      -- face's own vanilla passes, plus the mod's layer on top --
+      -- BR_BOT_MOVES for an ai tier, BR_ROOKIE_MOVES for a ROOKIE, whose
+      -- SNORLAX used to click AMNESIA and REST forever into a Fighting
+      -- lead because the vanilla third pass calls a Psychic-type status
+      -- move super-effective.
+      local aiMods = {}
+      for _, m in ipairs((battle.trainer and battle.trainer.aiMods) or {}) do
+        aiMods[#aiMods + 1] = m
       end
+      aiMods[#aiMods + 1] = aiClass and "BR_BOT_MOVES" or "BR_ROOKIE_MOVES"
       battle.trainer = setmetatable(
         { name = bp.name, aiClass = aiClass, aiMods = aiMods },
         { __index = battle.trainer })
@@ -7569,6 +7609,7 @@ return function(mod)
     -- below until the player has read it.  Move this call under that block
     -- and the banner is silently dropped on the frame the match ends.
     if BR.phase ~= "off" then BR:tickSays() end
+    if BR.lootPack then BR:tickLootPack() end
     if BR.phase ~= "off" then
       BR.despawns:drain(BR.game, mod.world:overworld(), BR:screenIsQuiet())
     end
