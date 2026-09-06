@@ -51,6 +51,10 @@ SCENARIOS = {
     # eyeline.  The eyeline must hold off the menu; a challenge that lands
     # mid-dialog must queue and open the lockstep once the dialog closes.
     "held": ("host_held.lua", "guest_held.lua"),
+    # The fight a spectator is shown (lib/mirror.lua): the host loses the
+    # duel, watches the guest, and the guest's next fight must open on the
+    # host's screen as a replica and end the way the real one did.
+    "spectate": ("host_spectate.lua", "guest_spectate.lua"),
 }
 
 

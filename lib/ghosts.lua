@@ -244,6 +244,9 @@ function Ghosts:_syncOne(game, id, myMapId, p)
   handle:setPassable(Ghosts.passableFor(
     game and game.data and game.data.maps, myMapId, p))
 
+  -- ...and the sheet in step with the ground under them (BR-33)
+  self:_dress(game, g, handle)
+
   if handle:isMoving() then return end
 
   if #g.queue > MAX_BACKLOG then
@@ -270,6 +273,54 @@ function Ghosts:_syncOne(game, id, myMapId, p)
   else
     handle:face(p.facing)
   end
+end
+
+-- ------- the sea (BR-33)
+--
+-- A ghost on the water sits on the surf sprite, the way the player's own
+-- surfing is drawn (Player:pose swaps the whole sheet for
+-- field.playerSprites.surf -- Kanto's SEEL).  The wire carries the walk
+-- sheet a peer advertised and nothing about water, and needs nothing
+-- more: every client has the map, so the cell under the ghost answers.
+-- Swapped on the NPC itself (NPC:pose reads self.sprite) and back to
+-- the walk sheet ashore.  A build without a surf sheet draws the walk.
+local function surfSheet(game, npc)
+  local data = game and game.data
+  local ok, sprite = pcall(function()
+    local FieldDefaults = require("src.world.FieldDefaults")
+    local id = FieldDefaults.fieldValue(data, "playerSprites", "surf")
+    local def = id and data.sprites and data.sprites[id]
+    if not def then return nil end
+    return require("src.render.SpriteRenderer").new(def, npc.id)
+  end)
+  return ok and sprite or nil
+end
+
+function Ghosts:_dress(game, g, handle)
+  local npc = handle and handle.npc
+  local data = game and game.data
+  if not (npc and data and data.maps and data.tilesets) then return end
+  local cx, cy = handle:position()
+  if not (cx and cy) then return end
+  local wet = Spawn.swimmable(data.maps, data.tilesets, g.mapId, cx, cy)
+  if wet == (g.surfing or false) then return end
+  if wet then
+    if g.surfSprite == nil then g.surfSprite = surfSheet(game, npc) or false end
+    if not g.surfSprite then return end
+    g.walkSprite = npc.sprite
+    npc.sprite = g.surfSprite
+    g.surfing = true
+  else
+    if g.walkSprite then npc.sprite = g.walkSprite end
+    g.surfing = false
+  end
+end
+
+-- what a ghost is drawn on right now, for a driver: "surf" or "walk"
+function Ghosts:sheetOf(id)
+  local g = self.ghosts[id]
+  if not g then return nil end
+  return g.surfing and "surf" or "walk"
 end
 
 -- ------- keeping the world alive under a menu (POK-98)

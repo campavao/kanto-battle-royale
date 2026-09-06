@@ -2610,12 +2610,27 @@ do
      "scratches walk it off")
   ok(not Bots.wantsHeal({}), "an empty record wants nothing")
 
-  -- ...and the errand ladder honours it
+  -- ...and the errand ladder honours it -- after the loot at its feet
+  -- (BR-29): a bot stood a few cells from a dropped team while it walked
+  -- to the nurse
   local sick = { x = 5, y = 5 }
   local g = Bots.chooseGoal(sick, { heal = { x = 9, y = 9 },
                                     items = { { x = 6, y = 5 } } },
                             function() return 0 end)
-  eq(g.kind, "heal", "a hurt team walks to the Centre before the loot")
+  eq(g.kind, "item", "loot a step away is picked up on the way to the Centre")
+  g = Bots.chooseGoal(sick, { heal = { x = 9, y = 9 },
+                              items = { { x = 25, y = 25 } } },
+                      function() return 0 end)
+  eq(g.kind, "heal", "loot across the map waits for the nurse")
+  ok(Bots.wantsHeal({ { hpFrac = 0.3 }, { hpFrac = 1 }, { hpFrac = 1 } }),
+     "a lead at a sliver wants the nurse whatever the team averages (BR-29)")
+  ok(not Bots.wantsHeal({ { hpFrac = 1 }, { hpFrac = 0.3 }, { hpFrac = 1 } }),
+     "a hurt third slot behind a healthy lead is a scratch")
+  ok(Bots.hasPotion({ items = { { id = "POKE_BALL", n = 1 }, { id = "POTION", n = 1 } } }),
+     "a potion in the bag counts")
+  ok(not Bots.hasPotion({ items = { { id = "POTION", n = 0 } } }),
+     "an empty bottle does not")
+  ok(not Bots.hasPotion(nil), "no bag, no potion")
   eq(Bots.chooseGoal(sick, { inFog = true, heal = { x = 9, y = 9 } },
                      function() return 0 end).kind, "seam",
      "but never into the fog")
@@ -2700,6 +2715,288 @@ do
   local partial = { A = nil, B = 9 }
   eq(Bots.homeward({ "A", "B" }, function(m) return partial[m] end, 100, rng),
      "B", "a map the Town Map cannot place is not a shortcut")
+end
+
+-- ------- a seam is walked, not skipped (BR-32)
+--
+-- A bot crossing a map used to be dropped on a random cell of the next
+-- one -- a teleport to a camera glued to it.  The exit is an edge cell
+-- now, the crossing lands where the engine lands a player.
+
+do
+  local Bots = require("mods.battle_royale.lib.bots")
+  -- A is 6x4 cells, B is 4x4; B sits under A shifted two cells right
+  -- (offset 1 block), so A's (x, 3) steps down onto B's (x - 2, 0)
+  local maps = {
+    A = { width = 3, height = 2, connections = { south = { map = "B", offset = 1 } } },
+    B = { width = 2, height = 2, connections = { north = { map = "A", offset = -1 } } },
+  }
+  eq(Bots.seamSide(maps.A, "B"), "south", "the side whose map is the destination")
+  eq(Bots.seamSide(maps.B, "A"), "north", "...both ways")
+  eq(Bots.seamSide(maps.A, "Z"), nil, "no such neighbour")
+  local d, lx, ly = Bots.seamLanding(maps, "A", "south", 3, 3)
+  eq(d, "B", "a step off the south edge lands on B")
+  eq(lx .. "," .. ly, "1,0", "on the strip-shifted cell")
+  d, lx, ly = Bots.seamLanding(maps, "B", "north", 1, 0)
+  eq(d .. lx .. ly, "A33", "and back the same way")
+  eq(Bots.seamLanding(maps, "A", "south", 0, 3), nil,
+     "a landing off the neighbour's edge is a bump, not a crossing")
+  eq(Bots.seamLanding(maps, "A", "east", 5, 1), nil, "no connection, no landing")
+  local blockedB = { ["1,0"] = true }
+  local function cross(m, x, y) return not (m == "B" and blockedB[x .. "," .. y]) end
+  local cells = Bots.seamCells(maps, "A", "south", cross)
+  eq(#cells, 3, "three of A's south cells cross onto walkable B")
+  eq(cells[1].x .. "," .. cells[1].y .. ">" .. cells[1].lx .. "," .. cells[1].ly,
+     "2,3>0,0", "the first is the leftmost that lands in bounds")
+  eq(cells[2].x, 4, "the one that lands on B's wall is skipped")
+  eq(#Bots.seamCells(maps, "A", "north", cross), 0, "no seam, no cells")
+  eq(Bots.SEAM_STEP.south, "down", "a south seam is crossed stepping down")
+
+  -- the walk to the nearest of them
+  local grid = { ["3,2"] = true }   -- one wall in a 6x4 room
+  local function walk(x, y) return x >= 0 and y >= 0 and x < 6 and y < 4 and not grid[x .. "," .. y] end
+  local edge = {}
+  for _, c in ipairs(cells) do edge[c.x .. "," .. c.y] = true end
+  local path, at = Bots.pathToAny(walk, { x = 3, y = 0 },
+                                  function(x, y) return edge[x .. "," .. y] or false end)
+  ok(path ~= nil, "a path to the nearest seam cell")
+  ok(at and edge[at.x .. "," .. at.y], "...ends on one of them")
+  eq(#path, 4, "and is the short way round the wall")
+  local nowhere = Bots.pathToAny(walk, { x = 0, y = 0 }, function() return false end)
+  eq(nowhere, nil, "no goal anywhere is nil")
+  local here, hereAt = Bots.pathToAny(walk, { x = 2, y = 3 },
+                                      function(x, y) return edge[x .. "," .. y] or false end)
+  eq(#here, 0, "already standing on one is an empty path")
+  eq(hereAt.x, 2, "...at the cell itself")
+
+  -- against Kanto: every outdoor seam has a way across on foot or by
+  -- water, VIRIDIAN's south edge onto ROUTE_1 among them, and PALLET's
+  -- south shore only for a swimmer
+  local Spawn = require("mods.battle_royale.lib.spawn")
+  local okData, kmaps = pcall(dofile, "data/generated/maps.lua")
+  local okTs, tilesets = pcall(dofile, "data/generated/tilesets.lua")
+  if okData and okTs and kmaps and tilesets and kmaps.VIRIDIAN_CITY then
+    local function land(m, x, y)
+      return Spawn.walkable(kmaps, tilesets, m, x, y) and not Spawn.isWarp(kmaps, m, x, y)
+    end
+    local function wet(m, x, y)
+      return land(m, x, y) or Spawn.swimmable(kmaps, tilesets, m, x, y)
+    end
+    local vr = Bots.seamCells(kmaps, "VIRIDIAN_CITY", "south", land)
+    ok(#vr > 0, "VIRIDIAN opens south onto ROUTE_1 on foot (" .. #vr .. " cells)")
+    for _, c in ipairs(vr) do
+      ok(c.dest == "ROUTE_1" and c.ly == 0 and c.y == 35,
+         "...each landing is on ROUTE_1's top row")
+    end
+    local r1 = Bots.seamCells(kmaps, "ROUTE_1", "north", land)
+    ok(#r1 > 0, "and ROUTE_1 opens north onto VIRIDIAN")
+    -- the two directions agree cell for cell
+    local back = {}
+    for _, c in ipairs(r1) do back[c.lx .. "," .. c.ly] = c.x .. "," .. c.y end
+    local agree = true
+    for _, c in ipairs(vr) do
+      if back[c.x .. "," .. c.y] ~= c.lx .. "," .. c.ly then agree = false end
+    end
+    ok(agree, "a crossing and its return land on each other's cells")
+    eq(#Bots.seamCells(kmaps, "PALLET_TOWN", "south", land), 0,
+       "PALLET's south shore is water: no crossing on foot")
+    ok(#Bots.seamCells(kmaps, "PALLET_TOWN", "south", wet) > 0,
+       "...but a swimmer crosses it")
+    local dry, total = {}, 0
+    for _, id in ipairs(Spawn.outdoorMaps(kmaps)) do
+      for side in pairs(kmaps[id].connections or {}) do
+        total = total + 1
+        if #Bots.seamCells(kmaps, id, side, wet) == 0 then
+          dry[#dry + 1] = id .. ":" .. side
+        end
+      end
+    end
+    ok(total > 60, "Kanto has its seams (" .. total .. ")")
+    -- ROUTE_22's north edge is fenced: the way to ROUTE_23 is the gate
+    -- building, and a bot takes the same door a player does
+    eq(table.concat(dry, " "), "ROUTE_22:north",
+       "every outdoor seam but the gated one can be crossed one way or another")
+  else
+    print("skip: Kanto seam sweep (no generated Kanto data)")
+  end
+end
+
+-- ------- two bots see each other before they fight (BR-34)
+
+do
+  local Bots = require("mods.battle_royale.lib.bots")
+  local fence = { ["3,4"] = true, ["3,5"] = true, ["3,6"] = true, ["3,7"] = true }
+  local function blocked(x, y) return fence[x .. "," .. y] or false end
+  local a = { map = "M", x = 1, y = 5 }
+  ok(Bots.clearBetween(a, { map = "M", x = 2, y = 5 }, blocked), "a neighbour is in plain sight")
+  ok(not Bots.clearBetween(a, { map = "M", x = 5, y = 5 }, blocked),
+     "not through a fence along the row")
+  ok(not Bots.clearBetween(a, { map = "M", x = 4, y = 7 }, blocked),
+     "nor round it on a diagonal when both corners are fenced")
+  ok(Bots.clearBetween(a, { map = "M", x = 2, y = 7 }, blocked),
+     "a diagonal with a clear corner counts")
+  ok(not Bots.clearBetween(a, { map = "N", x = 2, y = 5 }, blocked), "never across maps")
+  ok(Bots.clearBetween(a, { map = "M", x = 1, y = 9 }, nil), "no terrain, no obstacle")
+  eq(Bots.facingToward({ x = 0, y = 0 }, { x = 3, y = 1 }), "right", "the bigger gap decides")
+  eq(Bots.facingToward({ x = 0, y = 0 }, { x = 1, y = -3 }), "up", "...either axis")
+  eq(Bots.facingToward({ x = 2, y = 2 }, { x = 2, y = 2 }), nil, "nowhere to look")
+  ok(Bots.adjacent({ map = "M", x = 1, y = 1 }, { map = "M", x = 2, y = 1 }),
+     "side by side is adjacent")
+  ok(not Bots.adjacent({ map = "M", x = 1, y = 1 }, { map = "M", x = 2, y = 2 }),
+     "a diagonal is not -- the only way two trainers meet is orthogonally")
+  ok(Bots.APPROACH_STEPS >= Bots.SIGHT + Bots.NOTICE,
+     "a walk-up has the steps to close either sighting")
+end
+
+-- ------- a bot goes INTO the Centre (BR-35)
+
+do
+  local Bots = require("mods.battle_royale.lib.bots")
+  local Spawn = require("mods.battle_royale.lib.spawn")
+  local okData, maps = pcall(dofile, "data/generated/maps.lua")
+  local okTs, tilesets = pcall(dofile, "data/generated/tilesets.lua")
+  if okData and okTs and maps and tilesets and maps.VIRIDIAN_POKECENTER then
+    local door = maps.VIRIDIAN_CITY.warps[1]
+    local m, x, y = Bots.warpIn(maps, door)
+    eq(m, "VIRIDIAN_POKECENTER", "VIRIDIAN's Centre door leads inside")
+    eq(x .. "," .. y, "3,7", "onto the mat")
+    local counter = Bots.counterCell(maps, tilesets, "VIRIDIAN_POKECENTER")
+    eq(counter and (counter.x .. "," .. counter.y), "3,3", "the counter is two below the nurse")
+    local i, mat = Bots.exitMat(maps, "VIRIDIAN_POKECENTER")
+    eq(i, 1, "the first mat is the way out")
+    local back, bx, by = Bots.warpOut(maps, "VIRIDIAN_POKECENTER", i,
+                                      { id = "VIRIDIAN_CITY", x = door.x, y = door.y })
+    eq(back .. " " .. bx .. "," .. by, "VIRIDIAN_CITY 23,25", "and lets out on the door it came in by")
+    eq(Bots.warpOut(maps, "VIRIDIAN_POKECENTER", i, nil), nil,
+       "a LAST_MAP mat with no memory of the town has nowhere to go")
+    -- every Centre in Kanto: a counter, a mat, room to stand above the
+    -- mat, and a town door that lets out onto itself
+    local centres, bad = 0, {}
+    for id, def in pairs(maps) do
+      for wi, w in ipairs(def.warps or {}) do
+        if type(w.destMap) == "string" and w.destMap:find("POKECENTER", 1, true) then
+          centres = centres + 1
+          local inside, mx, my = Bots.warpIn(maps, w)
+          local c = inside and Bots.counterCell(maps, tilesets, inside)
+          local ei, ew
+          if inside then ei, ew = Bots.exitMat(maps, inside) end
+          local above = ew and Spawn.walkable(maps, tilesets, inside, ew.x, ew.y - 1)
+          local out, ox, oy
+          if ei then out, ox, oy = Bots.warpOut(maps, inside, ei, { id = id, x = w.x, y = w.y }) end
+          local step = Spawn.walkable(maps, tilesets, id, w.x, w.y + 1)
+          if not (c and above and step and out == id and ox == w.x and oy == w.y
+                  and mx and Spawn.walkable(maps, tilesets, inside, mx, my - 1)) then
+            bad[#bad + 1] = id .. ":" .. wi
+          end
+        end
+      end
+    end
+    eq(centres, 11, "Kanto has eleven Centre doors")
+    eq(#bad, 0, "every one can be walked into, healed at and walked out of ("
+       .. table.concat(bad, " ") .. ")")
+  else
+    print("skip: Centre interiors (no generated Kanto data)")
+  end
+  eq(Bots.DWELL.counter, 4, "the four seconds are spent at the counter")
+  eq(Bots.DWELL.heal, 0, "not on the doorstep")
+  ok(Bots.LONG_GOAL_SECONDS > Bots.GOAL_SECONDS, "a long errand gets a long clock")
+end
+
+-- ------- the rest of the flow chart: coverage, FLY, CUT, HMs (BR-30)
+
+do
+  local Bots = require("mods.battle_royale.lib.bots")
+  local Spawn = require("mods.battle_royale.lib.spawn")
+  local T = { RAT = { "NORMAL" }, BIRD = { "NORMAL", "FLYING" }, FISH = { "WATER" },
+              BUG = { "BUG", "POISON" }, ROCK = { "ROCK", "GROUND" }, GHOST = { "GHOST", "POISON" } }
+  local function typesOf(s) return T[s] end
+  local team = { { species = "BIRD", hpFrac = 1 }, { species = "RAT", hpFrac = 1 },
+                 { species = "FISH", hpFrac = 1 }, { species = "BUG", hpFrac = 1 } }
+  eq(Bots.coverageSwap(team, "ROCK", typesOf), 2,
+     "a new type replaces the member whose types the team already has")
+  eq(Bots.coverageSwap(team, "RAT", typesOf), nil, "a type the team has adds nothing")
+  eq(Bots.coverageSwap({ { species = "RAT", hpFrac = 1 }, { species = "BIRD", hpFrac = 1 } },
+                       "FISH", typesOf), nil,
+     "nobody redundant: nobody goes (the lead never does)")
+  local hurt = { { species = "BIRD", hpFrac = 1 }, { species = "RAT", hpFrac = 1 },
+                 { species = "RAT", hpFrac = 0 }, { species = "BUG", hpFrac = 1 } }
+  eq(Bots.coverageSwap(hurt, "ROCK", typesOf), 3, "a fainted redundant member goes first")
+  eq(Bots.coverageSwap({ { species = "BIRD", hpFrac = 1 }, { species = "RAT", hpFrac = 1 },
+                         { species = "GHOST", hpFrac = 0 } }, "ROCK", typesOf), 2,
+     "a fainted member whose type nobody else has is kept over a redundant one standing")
+  eq(Bots.coverageSwap(nil, "ROCK", typesOf), nil, "no record, no swap")
+
+  -- a full team still catches for coverage, and hands back what it let go
+  local full = { { species = "BIRD", hpFrac = 1 }, { species = "RAT", hpFrac = 1 } }
+  local always = function(a, b) if a == nil then return 0 end return a end
+  eq(Bots.rollCatch(full, 2, { { species = "FISH" } }, always), nil,
+     "full and no typesOf: the old refusal")
+  local got, letGo = Bots.rollCatch(full, 2, { { species = "FISH" } }, always, typesOf)
+  eq(got, "FISH", "full with typesOf: the newcomer is caught")
+  eq(letGo and letGo.species, "RAT", "...and the redundant member let go")
+  eq(#full, 2, "the team stays at the cap")
+  eq(full[2].species, "FISH", "in the slot it freed")
+  eq(Bots.rollCatch(full, 2, { { species = "RAT" } }, always, typesOf), nil,
+     "a catch that adds no type is not made")
+
+  -- FLY
+  local D = { A = 1, B = 16, C = 36 }
+  local dOf = function(id) return D[id] end
+  eq(Bots.flyPick({ "A", "B", "C" }, dOf, 49), "A", "far out: fly to the town nearest the eye")
+  eq(Bots.flyPick({ "A", "B", "C" }, dOf, 4), nil, "a square or two off the eye: walk")
+  eq(Bots.flyPick({ "B", "C" }, dOf, 9), nil, "no town closer than here: walk")
+  eq(Bots.flyPick({ "B", "C" }, dOf, nil), "B", "no distance to beat (fog, nurse): the nearest")
+  eq(Bots.flyPick({}, dOf, 100), nil, "no towns, no flight")
+
+  -- HMs as capability
+  local mons = { pokemon = { PIDGEOT = { tmhm = { "FLY" } }, ODDISH = { tmhm = { "CUT" } },
+                             LAPRAS = { tmhm = { "SURF" } } } }
+  ok(Bots.canFly({ { species = "PIDGEOT", hpFrac = 1 } }, mons), "a PIDGEOT flies")
+  ok(not Bots.canFly({ { species = "PIDGEOT", hpFrac = 0 } }, mons), "a fainted one carries nobody")
+  ok(Bots.canCut({ { species = "ODDISH", hpFrac = 1 } }, mons), "an ODDISH cuts")
+  ok(not Bots.canCut({ { species = "LAPRAS", hpFrac = 1 } }, mons), "a LAPRAS does not")
+
+  -- CUT trees, against Kanto: ROUTE_2 has them, and a team with CUT
+  -- reaches through one
+  local okData, maps = pcall(dofile, "data/generated/maps.lua")
+  local okTs, tilesets = pcall(dofile, "data/generated/tilesets.lua")
+  local okField, field = pcall(dofile, "data/generated/field.lua")
+  if okData and okTs and okField and maps and tilesets and field and maps.ROUTE_2 then
+    local trees = {}
+    local def = maps.ROUTE_2
+    for y = 0, def.height * 2 - 1 do
+      for x = 0, def.width * 2 - 1 do
+        if Spawn.cuttable(maps, tilesets, field, "ROUTE_2", x, y) then trees[#trees + 1] = { x = x, y = y } end
+      end
+    end
+    ok(#trees > 0, "ROUTE_2 has cut trees (" .. #trees .. ")")
+    local wall = trees[1]
+    ok(wall and not Spawn.walkable(maps, tilesets, "ROUTE_2", wall.x, wall.y),
+       "a cut tree is not walkable as it stands")
+    local function walk(x, y) return Spawn.walkable(maps, tilesets, "ROUTE_2", x, y) end
+    local function cut(x, y) return walk(x, y) or Spawn.cuttable(maps, tilesets, field, "ROUTE_2", x, y) end
+    -- through the first tree with walkable cells on two sides
+    local proved = false
+    for _, t in ipairs(trees) do
+      for _, pair in ipairs({ { { t.x - 1, t.y }, { t.x + 1, t.y } }, { { t.x, t.y - 1 }, { t.x, t.y + 1 } } }) do
+        local a, b = pair[1], pair[2]
+        if walk(a[1], a[2]) and walk(b[1], b[2]) then
+          local through = Bots.path(cut, { x = a[1], y = a[2] }, { x = b[1], y = b[2] })
+          local around = Bots.path(walk, { x = a[1], y = a[2] }, { x = b[1], y = b[2] })
+          eq(through and #through, 2, "with CUT the way through the tree is two steps")
+          ok(around == nil or #around > 2, "without it the way is round, or there is none")
+          proved = true
+          break
+        end
+      end
+      if proved then break end
+    end
+    ok(proved, "a tree with ground on both sides was found to walk through")
+    eq(Spawn.cuttable(maps, tilesets, field, "VIRIDIAN_POKECENTER", 3, 3), false,
+       "nothing indoors is a tree")
+  else
+    print("skip: cut trees (no generated Kanto data)")
+  end
 end
 
 -- ------- the Hall of Fame (POK-47)
@@ -5105,6 +5402,172 @@ do
   local found = false
   for _, it in ipairs(items) do if it.label == "FOG: PALLET TOWN" then found = true end end
   ok(found, "a short town stays on one row")
+end
+
+-- ------------------------------------------------------------------
+-- the fight a spectator is shown, on the battle screen (lib/mirror.lua)
+-- ------------------------------------------------------------------
+do
+  local Mirror = require("mods.battle_royale.lib.mirror")
+  eq(Wire.PROTOCOL, 11, "a battle frame is not a protocol bump: a peer without it leaves the mark up")
+
+  -- the recorder, over a plain table shaped like the BattleState it wraps
+  local moves = { { id = "TACKLE", pp = 35 }, { id = "GROWL", pp = 40 } }
+  local monA = { species = "CHARMANDER", level = 12, hp = 30, stats = { hp = 30 }, moves = moves }
+  local monB = { species = "PIDGEY", level = 10, hp = 20, stats = { hp = 20 }, moves = {} }
+  local foeMon = { species = "RATTATA", level = 9, hp = 22, stats = { hp = 22 }, moves = {} }
+  local sent, calls = {}, {}
+  local battle = {
+    kind = "wild", playerParty = { monA, monB },
+    player = { mon = monA, curMoves = moves, stages = { attack = 1 } },
+    enemy = { mon = foeMon },
+    playerPartyView = function(s) return s.playerParty end,
+    resolveTurn = function() calls[#calls + 1] = "turn" end,
+    resolveSwitch = function() calls[#calls + 1] = "switch" end,
+    tryRun = function() calls[#calls + 1] = "run" end,
+    throwBall = function(_, b) calls[#calls + 1] = "ball:" .. b end,
+    itemUsed = function() calls[#calls + 1] = "item" end,
+    sayChoice = function(s, _, onChoose) s.lastChoice = onChoose end,
+    introText = "Wild RATTATA\nappeared!",
+  }
+  local rec = Mirror.record(battle, {
+    kind = "wild", seed = 4242, myName = "RED", foeName = "RATTATA",
+    badges = { "BOULDERBADGE" }, send = function(f) sent[#sent + 1] = f end,
+    pack = function(m) return { species = m.species, level = m.level, hp = m.hp, moves = m.moves } end,
+  })
+  ok(type(battle.rng) == "function", "the recorded battle rolls on the mirror's stream")
+  eq(battle.rng(1, 6), Mirror.makeRng(4242)(1, 6), "...seeded as advertised")
+  eq(#sent, 1, "recording opens with the start frame")
+  eq(sent[1].k, "start", "...which is a start")
+  eq(sent[1].seed, 4242, "...carrying the seed")
+  eq(#sent[1].me, 2, "...our party")
+  eq(sent[1].foe[1].species, "RATTATA", "...and theirs")
+  eq(sent[1].badges[1], "BOULDERBADGE", "...and the badges the copies hit with")
+
+  battle:resolveTurn(moves[2])
+  eq(sent[2].k, "move", "a move is a move frame")
+  eq(sent[2].slot, 2, "...by slot")
+  eq(sent[2].hp.me, 30, "...with our HP")
+  eq(sent[2].hp.foe, 22, "...and theirs")
+  eq(calls[1], "turn", "...and the battle still resolves it")
+  battle:resolveTurn({ id = "STRUGGLE", pp = 1, struggle = true })
+  eq(sent[3].k, "struggle", "Struggle is its own frame")
+  battle:resolveSwitch(monB)
+  eq(sent[4].k, "switch", "a switch is a switch frame")
+  eq(sent[4].index, 2, "...by party index")
+  rec:onSwitched({ battle = battle, side = { index = 1 }, battler = { mon = monB } })
+  eq(#sent, 4, "the send-out that switch causes is not a second frame")
+  rec:onSwitched({ battle = battle, side = { index = 1 }, battler = { mon = monA } })
+  eq(sent[5].k, "replace", "a send-out no switch announced is a replacement")
+  eq(sent[5].index, 1, "...by party index")
+  rec:onSwitched({ battle = battle, side = { index = 2 }, battler = { mon = foeMon } })
+  eq(#sent, 5, "the foe's send-outs are theirs to derive")
+  battle:tryRun()
+  eq(sent[6].k, "run", "a run is a run frame")
+  battle:throwBall("POKE_BALL")
+  eq(sent[7].k, "ball", "a ball is a ball frame")
+  eq(sent[7].item, "POKE_BALL", "...naming the ball")
+  eq(calls[#calls], "ball:POKE_BALL", "...and it is still thrown")
+  battle.player.mon.hp = 12
+  battle:itemUsed({ "RED used\nPOTION!" })
+  eq(sent[8].k, "item", "an item is an item frame")
+  eq(sent[8].snap.hp, 12, "...with the mon as the bag left it")
+  eq(sent[8].snap.stages.attack, 1, "...stages included")
+  eq(sent[8].msgs[1], "RED used\nPOTION!", "...and the bag's own words")
+  battle:sayChoice("Will you change?", function(yes) battle.answered = yes end)
+  battle.lastChoice(true)
+  eq(sent[9].k, "choice", "a yes/no is a choice frame")
+  eq(sent[9].yes, true, "...carrying the answer")
+  eq(battle.answered, true, "...and the engine still gets it")
+  rec:stop("win")
+  eq(sent[10].k, "end", "stopping sends the end")
+  eq(sent[10].result, "win", "...with the result")
+  battle:tryRun()
+  eq(#sent, 10, "nothing after the end")
+  local numbered = true
+  for i, f in ipairs(sent) do if f.n ~= i then numbered = false end end
+  ok(numbered, "frames are numbered in order")
+  eq(#rec.log, #sent, "the log is what was sent")
+
+  -- every frame crosses the wire whole
+  for _, f in ipairs(sent) do
+    local m = Wire.decode(Wire.mirror("m1", f))
+    ok(m ~= nil, "frame " .. f.k .. " crosses the wire")
+    if m then
+      eq(m.b, "m1", "...naming the battle")
+      eq(m.frame.k, f.k, "...as itself")
+      eq(m.frame.n, f.n, "...numbered")
+    end
+  end
+  local st = Wire.decode(Wire.mirror("m1", sent[1])).frame
+  eq(st.me[1].species, "CHARMANDER", "a packed mon keeps its species")
+  eq(st.me[1].moves[1].id, "TACKLE", "...and its moves")
+  eq(st.me[1].hp, 30, "...and its HP")
+  eq(st.myName, "RED", "...and the names ride along")
+  eq(st.trainer, nil, "a wild fight names no trainer")
+  local tr = Wire.decode(Wire.mirror("m1", { n = 1, k = "start", kind = "trainer", me = { { species = "ABRA" } },
+                                             foe = { { species = "STARYU" } },
+                                             trainer = { class = "OPP_SWIMMER", name = "JOEY", aiMods = { 1, 2, 3, "BR_BOT_MOVES", 2.5, "x" } } })).frame
+  eq(#tr.trainer.aiMods, 5, "a trainer keeps its AI layers, numbered and named; a fraction is not a layer")
+  eq(tr.trainer.aiMods[1], 1, "...the vanilla layers as the numbers they are keyed by")
+  eq(tr.trainer.aiMods[4], "BR_BOT_MOVES", "...and the named ones")
+  local lk = Wire.decode(Wire.mirror("m2", { n = 3, k = "link", side = "guest",
+                                             m = { type = "action", kind = "move", slot = 2, junk = "x" } })).frame
+  eq(lk.side, "guest", "a lockstep frame keeps its side")
+  eq(lk.m.slot, 2, "...and the slot")
+  eq(lk.m.junk, nil, "...and nothing else")
+
+  -- and what the door refuses
+  ok(not Wire.decode({ t = "bmir", b = "m", m = { n = 1, k = "start", kind = "safari", me = {}, foe = {} } }),
+     "an unknown battle kind is refused")
+  ok(not Wire.decode({ t = "bmir", b = "m", m = { n = 1, k = "move" } }), "a move without a slot is refused")
+  ok(not Wire.decode({ t = "bmir", b = "m", m = { n = 1, k = "move", slot = "x" } }), "...or with a slot that is not one")
+  ok(not Wire.decode({ t = "bmir", b = "m", m = { n = 1, k = "start", kind = "wild", me = { { species = 5 } }, foe = {} } }),
+     "a mon with no species name is refused")
+  ok(not Wire.decode({ t = "bmir", b = "m", m = { n = 1, k = "dance" } }), "an unknown frame kind is refused")
+  ok(not Wire.decode({ t = "bmir", b = "m", m = { k = "run" } }), "a frame without a number is refused")
+  ok(not Wire.decode({ t = "bmir", m = { n = 1, k = "run" } }), "a frame naming no battle is refused")
+  local big = {}
+  for i = 1, 9 do big[i] = { species = "RATTATA" } end
+  eq(#Wire.decode(Wire.mirror("m", { n = 1, k = "start", kind = "wild", me = big, foe = big })).frame.me, 6,
+     "a party is six at most")
+  ok(not Wire.decode(Wire.mirror("m", { n = 1, k = "link", side = "ref", m = { type = "action" } })),
+     "a lockstep frame needs a side")
+  ok(not Wire.decode(Wire.mirror("m", { n = 1, k = "link", side = "host", m = { type = "hash" } })),
+     "...and a message the observer reads")
+
+  -- a duel's recorder taps the channel
+  local outbox, lsent = {}, {}
+  local ch = setmetatable({}, { __index = { send = function(_, m) outbox[#outbox + 1] = m end } })
+  local lrec = Mirror.recordLink(ch, {
+    seed = 77, isHost = false, me = { { species = "PIKACHU" } }, foe = { { species = "EEVEE" } },
+    myName = "ASH", foeName = "GARY", send = function(f) lsent[#lsent + 1] = f end,
+  })
+  eq(lsent[1].k, "start", "a duel opens with a start frame")
+  eq(lsent[1].kind, "link", "...of the link kind")
+  eq(lsent[1].host, "foe", "...saying who hosts")
+  ch:send({ type = "action", kind = "move", slot = 1 })
+  eq(#outbox, 1, "the cable still gets our action")
+  eq(lsent[2].k, "link", "...and so do the watchers")
+  eq(lsent[2].side, "guest", "...as the guest's")
+  eq(lsent[2].m.slot, 1, "...by slot")
+  ch:send({ type = "hash", value = 1 })
+  eq(#lsent, 2, "a hash is the cable's business")
+  lrec:onTheirs({ type = "action", kind = "switch", index = 3 })
+  eq(lsent[3].side, "host", "the other cable's action is the host's")
+  eq(lsent[3].m.index, 3, "...by index")
+  lrec:stop("draw")
+  eq(lsent[4].k, "end", "the duel ends with an end frame")
+  eq(rawget(ch, "send"), nil, "and the tap comes off the channel")
+  -- a bot's fight is the host's to show: the peek names the bot, the frame
+  -- is tagged as the bot's
+  eq(Wire.decode(Wire.peek()).id, nil, "a plain peek names nobody")
+  eq(Wire.decode(Wire.peek(1007)).id, 1007, "a peek at a bot names it")
+  eq(Wire.decode(Wire.peek("bot")).id, nil, "...and a name that is not an id is dropped")
+  local tagged = Wire.decode(Wire.mirror("m3", { n = 1, k = "run" }, 1007))
+  eq(tagged.as, 1007, "a frame tagged as a bot's keeps the tag")
+  eq(Wire.decode(Wire.mirror("m3", { n = 1, k = "run" })).as, nil, "an untagged frame is the sender's own")
+  eq(Wire.decode(Wire.mirror("m3", { n = 1, k = "run" }, "x")).as, nil, "a tag that is not an id is dropped")
 end
 
 io.write(("\nbattle royale: %d passed, %d failed\n"):format(passed, failed))

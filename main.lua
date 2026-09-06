@@ -378,6 +378,14 @@ return function(mod)
     fleeing = nil,        -- who we are running from, while the battle unwinds
     peeked = nil,         -- what the trainer we watch carries, as last answered (POK-18)
     lastPeekAt = nil,
+    watchers = {},        -- subject -> watcher id -> last peek (lib/mirror.lua)
+    recorder = nil,       -- our own fight, being sent to them
+    mirrorRx = {},        -- subject -> the fight we were sent, as a log
+    mirrorState = nil,    -- ...and the screen showing one
+    botDuels = {},        -- the bot fights this host is running off screen
+    inDuel = {},          -- bot id -> true while it is in one
+    botApproach = {},     -- seer bot id -> the walk-up it is on (BR-34)
+    botApproaching = {},  -- bot id -> true for both sides of a walk-up
     botCount = 0,         -- how many bots the host will add at start
     fillTo = 0,           -- ...or top the roster up to this many, 0 = off
     solo = false,         -- hosting a room of one, with no server
@@ -1270,6 +1278,12 @@ return function(mod)
     self.lastOpponent = nil
     self.fledFrom, self.fleeGrace, self.fleeLockout, self.fleeing = {}, {}, {}, nil
     self.peeked, self.lastPeekAt = nil, nil
+    self:stopRecording("reset")
+    self:closeMirror("reset")
+    for _, d in ipairs(self.botDuels or {}) do d.sim:abort(); d.rec:stop("reset") end
+    self.botDuels, self.inDuel = {}, {}
+    self.botApproach, self.botApproaching = {}, {}
+    self.mirrorRx, self.watchers = {}, {}
     self.pendingDrop = nil   -- a release that never landed (POK-34)
     self.pendingGift = nil   -- a gift whose box was never reopened (POK-112)
     self.pendingSays = {}
@@ -1810,6 +1824,8 @@ return function(mod)
           opts.turnLimit = PVP_TURN_SECONDS
         end
         local battle, why = base(game, net, opts)
+        -- whoever is watching us follows us in (lib/mirror.lua)
+        if battle and BR:inRound() then BR:startRecordingLink(battle, opts) end
         -- POK-80: the link foe wears the skin they picked.  Their advertised
         -- walk sheet (BR.players[id].sprite, off the wire) maps back to a
         -- trainer class, and enter() keeps a trainerPic set before it over
@@ -2128,8 +2144,12 @@ return function(mod)
 
     elseif msg.t == "bt" then
       if self.battle and self.battle.opponentId == fromId then
+        if self.recorder and self.recorder.link then self.recorder:onTheirs(msg.inner) end
         self.battle.channel:push(msg.inner)
       end
+
+    elseif msg.t == "bmir" then
+      self:onMirrorFrame(fromId, msg)
 
     elseif msg.t == "out" then
       if p then p.status = "out" end
@@ -2198,7 +2218,12 @@ return function(mod)
       self.botRecords[msg.id] = msg.record
 
     elseif msg.t == "peek" then
-      self:answerPeek(fromId)
+      if msg.id then
+        -- a peek at a BOT: its fights are ours to show, if we run them
+        if self.relay:isHost() and Bots.isBot(msg.id) then self:noteWatcher(fromId, msg.id) end
+      else
+        self:answerPeek(fromId)
+      end
 
     elseif msg.t == "state" then
       -- only the trainer we are watching has anything to tell us
@@ -2577,6 +2602,9 @@ return function(mod)
     local me = { { id = self.myId, map = map.id, x = player.cellX,
                    y = player.cellY, facing = player.facing, moving = false,
                    status = "alive", busy = false } }
+    -- ...except at the end (BR-29): the last three fight what they see,
+    -- wounded or not, the player included
+    local allIn = self:aliveCount() <= Bots.ALL_IN
     for id, p in pairs(self.players) do
       -- A bot that wants the nurse does not call fights (POK-160): the
       -- record every client derives (and botrec keeps in step) says when
@@ -2585,7 +2613,7 @@ return function(mod)
       -- purpose -- the PLAYER may still jump a wounded bot via tryEngage,
       -- which is what wounds are for.
       if Bots.isBot(id) and p.status == "alive" and p.map == map.id
-         and not avoid[id] and not Bots.wantsHeal(self:botRecord(id)) then
+         and not avoid[id] and (allIn or not Bots.wantsHeal(self:botRecord(id))) then
         -- its GHOST's cell, never its wire cell, for the same reason
         -- tryEngage asks the screen (POK-96): a bot this client has not
         -- drawn cannot call a fight
@@ -2635,20 +2663,28 @@ return function(mod)
   -- closure (a BFS asks thousands of times).  Goals, spawns and roam
   -- landings all stay on land -- water is TRANSIT: a route across a bay
   -- to the prey or the errand on the far shore, not a place to live.
+  -- ...and THROUGH a tree when it carries a CUT learner (BR-30): the
+  -- tree is a cell on the path, felled in passing, never a destination.
+  -- Nothing on the wire says so, so other screens see the ghost walk
+  -- through it -- the same abstraction as the fight nobody watches.
   local function botCross(id)
-    local surf
+    local surf, cut
     return function(mapId, x, y)
       if canWalk(mapId, x, y) then return true end
-      if surf == nil then
-        surf = (BR.matchSeed and Bots.canSurf(BR:botRecord(id),
-                                              BR.game and BR.game.data))
-          or false
-      end
-      if not surf then return false end
       local data = BR.game and BR.game.data
-      return data ~= nil
-        and Spawn.swimmable(data.maps, data.tilesets, mapId, x, y)
-        and not Spawn.isWarp(data.maps, mapId, x, y)
+      if not (data and BR.matchSeed) then return false end
+      if surf == nil then
+        surf = Bots.canSurf(BR:botRecord(id), data) or false
+      end
+      if surf and Spawn.swimmable(data.maps, data.tilesets, mapId, x, y)
+         and not Spawn.isWarp(data.maps, mapId, x, y) then
+        return true
+      end
+      if cut == nil then
+        cut = Bots.canCut(BR:botRecord(id), data) or false
+      end
+      return cut and Spawn.cuttable(data.maps, data.tilesets, data.field, mapId, x, y)
+        or false
     end
   end
 
@@ -2728,6 +2764,48 @@ return function(mod)
     end
   end
 
+  -- The town a bot's fog is judged on (BR-35): a bot inside a Centre has
+  -- no square on the ring's grid, so the ring is asked about the town it
+  -- walked in from -- the same answer Fog.outdoorFor gives a player.
+  function BR:botOutdoor(p)
+    return (p.came and p.came.id) or p.map
+  end
+
+  -- A SEAM IS WALKED, NOT SKIPPED (BR-32).
+  --
+  -- The exit to `dest` as a goal: the nearest reachable cell on this
+  -- map's edge whose crossing lands on the neighbour (Bots.seamCells,
+  -- the engine's own landing math), found by one BFS to any such cell.
+  -- The errand machinery walks it like anything else; the crossing is
+  -- walkSeam.  Returns the goal and its path, or nil when no edge cell
+  -- of that seam can be reached from here -- a bay between, a ledge
+  -- above it -- which the caller reads as "try the next exit".
+  local function seamGoalFor(id, p, dest, now)
+    local data = BR.game and BR.game.data
+    local side = Bots.seamSide(data and data.maps[p.map], dest)
+    if not side then return nil end
+    local cross = botCross(id)
+    local cells = Bots.seamCells(data.maps, p.map, side, cross)
+    if #cells == 0 then return nil end
+    -- land landings first (BR-33): water is a way across, never a place
+    -- to arrive -- a bot dropped at the water's edge of a seam stood on
+    -- the sea until its next errand, which is the frame the user shot
+    local byCell, land = {}, {}
+    for _, c in ipairs(cells) do
+      byCell[c.y * 4096 + c.x] = c
+      if canWalk(c.dest, c.lx, c.ly) then land[c.y * 4096 + c.x] = c end
+    end
+    local pick = next(land) and land or byCell
+    local path, at = Bots.pathToAny(function(x, y) return cross(p.map, x, y) end,
+                                    { x = p.x, y = p.y },
+                                    function(x, y) return pick[y * 4096 + x] ~= nil end)
+    if not path then return nil end
+    local c = pick[at.y * 4096 + at.x]
+    return { kind = "seam", x = c.x, y = c.y, map = p.map, at = now or 0,
+             dest = c.dest, lx = c.lx, ly = c.ly, step = Bots.SEAM_STEP[side] },
+           path
+  end
+
   local function roamBot(id, p, now)
     local data = BR.game and BR.game.data
     local exits = Bots.exits(data and data.maps[p.map])
@@ -2746,12 +2824,14 @@ return function(mod)
     -- fog decides it, which is what a playtest actually watched happen.
     local hunt = BR:huntDistOf(id)
     local dist = BR.ringDistOf
-    local dest
-    if hunt then
-      -- no safe-here exemption: standing still is exactly the failure
-      -- being fixed.  homeward still holds when no exit is any closer.
-      dest = Bots.homeward(exits, hunt, hunt(p.map), p.rng)
-      if not dest then
+    -- which of `pool` to walk, by those pulls; nil is "hold here"
+    local function choose(pool)
+      if #pool == 0 then return nil end
+      if hunt then
+        -- no safe-here exemption: standing still is exactly the failure
+        -- being fixed.  homeward still holds when no exit is any closer.
+        local dest = Bots.homeward(pool, hunt, hunt(p.map), p.rng)
+        if dest then return dest end
         local hereD = hunt(p.map)
         if hereD and hereD > 0 then
           -- A PLATEAU, not an arrival (POK-153): the target is on another
@@ -2759,38 +2839,134 @@ return function(mod)
           -- hunt had nothing to say and the bot paced here forever.  Head
           -- for the ring's eye instead -- the user's own fallback ask --
           -- and failing even that, any seam beats standing still.
-          dest = (dist and Bots.homeward(exits,
+          return (dist and Bots.homeward(pool,
                     function(m) return dist[m] end, nil, p.rng))
-            or exits[p.rng(1, #exits)]
+            or pool[p.rng(1, #pool)]
         end
-        if not dest then p.lastRoam = now return end
+        return nil
+      elseif dist then
+        -- holding still is only wisdom INSIDE the ring; outside it, the
+        -- least-bad seam beats waiting for the fog
+        local r = BR.ring and BR.ring.radius
+        local hereD = dist[p.map]
+        local safeHere = r and hereD and hereD <= r * r
+        return Bots.homeward(pool, function(m) return dist[m] end,
+                             safeHere and hereD or nil, p.rng)
       end
-    elseif dist then
-      -- holding still is only wisdom INSIDE the ring; outside it, the
-      -- least-bad seam beats waiting for the fog
-      local r = BR.ring and BR.ring.radius
-      local hereD = dist[p.map]
-      local safeHere = r and hereD and hereD <= r * r
-      dest = Bots.homeward(exits, function(m) return dist[m] end,
-                           safeHere and hereD or nil, p.rng)
-      if not dest then p.lastRoam = now return end -- nearest already: hold
-    else
-      dest = exits[p.rng(1, #exits)]
+      return pool[p.rng(1, #pool)]
     end
-    local cells = walkableCells(dest)
-    if #cells == 0 then return end
-    local c = cells[p.rng(1, #cells)]
-    p.map, p.x, p.y = dest, c.x, c.y
-    p.lastRoam = now
-    -- fogTicks deliberately survive the move.  They used to reset here ("a
-    -- new map is a fresh verdict"), and with a roam every 25 seconds against
-    -- a 40-second kill, a bot that kept walking could never die in the fog
-    -- -- which is exactly the match-never-ends that POK-5 was about.  The
-    -- ticks are the damage a player would still be carrying; whether the NEW
-    -- map is inside the ring is re-asked every tick anyway.
-    BR.ghosts:despawn(id)
-    BR.relay:broadcast(Wire.place(p.map, p.x, p.y, p.facing or "down",
-                                  p.status, p.sprite, id))
+    local rec = BR:botRecord(id)
+    -- FLY first (BR-30): a bot with the move flies where a player would
+    -- -- to a nurse when wrecked, out of the fog, or to the eye when it
+    -- is far -- and only walks the seams when the sky has nothing to say
+    if BR:botFly(id, p, rec, hunt, dist, now) then return end
+    -- THE CENTRE ONE TOWN OVER (BR-29): a hurt bot with nothing in the
+    -- bag and no nurse on this map walks to the next map that has one,
+    -- ring allowing, before the eye or the hunt get a say.  `heal` used
+    -- to be only ever the door on THIS map.
+    local nurses = {}
+    if Bots.wantsHeal(rec) and not Bots.hasPotion(rec.bag)
+       and not BR:centerDoorOn(p.map) then
+      for _, e in ipairs(exits) do
+        if BR:centerDoorOn(e) and not BR:fogOver(e) then nurses[#nurses + 1] = e end
+      end
+    end
+    -- the exit, then the next best when its seam cannot be reached from
+    -- here -- a bot that could not get to the seam it wanted used to be
+    -- dropped across it anyway
+    for _, pool in ipairs({ nurses, exits }) do
+      local left = {}
+      for _, e in ipairs(pool) do left[#left + 1] = e end
+      while #left > 0 do
+        local dest = choose(left)
+        if not dest then break end
+        local goal, path = seamGoalFor(id, p, dest, now)
+        if goal then
+          p.goal, p.path = goal, path
+          p.lastRoam = now
+          return
+        end
+        for i, e in ipairs(left) do
+          if e == dest then table.remove(left, i) break end
+        end
+      end
+    end
+    p.lastRoam = now   -- nowhere to walk: hold, and ask again on the clock
+  end
+
+  -- FLY (BR-30).  The one legitimate teleport: the engine's own fly
+  -- landing for the town (field.flyWarps, the cell before its Centre),
+  -- and the wire's usual place.  Three reasons, in the order a player
+  -- would have them: the team is wrecked with an empty bag and no nurse
+  -- here (the nearest Centre town, measured from here); the fog has this
+  -- map (the unfogged town nearest the eye); the eye is far and nothing
+  -- is being hunted on foot (the town nearest it, if that is a real gain
+  -- -- Bots.flyPick).  Fly towns the fog has taken are never a landing.
+  -- No bird animation over the ghost: the wire carries none, and a
+  -- despawn/place pair is what every other screen sees of any warp.
+  function BR:botFly(id, p, rec, hunt, dist, now)
+    local data = self.game and self.game.data
+    local warps = data and data.field and data.field.flyWarps
+    local locs = self.ringLocs
+    if not (warps and locs and locs[p.map] and Bots.canFly(rec, data)) then return false end
+    local towns = {}
+    for town in pairs(warps) do
+      if town ~= p.map and locs[town] and data.maps[town] and not self:fogOver(town) then
+        towns[#towns + 1] = town
+      end
+    end
+    table.sort(towns)
+    local target, why
+    local inFog = self:fogOver(p.map)
+    if Bots.wantsHeal(rec) and not Bots.hasPotion(rec.bag) and not self:centerDoorOn(p.map) then
+      local here = locs[p.map]
+      local nurses = {}
+      for _, t in ipairs(towns) do
+        if self:centerDoorOn(t) then nurses[#nurses + 1] = t end
+      end
+      target = Bots.flyPick(nurses, function(t)
+        local l = locs[t]
+        local dx, dy = l.x - here.x, l.y - here.y
+        return dx * dx + dy * dy
+      end, nil)
+      why = "nurse"
+    elseif dist and (inFog or not hunt) then
+      target = Bots.flyPick(towns, function(t) return dist[t] end,
+                            (not inFog) and dist[p.map] or nil)
+      why = inFog and "fog" or "eye"
+    end
+    if not target then return false end
+    local spot = warps[target]
+    p.goal, p.path, p.dwellUntil, p.dwellKind = nil, nil, nil, nil
+    if p.busy then self:markBot(id, p, nil) end
+    p.map, p.x, p.y, p.facing = target, spot.x, spot.y, "down"
+    p.lastRoam = now or 0
+    p.flights = (p.flights or 0) + 1
+    self.ghosts:despawn(id)
+    self.relay:broadcast(Wire.place(p.map, p.x, p.y, p.facing, p.status, p.sprite, id))
+    log:say("FLY: %s flew to %s (%s)", tostring(p.name), tostring(target), why)
+    return true
+  end
+
+  -- The crossing itself (BR-32): the bot stands on the edge cell and this
+  -- is the step off it, onto the cell the engine lands a player on.  On
+  -- the wire it is the place a roam always was -- every client despawns a
+  -- ghost whose peer left its map and spawns it where it arrives
+  -- (Ghosts:sync) -- but the bot WALKED here first, and it lands on the
+  -- neighbour's edge rather than anywhere at all, so a spectator glued
+  -- to it (POK-30) sees it leave by the edge and finds it just across.
+  -- fogTicks survive the crossing, as they survived the roam (POK-5).
+  function BR:walkSeam(id, p, goal, now)
+    p.goal, p.path = nil, nil
+    p.map, p.x, p.y = goal.dest, goal.lx, goal.ly
+    p.facing = goal.step or p.facing or "down"
+    p.lastRoam = now or 0
+    p.stepsTaken = (p.stepsTaken or 0) + 1
+    p.seamsWalked = (p.seamsWalked or 0) + 1
+    self.ghosts:despawn(id)
+    self.relay:broadcast(Wire.place(p.map, p.x, p.y, p.facing,
+                                    p.status, p.sprite, id))
+    return nil
   end
 
   -- Which trainer's ghost stands on a cell of this map (POK-165): the
@@ -2990,11 +3166,34 @@ return function(mod)
     local enc = data and data.encounters and data.encounters[p.map]
     local slots = enc and enc.grass and enc.grass.slots
     local rec = self:botRecord(id)
-    local caught = Bots.rollCatch(rec, Bots.recordCap(), slots, p.rng)
+    -- a full team still hunts for coverage (BR-30): a catch that brings
+    -- a type the team lacks replaces a member whose types it already has
+    local caught, letGo = Bots.rollCatch(rec, Bots.recordCap(), slots, p.rng,
+                                         self:botTypesOf(id))
     if caught then
-      log:say("CAUGHT: %s got %s (%d mons)", tostring(p.name),
-              tostring(caught), #rec)
+      if letGo then
+        log:say("SWAPPED: %s let %s go for %s", tostring(p.name),
+                tostring(letGo.species), tostring(caught))
+      else
+        log:say("CAUGHT: %s got %s (%d mons)", tostring(p.name),
+                tostring(caught), #rec)
+      end
       if self.relay then self.relay:broadcast(Wire.botrec(id, rec)) end
+    end
+  end
+
+  -- The types a record row has AT THE RUNG (BR-30): the line as it has
+  -- evolved by now, since that is what fights and what a swap should
+  -- weigh -- a GYARADOS is a Flying type its MAGIKARP was not.
+  function BR:botTypesOf(id)
+    local data = self.game and self.game.data
+    if not (data and data.pokemon) then return nil end
+    local stone, pick = self:botEvo(id)
+    local rung = self:level()
+    return function(species)
+      local ev = Bots.evolveAt(data, species, rung, { stoneRung = stone, pick = pick })
+      local def = data.pokemon[ev] or data.pokemon[species]
+      return def and def.types or {}
     end
   end
 
@@ -3023,6 +3222,32 @@ return function(mod)
                         traded = (not Spills.isOwn(key, id)) or nil }
       log:say("LOOTED: %s took %s (%d mons)", tostring(p.name),
               tostring(ball.species), #rec)
+    elseif ball.species then
+      -- a full team swaps for coverage (BR-30): the redundant member's
+      -- ball goes down where the bot stands, for whoever comes next
+      local i = Bots.coverageSwap(rec, ball.species, self:botTypesOf(id))
+      if not i then return end
+      local old = rec[i]
+      local data = self.game and self.game.data
+      local stone, pick = self:botEvo(id)
+      local dropped = Bots.evolveAt(data, old.species, self:level(),
+                                    { stoneRung = stone, pick = pick, traded = old.traded })
+      rec[i] = { species = ball.species, hpFrac = 1,
+                 traded = (not Spills.isOwn(key, id)) or nil }
+      p.swaps = (p.swaps or 0) + 1
+      local spill = { map = p.map, mons = { { key = id .. ":swap:" .. p.swaps,
+                                              x = p.x, y = p.y, species = dropped,
+                                              level = self:level() } } }
+      log:say("SWAPPED: %s let %s go for %s", tostring(p.name),
+              tostring(dropped), tostring(ball.species))
+      self.spills:take(key)
+      if self.relay then
+        self.relay:broadcast(Wire.took(key))
+        self.relay:broadcast(Wire.spill(spill.map, spill.mons, nil))
+        self.relay:broadcast(Wire.botrec(id, rec))
+      end
+      self.spills:add(spill)
+      return
     else
       return
     end
@@ -3033,14 +3258,13 @@ return function(mod)
     end
   end
 
-  -- The Centre serves bots too (POK-158 M2).  Walking to the door and
-  -- waiting the dwell out is the whole visit -- the interior trip is
-  -- abstracted, the way the fight against another bot is -- and the rule
+  -- The Centre serves bots too (POK-158 M2), and a bot goes IN for it
+  -- now (BR-35: enterCentre, the counter dwell, leaveCentre).  The rule
   -- is the player's own: no nurse in a fogged town (POK-117/140), which
   -- pickBotGoal enforced when it offered the errand and this re-checks,
   -- because the ring may have moved while the bot walked over.
   function BR:botHeal(id, p)
-    if self:fogOver(p.map) then return end
+    if self:fogOver(self:botOutdoor(p)) then return end
     local rec = self:botRecord(id)
     local healed = false
     for _, m in ipairs(rec) do
@@ -3051,11 +3275,12 @@ return function(mod)
     if self.relay then self.relay:broadcast(Wire.botrec(id, rec)) end
   end
 
-  -- The cell in front of this map's POKeMON CENTER door, or nil.  Doors
-  -- all face south in Gen 1, so "in front" is one cell down; a door whose
-  -- step cell is not walkable is not offered (a bot grinding at a blocked
-  -- doorway forever is worse than one that never heals).  Cached: warps
-  -- cannot move during a match.
+  -- The cell in front of this map's POKeMON CENTER door, or nil, with the
+  -- door's warp on it (BR-35 walks through).  Doors all face south in
+  -- Gen 1, so "in front" is one cell down; a door whose step cell is not
+  -- walkable is not offered (a bot grinding at a blocked doorway forever
+  -- is worse than one that never heals).  Cached: warps cannot move
+  -- during a match.
   function BR:centerDoorOn(mapId)
     self.centerDoorCache = self.centerDoorCache or {}
     local hit = self.centerDoorCache[mapId]
@@ -3066,7 +3291,7 @@ return function(mod)
     for _, w in ipairs((def and def.warps) or {}) do
       if type(w.destMap) == "string" and w.destMap:find("POKECENTER", 1, true)
          and canWalk(mapId, w.x, w.y + 1) then
-        found = { x = w.x, y = w.y + 1 }
+        found = { x = w.x, y = w.y + 1, warp = w }
         break
       end
     end
@@ -3074,12 +3299,88 @@ return function(mod)
     return found or nil
   end
 
+  -- ------- into the Centre and out again (BR-35)
+  --
+  -- The visit used to be a dwell on the doorstep: the team healed on
+  -- the pavement with a mark over its head, which nobody minded until a
+  -- spectator was following.  Now it is the player's own trip, in three
+  -- legs the errand walker runs like any other goal: `heal` is the step
+  -- cell and one real step up onto the door; enterCentre puts the bot on
+  -- the mat inside; `counter` is the cell before the nurse, where the
+  -- four seconds are spent; `exit` is the cell above the mat and one
+  -- step down onto it; leaveCentre puts it back on the door outside,
+  -- facing down the step.  The ghost layer and the spectator's camera
+  -- follow a trainer across maps already, so a watcher walks in behind
+  -- it and stands in the Centre while it heals.
+
+  -- Standing on the door tile: through it.  `came` remembers the town
+  -- and the door -- for the way out (a Centre's mat is a LAST_MAP warp),
+  -- and for the ring, which has no square for an interior (botOutdoor).
+  function BR:enterCentre(id, p, t, now)
+    local data = self.game and self.game.data
+    local dest, mx, my = Bots.warpIn(data and data.maps, t.warp)
+    if not dest then return end
+    p.came = { id = p.map, x = p.x, y = p.y }
+    p.map, p.x, p.y, p.facing = dest, mx, my, "up"
+    p.goal, p.path = nil, nil
+    self.ghosts:despawn(id)
+    self.relay:broadcast(Wire.place(p.map, p.x, p.y, p.facing, p.status, p.sprite, id))
+    local counter = Bots.counterCell(data.maps, data.tilesets, dest)
+    if counter then
+      p.goal = { kind = "counter", x = counter.x, y = counter.y, map = dest, at = now or 0 }
+    else
+      p.goal = self:exitLeg(p, now)
+    end
+    log:say("CENTER: %s went into the %s", tostring(p.name), tostring(dest))
+  end
+
+  -- The way out: the cell above the exit mat, then one step down onto it.
+  function BR:exitLeg(p, now)
+    local data = self.game and self.game.data
+    local i, w = Bots.exitMat(data and data.maps, p.map)
+    if not w then return nil end
+    return { kind = "exit", x = w.x, y = w.y - 1, map = p.map, at = now or 0, mat = i }
+  end
+
+  -- Standing on the mat: out, onto the door it came in by, facing down
+  -- the step the way a player walks out of a Centre.
+  function BR:leaveCentre(id, p, t, now)
+    local data = self.game and self.game.data
+    local dest, dx, dy = Bots.warpOut(data and data.maps, p.map, t.mat, p.came)
+    if not dest then
+      if not p.came then return end
+      dest, dx, dy = p.came.id, p.came.x, p.came.y
+    end
+    p.map, p.x, p.y, p.facing = dest, dx, dy, "down"
+    p.came, p.goal, p.path = nil, nil, nil
+    self.ghosts:despawn(id)
+    self.relay:broadcast(Wire.place(p.map, p.x, p.y, p.facing, p.status, p.sprite, id))
+  end
+
+  -- Does a wound keep this bot off the prey on its map (BR-29/30)?  Only
+  -- when there is something better to do about it: a nurse on THIS map
+  -- the fog has not shut, and no potion (a potion is drunk on the way
+  -- in, tickBots).  A faint with no Centre in reach is a wound the bot
+  -- can do nothing about and no reason to pace, and at ALL_IN nothing
+  -- stands down: a wounded player at two-left still fights -- it is that
+  -- or the fog.  `wantsHeal` used to gate the stalk outright, and two
+  -- bots on a route between two towns walked back and forth for a whole
+  -- fog phase.
+  function BR:botStandsDown(id, p, alive)
+    if (alive or math.huge) <= Bots.ALL_IN then return false end
+    local rec = self:botRecord(id)
+    if not Bots.wantsHeal(rec) then return false end
+    if Bots.hasPotion(rec.bag) then return false end
+    return self:centerDoorOn(p.map) ~= nil and not self:fogOver(self:botOutdoor(p))
+  end
+
   -- What this bot is off to do, or nil to let the roam clock move it on.
   function BR:pickBotGoal(id, p, now)
     local rec = self:botRecord(id)
     -- a wrecked team walks to the Centre (POK-158 M2), under the same
     -- rule the player's nurse serves by: not once the fog has the town
-    local door = not self:fogOver(p.map) and self:centerDoorOn(p.map) or nil
+    local outdoor = self:botOutdoor(p)
+    local door = not self:fogOver(outdoor) and self:centerDoorOn(p.map) or nil
     -- The bag where there is no nurse (POK-160).  quaff only ran as a
     -- winner's swig after a bot-vs-bot fight, so a bot wounded any other
     -- way -- a lost trade, the fog -- sat on a bag of potions while it
@@ -3098,7 +3399,7 @@ return function(mod)
     local g = Bots.chooseGoal(p, {
       -- the fog outranks every errand, as it does for a player.  Reuses
       -- the per-map question POK-140 needed for the CENTRE counters.
-      inFog = self:fogOver(p.map),
+      inFog = self:fogOver(outdoor),
       heal = Bots.wantsHeal(rec) and door or nil,
       -- loot is only an errand while something there can be taken: any
       -- of it with room in the party, just the bags without
@@ -3115,6 +3416,9 @@ return function(mod)
       p.lastRoam = 0
       return nil
     end
+    -- the door's warp rides the heal goal: the doorstep is the first leg
+    -- of a walk THROUGH it (BR-35)
+    if g.kind == "heal" then g.warp = door.warp end
     g.map, g.at = p.map, now or 0
     return g
   end
@@ -3135,13 +3439,31 @@ return function(mod)
       -- door was the nurse (POK-158)
       if p.dwellKind == "grass" then self:botCatch(id, p)
       elseif p.dwellKind == "item" then self:botLoot(id, p)
-      elseif p.dwellKind == "heal" then self:botHeal(id, p) end
+      elseif p.dwellKind == "counter" then
+        -- healed at the counter (BR-35), and the way out is the next leg
+        self:botHeal(id, p)
+        p.goal, p.path = self:exitLeg(p, now), nil
+      end
       p.dwellKind = nil
     end
 
+    -- the beat after a step onto a door or a mat (BR-35): through it
+    if p.through then
+      local t = p.through
+      p.through = nil
+      if t.kind == "in" then self:enterCentre(id, p, t, now)
+      else self:leaveCentre(id, p, t, now) end
+      return nil
+    end
+
     local goal = p.goal
+    -- a seam walk and the Centre's legs are long by nature and get the
+    -- long clock; a route is more than twenty seconds across
+    local limit = (goal and (goal.kind == "seam" or goal.kind == "heal"
+                             or goal.kind == "counter" or goal.kind == "exit"))
+      and Bots.LONG_GOAL_SECONDS or Bots.GOAL_SECONDS
     local stale = not goal or goal.map ~= p.map
-      or (now and (now - (goal.at or 0)) > Bots.GOAL_SECONDS)
+      or (now and (now - (goal.at or 0)) > limit)
     if stale then
       p.goal, p.path = self:pickBotGoal(id, p, now), nil
       goal = p.goal
@@ -3149,6 +3471,17 @@ return function(mod)
     if not goal then return nil end
 
     if p.x == goal.x and p.y == goal.y then
+      -- the edge: off the map, the way a player leaves one (BR-32)
+      if goal.kind == "seam" then return self:walkSeam(id, p, goal, now) end
+      -- the doorstep or the cell above the mat: one real step onto the
+      -- warp tile -- which canWalk refuses for every other purpose
+      -- (POK-94) -- and the warp fires on the next beat (BR-35)
+      if goal.kind == "heal" or goal.kind == "exit" then
+        p.goal, p.path = nil, nil
+        p.through = { kind = goal.kind == "heal" and "in" or "out",
+                      warp = goal.warp, mat = goal.mat }
+        return goal.kind == "heal" and "up" or "down"
+      end
       local dwell = Bots.DWELL[goal.kind] or 0
       if dwell > 0 then
         p.dwellUntil = (now or 0) + dwell
@@ -3208,7 +3541,7 @@ return function(mod)
   -- turns back into shuffling -- which a spectator at three-left watched
   -- a bot do indefinitely.  A stalk deserves what errands already have:
   -- a real BFS path, walked cell by cell, rebuilt when the prey moves.
-  function BR:stepBotHunt(id, p, prey)
+  function BR:stepBotHunt(id, p, prey, alive)
     -- a stalk interrupts an errand: the FIGHT/menu mark from a dwell must
     -- not stay over its head while it walks somebody down
     if p.busy then self:markBot(id, p, nil) end
@@ -3218,7 +3551,9 @@ return function(mod)
       p.huntPath, p.huntFor = nil, nil
       return nil
     end
-    if p.rng() < 0.2 then return nil end -- the wobble the wander had
+    -- the wobble the wander had -- but not at the end (BR-29): the last
+    -- three walk AT each other every beat
+    if (alive or math.huge) > Bots.ALL_IN and p.rng() < 0.2 then return nil end
     -- with SURF on the team, the path may cross the bay (POK-158 M4)
     local cross = botCross(id)
     local stale = not (p.huntPath and p.huntPath[1])
@@ -3271,8 +3606,11 @@ return function(mod)
       -- cleared the moment the battle opens, so without this the opponent
       -- resumed roaming behind the battle screen and its loot spilled
       -- wherever it had wandered to by the end
+      -- ...and neither side of a walk-up (BR-34): the one seen has
+      -- stopped, and the seer's steps are tickBotApproaches' to make
       if p.bot and p.status == "alive" and p.map and id ~= striding
-         and id ~= self.botFight then
+         and id ~= self.botFight and not self.inDuel[id]
+         and not self.botApproaching[id] then
         -- cached on the bot beside its rng, for the same reason: derived
         -- from (seed, id) and constant for the match
         p.tier = p.tier or Bots.tier(self.matchSeed, id)
@@ -3284,8 +3622,9 @@ return function(mod)
         -- the "pre-heal, then hunt" beat backwards.  An unreachable door
         -- clears the goal (stepBotErrand's path failure), so this cannot
         -- pin a bot to a map it can never heal on.
-        local nursing = (p.goal and p.goal.kind == "heal")
-          or p.dwellKind == "heal"
+        local nursing = (p.goal and (p.goal.kind == "heal" or p.goal.kind == "counter"
+                                     or p.goal.kind == "exit"))
+          or p.dwellKind == "counter" or p.through ~= nil or p.came ~= nil
         -- ...nor out from under a STALK (POK-160): the roam clock kept
         -- running while a bot walked prey down, so every 15-25s the hunt
         -- was teleported into a connected map and all the closing was
@@ -3296,8 +3635,8 @@ return function(mod)
         -- deferring roam on a fogged map would let prey bait a bot into
         -- the fog and camp there while it burned)
         local preyHere = false
-        if self.phase == "match" and p.map and not self:fogOver(p.map)
-           and not Bots.wantsHeal(self:botRecord(id)) then
+        if self.phase == "match" and p.map and not self:fogOver(self:botOutdoor(p))
+           and not self:botStandsDown(id, p, alive) then
           if meHere and meHere.mapId == p.map then preyHere = true end
           if not preyHere then
             for otherId, o in pairs(self.players) do
@@ -3342,7 +3681,7 @@ return function(mod)
           -- bot took us on the spot.  Skipping it (and a peer marked
           -- mid-fight) sends them at each other.
           local prey
-          if not Bots.wantsHeal(self:botRecord(id)) then
+          if not self:botStandsDown(id, p, alive) then
             if meHere and meHere.mapId == p.map then
               prey = { x = meHere.x, y = meHere.y }
             end
@@ -3370,7 +3709,18 @@ return function(mod)
           -- watched bot must never do.
           local dir
           if prey then
-            dir = self:stepBotHunt(id, p, prey)
+            -- a trainer in sight and a wound in the team: the bag first
+            -- (BR-30's row), one sip a beat while it closes -- and the
+            -- stalk goes on regardless of what is left to drink
+            local rec = self:botRecord(id)
+            if Bots.wantsHeal(rec) then
+              local drank = Bots.quaff(rec, rec.bag)
+              if drank then
+                log:say("POTION: %s used its %s", tostring(p.name), tostring(drank))
+                if self.relay then self.relay:broadcast(Wire.botrec(id, rec)) end
+              end
+            end
+            dir = self:stepBotHunt(id, p, prey, alive)
           elseif self.phase ~= "match" then
             dir = Bots.wander(p, p.rng, canWalk, nil)
           else
@@ -4076,8 +4426,9 @@ return function(mod)
     local level = Levels.at(self.ring.phase)
 
     for id, p in pairs(self.players) do
-      if p.bot and p.status == "alive" and p.map
-         and not Fog.isSafe(locations, p.map, self.ring.center, self.ring.radius) then
+      if p.bot and p.status == "alive" and p.map and not self.inDuel[id]
+         and not Fog.isSafe(locations, self:botOutdoor(p),
+                            self.ring.center, self.ring.radius) then
         -- ticks, not hit points: the bite is a fraction of maximum HP, so the
         -- same count of them finishes a team at any rung of the ladder, and
         -- nothing here has to know how big a level 100 bot is
@@ -4335,6 +4686,7 @@ return function(mod)
       idx = ((idx - 1 + (dir or 1)) % #ids) + 1
     end
     self.watching = ids[idx]
+    self:closeMirror("hop")
     self.fellAt = nil              -- a deliberate move, nothing to undo
     self.lastHopAt = nil           -- catch up at once, wherever they are
     self.peeked, self.lastPeekAt = nil, nil   -- and ask them, not the last one
@@ -4352,6 +4704,7 @@ return function(mod)
     local save = self.game and self.game.save
     if not (save and self.relay) then return end
     self.relay:send(fromId, Wire.state(Peek.summary(save, bagOf(save))))
+    self:noteWatcher(fromId, "me")
   end
 
   function BR:tickPeek()
@@ -4366,6 +4719,16 @@ return function(mod)
                         party = Peek.botParty(Bots, self.matchSeed, id, data,
                                               self:level(), self:botRecord(id)),
                         items = bag.items, money = bag.money }
+      end
+      -- ...but its FIGHTS are run by the host: ask there, so the frames
+      -- come here (a host watching its own bot notes itself)
+      local now = clock() or 0
+      if self.lastPeekAt and (now - self.lastPeekAt) < Peek.SECONDS then return end
+      self.lastPeekAt = now
+      if self.relay:isHost() then
+        self:noteWatcher("local", id)
+      elseif self.relay.hostId then
+        self.relay:send(self.relay.hostId, Wire.peek(id))
       end
       return
     end
@@ -4429,7 +4792,11 @@ return function(mod)
     if not (self.phase == "match" and self.status == "out" and self.watching) then return end
     local p = self.players[self.watching]
     if not p or p.status == "out" then
-      self.watching = nil           -- they fell; the next LEFT/RIGHT picks anew
+      -- they fell -- but if their last fight is still playing on our screen
+      -- (lib/mirror.lua), it plays to its end before the camera moves on
+      local st = self.mirrorState
+      if st and st.mirrorSubject == self.watching and not st.mirrorClosed then return end
+      self.watching = nil           -- the next LEFT/RIGHT picks anew
       return
     end
     local here = mod.world:current()
@@ -4484,12 +4851,326 @@ return function(mod)
     if ow.player then ow.player.passable = nil end
   end
 
+  do
+  -- ------- the fight itself, on the battle screen (lib/mirror.lua)
+  --
+  -- Two roles, both here.  While WE fight, we are the recorder: the battle
+  -- rolls on a seed we dealt and every choice we make goes out as a frame
+  -- to whoever is watching us -- the peek that repeats every Peek.SECONDS
+  -- is the subscription, so a watcher who wanders off ages out.  While we
+  -- are OUT and watching, we are the replica: frames from the trainer we
+  -- watch are fed to a BattleState of their fight, pushed over the map.
+  -- A watcher who arrives mid-fight is sent the whole log and catches up.
+  --
+  -- A bot's fights are the HOST's to record (tickBotDuels below): the
+  -- watcher peeks at the host naming the bot, the host answers with that
+  -- bot's frames tagged `as` the bot, and a host who is itself out and
+  -- watching a bot is delivered its own frames without a wire ("local").
+  -- Watchers are kept per SUBJECT -- "me", or a bot id.
+  --
+  -- The libs are required inside these functions: main.lua's closures sit
+  -- at LuaJIT's sixty-upvalue cap.
+
+  local WATCH_TTL = Peek.SECONDS * 3 + 1   -- three missed peeks and you are gone
+
+  function BR:recorderFor(subject)
+    if subject == "me" then return self.recorder end
+    for _, d in ipairs(self.botDuels or {}) do
+      if d.a == subject or d.b == subject then return d.rec end
+    end
+    return nil
+  end
+
+  function BR:eachRecorder(fn)
+    if self.recorder then fn(self.recorder) end
+    for _, d in ipairs(self.botDuels or {}) do if d.rec then fn(d.rec) end end
+  end
+
+  -- one frame to one watcher; "local" is this client, watching a bot
+  -- whose fight it is running itself
+  function BR:deliverFrame(id, b, frame, as)
+    if id == "local" then
+      local m = Wire.decode(Wire.mirror(b, frame, as))
+      if m then self:onMirrorFrame("local", m) end
+    elseif self.relay then
+      self.relay:send(id, Wire.mirror(b, frame, as))
+    end
+  end
+
+  -- rec.sentTo[subject][id] is the last frame number that watcher was
+  -- handed AS that subject.  A watcher who looked away -- hopped to
+  -- somebody else, dropped a peek -- was not sent the frames in between,
+  -- and a log with a hole in it is a replica that waits forever (the
+  -- user's 2026-09-05 "it fought two or three times, faster each time":
+  -- idle close, reopen, catch up to the hole, idle again).  So a peek tops
+  -- the watcher up from where they were.  Per subject, because one duel
+  -- is two subjects and a frame handed over as one bot's fight lands in
+  -- that bot's log, not the other's.
+  local function seenBy(rec, subject)
+    rec.sentTo[subject] = rec.sentTo[subject] or {}
+    return rec.sentTo[subject]
+  end
+
+  function BR:noteWatcher(id, subject)
+    subject = subject or "me"
+    self.watchers[subject] = self.watchers[subject] or {}
+    self.watchers[subject][id] = clock() or 0
+    local rec = self:recorderFor(subject)
+    if not (rec and not rec.stopped) then return end
+    local as = subject ~= "me" and subject or nil
+    local seen = seenBy(rec, subject)
+    for n = (seen[id] or 0) + 1, #rec.log do
+      self:deliverFrame(id, rec.b, rec.log[n], as)
+    end
+    seen[id] = #rec.log
+  end
+
+  function BR:liveWatchers(subject)
+    local now, out = clock() or 0, {}
+    local list = self.watchers[subject or "me"] or {}
+    for id, t in pairs(list) do
+      if now - t <= WATCH_TTL then
+        if id ~= "local" then out[#out + 1] = id end
+      else
+        list[id] = nil
+      end
+    end
+    return out
+  end
+
+  -- The sender every recorder shares: unicast to each subject's watchers,
+  -- tagged as that subject, and remember who has what.  A watcher who has
+  -- been handed any frame of this fight keeps getting the rest even after
+  -- their peeks stop: a fight is a few dozen bytes a turn, and a log that
+  -- never gets its end is a replica that reopens a finished fight the
+  -- next time they look.  Locally the same rule: every subject we hold a
+  -- log for stays topped up, not just the one we are looking at.
+  function BR:mirrorSender(b, sentTo, subjects)
+    subjects = subjects or { "me" }
+    return function(frame)
+      for _, subject in ipairs(subjects) do
+        local as = subject ~= "me" and subject or nil
+        sentTo[subject] = sentTo[subject] or {}
+        local seen = sentTo[subject]
+        local to = {}
+        for _, id in ipairs(BR:liveWatchers(subject)) do to[id] = true end
+        for id in pairs(seen) do if id ~= "local" then to[id] = true end end
+        for id in pairs(to) do
+          BR:deliverFrame(id, b, frame, as)
+          seen[id] = frame.n
+        end
+        if as and BR.status == "out"
+           and (BR.watching == subject or BR.mirrorRx[subject] ~= nil) then
+          BR:deliverFrame("local", b, frame, as)
+          seen["local"] = frame.n
+        end
+      end
+    end
+  end
+
+  function BR:battleTag()
+    return tostring(self.matchSeed or 0) .. "-"
+        .. tostring(math.floor(((clock() or 0) * 1000) % 1000000))
+  end
+
+  -- a wild or trainer fight of ours (a bot's is a trainer fight)
+  function BR:startRecording(battle)
+    if self.recorder or self.phase ~= "match" or not (self.relay and self.game) then return end
+    if not battle or battle.mirror or battle.botSim or battle.ghost or battle.safari
+       or battle.demo then return end
+    local Mirror = require("mods.battle_royale.lib.mirror")
+    local Protocol = require("src.link.Protocol")
+    local save, data = self.game.save, self.game.data
+    local badges = {}
+    local okD, Damage = pcall(require, "src.battle.Damage")
+    local rows = (data.constants and data.constants.badgeBoosts)
+                 or (okD and Damage.BADGE_BOOSTS) or {}
+    for _, row in ipairs(rows) do
+      if save and save.inventory and save.inventory[row.badge] then badges[#badges + 1] = row.badge end
+    end
+    local b, sentTo = self:battleTag(), {}
+    local foeName = (battle.trainer and battle.trainer.name) or (battle.enemy and battle.enemy.name)
+    local ok, rec = pcall(Mirror.record, battle, {
+      kind = battle.kind == "trainer" and "trainer" or "wild",
+      pack = Protocol.packMon, myName = myName(), foeName = foeName, badges = badges,
+      hooked = type(battle.introText) == "string" and battle.introText:find("hooked") ~= nil,
+      send = self:mirrorSender(b, sentTo),
+    })
+    if not ok then
+      mod.log:warn("mirror: could not record this fight (%s)", tostring(rec))
+      return
+    end
+    rec.b, rec.sentTo = b, sentTo
+    self.recorder = rec
+  end
+
+  -- a duel: the lockstep messages are the record (opts are LinkState's)
+  function BR:startRecordingLink(battle, opts)
+    if self.recorder or self.phase ~= "match" or not (self.relay and self.battle) then return end
+    if not (battle and opts) then return end
+    local Mirror = require("mods.battle_royale.lib.mirror")
+    local b, sentTo = self:battleTag(), {}
+    local peer = self.players[self.battle.opponentId]
+    local ok, rec = pcall(Mirror.recordLink, self.battle.channel, {
+      seed = opts.seed, isHost = self.battle.isHost == true,
+      me = opts.myParty, foe = opts.theirParty,
+      myName = myName(), foeName = opts.theirName or (peer and peer.name),
+      send = self:mirrorSender(b, sentTo),
+    })
+    if not ok then
+      mod.log:warn("mirror: could not record this duel (%s)", tostring(rec))
+      return
+    end
+    rec.b, rec.sentTo = b, sentTo
+    self.recorder = rec
+  end
+
+  function BR:stopRecording(result)
+    local rec = self.recorder
+    if not rec then return end
+    self.recorder = nil
+    self.lastRecorder = rec
+    rec:stop(result)
+  end
+
+  -- ------- the replica (while out and watching)
+  --
+  -- One log per subject we have been sent (mirrorRx[subject]), kept across
+  -- hops so coming back to a trainer mid-fight reopens their fight, caught
+  -- up, without asking for the log again.
+
+  function BR:closeMirror(why)
+    local st = self.mirrorState
+    self.mirrorState = nil
+    if st and not st.mirrorClosed then st:mirrorClose(why) end
+  end
+
+  function BR:onMirrorClosed(st, why)
+    self.lastMirror = { why = why, result = st and st.result, turn = st and st.turnCount }
+    if self.mirrorState == st then self.mirrorState = nil end
+    local rx = st and st.mirrorSubject and self.mirrorRx[st.mirrorSubject]
+    if not rx then return end
+    if st.mirrorEnd then
+      rx.done = true                 -- shown to its end; never reopened
+    elseif why == "closed" then
+      rx.muted = true                -- B: they asked not to see this one
+    else
+      -- a hop, an idle stretch, an error: the next look reopens it
+      rx.opened = false
+      rx.reopenAbove = (why == "idle") and rx.top or nil
+    end
+  end
+
+  -- a frame about `subject` -- the sender, or the bot the host tagged it
+  -- with.  Kept as a log, fed in order: a resend to a late watcher and the
+  -- live frames can interleave.
+  function BR:onMirrorFrame(fromId, msg)
+    if not (self.phase == "match" and self.status == "out") then return end
+    if not (msg and msg.frame) then return end
+    local subject = msg.as or fromId
+    if msg.as and fromId ~= "local"
+       and not (self.relay and fromId == self.relay.hostId) then
+      return                         -- only the host speaks for a bot
+    end
+    local f = msg.frame
+    local rx = self.mirrorRx[subject]
+    if not rx or rx.b ~= msg.b then
+      if f.k ~= "start" then return end      -- the log resend brings the start
+      if self.mirrorState and self.mirrorState.mirrorSubject == subject then
+        self:closeMirror("new")
+      end
+      rx = { from = subject, b = msg.b, frames = {}, fed = 0, top = 0,
+             opened = false, muted = false }
+      self.mirrorRx[subject] = rx
+    end
+    if rx.frames[f.n] then return end
+    rx.frames[f.n] = f
+    if f.n > rx.top then rx.top = f.n end
+    if f.k == "end" then rx.ended = true end
+    self:feedMirror()
+  end
+
+  function BR:feedMirror()
+    local st = self.mirrorState
+    local rx = st and st.mirrorSubject and self.mirrorRx[st.mirrorSubject]
+    if not (rx and st) or st.mirrorClosed then return end
+    while rx.frames[rx.fed + 1] do
+      rx.fed = rx.fed + 1
+      st:feed(rx.frames[rx.fed])
+    end
+  end
+
+  function BR:tickMirror()
+    local st = self.mirrorState
+    if st and st.mirrorClosed then self.mirrorState, st = nil, nil end
+    if st and st.mirrorReplay then return end   -- a driver's local replay is its own
+    local watching = self.watching
+    if not (self.phase == "match" and self.status == "out" and watching) then
+      if st then self:closeMirror("done") end
+      return
+    end
+    if st then
+      if st.mirrorSubject ~= watching then self:closeMirror("hop") end
+      return
+    end
+    local rx = self.mirrorRx[watching]
+    if not rx or rx.muted or rx.done or rx.opened or not rx.frames[1] then return end
+    if rx.reopenAbove and rx.top <= rx.reopenAbove then return end
+    -- a fight that has already ended is not reopened: a spectator coming
+    -- back to a trainer whose fight finished while they looked away sees
+    -- the map, not a replay of a result the room already knows
+    if rx.ended then rx.done = true return end
+    local game, ow = self.game, mod.world:overworld()
+    if not (game and ow and game.stack:top() == ow and not ow.transitioning) then return end
+    local Mirror = require("mods.battle_royale.lib.mirror")
+    local ok, state, why = pcall(Mirror.open, game, rx.frames[1], {
+      log = function(...) mod.log:info(...) end,
+      onClosed = function(s, w) BR:onMirrorClosed(s, w) end,
+    })
+    if not ok or not state then
+      mod.log:warn("mirror: could not open %s's fight (%s)",
+                   tostring(watching), tostring(ok and why or state))
+      rx.muted = true
+      return
+    end
+    state.mirrorSubject = watching
+    rx.opened, rx.reopenAbove, rx.fed = true, nil, 1
+    self.mirrorState = state
+    ow:pushBattle(state)       -- the encounter wipe, like the fight it shows
+    self:feedMirror()
+  end
+
+  -- the replica takes no input of the spectator's, but the spectator keeps
+  -- theirs: LEFT / RIGHT hop as they do on the map, B closes this fight's
+  -- screen and leaves the camera on them
+  function BR:mirrorInput(input)
+    local st = self.mirrorState
+    if not (st and input and input.pressQueue) then return false end
+    if self.game.stack:top() ~= st then return false end
+    local hop, close = nil, false
+    for _, btn in ipairs(input.pressQueue) do
+      if btn == "left" then hop = -1
+      elseif btn == "right" then hop = 1
+      elseif btn == "b" then close = true end
+    end
+    input.pressQueue = {}
+    if input.state then input.state.left, input.state.right = false, false end
+    if hop then
+      self:hop(hop)
+    elseif close then
+      self:closeMirror("closed")
+    end
+    return true
+  end
+  end
+
   -- LEFT / RIGHT while out: a hop, not a turn.  input.step runs before the
   -- engine promotes this tick's presses, so the queue is where they can
   -- still be taken back.
   function BR:spectatorInput(game)
     if not (self.phase == "match" and self.status == "out") then return end
     local input = game and game.input
+    if self:mirrorInput(input) then return end
     local ow = mod.world:overworld()
     if not (input and input.pressQueue and ow and game.stack:top() == ow) then return end
     local queue, kept, hop = input.pressQueue, {}, nil
@@ -5031,6 +5712,8 @@ return function(mod)
   -- teaches, a stone evolves, exactly as from the START menu.
   local MONEY_ROW = "money"
 
+  local TAKE_ALL_ROW = "takeall"
+
   function BR:lootRows(key)
     local game = self.game
     local ball = self.spills:get(key)
@@ -5044,7 +5727,56 @@ return function(mod)
     if bag and (bag.money or 0) > 0 then
       rows[#rows + 1] = { value = MONEY_ROW, label = ("¥%d"):format(bag.money) }
     end
+    -- the lot in one press (BR-31): at two-left that is everyone
+    if #rows > 0 then
+      table.insert(rows, 1, { value = TAKE_ALL_ROW, label = "TAKE ALL" })
+    end
     return rows
+  end
+
+  -- TAKE ALL (BR-31): every stack the pack has room for and the money,
+  -- in one press, one line per kind.  What does not fit stays on the
+  -- ground -- a stack is taken whole or not at all, as lootTake takes it.
+  function BR:lootTakeAll(key)
+    local game = self.game
+    local save = game.save
+    local ball = self.spills:get(key)
+    local bag = ball and ball.bag
+    if not bag then
+      say("It's gone --\nsomeone was\nquicker.")
+      self:refreshLoot(key)
+      return false
+    end
+    local Bag = require("src.inventory.Bag")
+    local stacks = {}
+    for _, it in ipairs(bag.items or {}) do stacks[#stacks + 1] = { id = it.id, n = it.n } end
+    local lines, left = {}, 0
+    for _, it in ipairs(stacks) do
+      if Bag.add(save, it.id, it.n, game.data) then
+        self.spills:takeItem(key, it.id, it.n)
+        if self.relay then self.relay:broadcast(Wire.took(key, it.id, it.n)) end
+        local def = game.data.items and game.data.items[it.id]
+        lines[#lines + 1] = ("Took %s x%d!"):format((def and def.name) or it.id, it.n)
+      else
+        left = left + 1
+      end
+    end
+    if (bag.money or 0) > 0 then
+      local got = bag.money
+      save.money = math.min(999999, (save.money or 0) + got)
+      self.spills:takeItem(key, nil, nil, true)
+      if self.relay then self.relay:broadcast(Wire.took(key, MONEY_ROW, 1, true)) end
+      lines[#lines + 1] = ("Took ¥%d!"):format(got)
+    end
+    self:refreshLoot(key)
+    if #lines == 0 then
+      say("You can't carry\nany more!")
+      return false
+    end
+    if left > 0 then lines[#lines + 1] = "The rest won't\nfit." end
+    log:say("LOOT: took all from %s's bag (%d kinds)", tostring(bag.name), #lines)
+    say(table.concat(lines, "\n"))
+    return true
   end
 
   -- Redraw the open loot list after the bag changed -- ours or a rival's
@@ -5142,6 +5874,10 @@ return function(mod)
 
   function BR:lootChoose(key, id)
     local game = self.game
+    if id == TAKE_ALL_ROW then
+      self:lootTakeAll(key)
+      return
+    end
     local Menu = require("src.ui.Menu")
     local rows = {}
     if id ~= MONEY_ROW then
@@ -5353,15 +6089,19 @@ return function(mod)
   -- Walking a connection is the same move a player makes at a route seam,
   -- so it costs nothing in fiction and it is what makes the roster interact.
 
-  -- Resolve one meeting per tick, host-side and abstractly.  There is no
-  -- lockstep to run because neither side is a client, and nobody is owed a
-  -- battle screen for a fight they are not in -- a player watching the map
-  -- sees one trainer walk off and the other's team hit the ground, which is
-  -- what a fight between two strangers looks like from across a route.
+  -- One sighting per tick, host-side.  A fight between two bots used to
+  -- open the beat they came within three cells of each other, walls
+  -- ignored, and froze both where they stood -- four cells apart with a
+  -- fence between them, both wearing the fighting mark (BR-34).  Now it
+  -- is the scene a player gets from the outside: one sees the other
+  -- (botSighting), the one seen stops, the seer walks over
+  -- (tickBotApproaches), they face, the marks go up, and only then does
+  -- the fight open (openBotDuel).
   function BR:tickBotFights()
     if not (self.relay and self.relay:isHost() and self.phase == "match") then return end
     local now = clock()
     if not now then return end
+    self:tickBotApproaches(now)
     local live = {}
     for id, p in pairs(self.players) do
       -- the bot in OUR battle screen is not free to be jumped (POK-154).
@@ -5371,6 +6111,7 @@ return function(mod)
       -- could fight at all, which an accelerated driver sits entirely
       -- inside.)
       if p.bot and p.status == "alive" and p.map and id ~= self.botFight
+         and not self.inDuel[id] and not self.botApproaching[id]
          and (not p.lastFight
               or (now - p.lastFight) >= Bots.FIGHT_COOLDOWN) then
         live[#live + 1] = { id = id, p = p }
@@ -5380,32 +6121,366 @@ return function(mod)
     for i = 1, #live do
       for j = i + 1, #live do
         local a, b = live[i], live[j]
-        if Bots.near(a.p, b.p) then
-          a.p.lastFight, b.p.lastFight = now, now
-          -- The RECORDS fight (POK-158 M3), not a coin: base-stat power
-          -- times what each team has left, an upset still possible, and
-          -- the winner walks away hurt.  The loser's record is what the
-          -- spill puts on the ground; the winner's scars ride a botrec so
-          -- every client carries them into its next fight.
-          local w = Bots.resolveFight(self:botRecord(a.id), self:botRecord(b.id),
-                                      self.game and self.game.data,
-                                      function() return love.math.random() end)
-          local winner = (w == "a") and a or b
-          local loser = (w == "a") and b or a
-          self:eliminateBot(loser.id, loser.p, winner.p.name)
-          local wrec = self:botRecord(winner.id)
-          local drank = Bots.quaff(wrec, wrec.bag)
-          if drank then
-            log:say("POTION: %s used its %s", tostring(winner.p.name),
-                    tostring(drank))
+        if a.p.map == b.p.map then
+          local seer, seen = self:botSighting(a, b)
+          if seer then
+            self:startBotApproach(seer, seen, now)
+            return
           end
-          if self.relay then
-            self.relay:broadcast(Wire.botrec(winner.id, wrec))
-          end
-          return
         end
       end
     end
+  end
+
+  -- Who saw whom (BR-34).  The rule players are engaged by: down the
+  -- facing, Bots.SIGHT cells, stopped by terrain (Engage.sightLine with
+  -- the map's own walkability -- not through a fence, not over water).
+  -- The old NOTICE at three cells still counts -- two bots that blunder
+  -- into each other side-on still fight, or nobody thins the roster --
+  -- but only with a clear line between them (Bots.clearBetween).
+  -- Returns seer, seen (each { id=, p= }) or nil.
+  function BR:botSighting(a, b)
+    local data = self.game and self.game.data
+    if not data then return nil end
+    local mapId = a.p.map
+    local blocked = function(x, y)
+      return not Spawn.walkable(data.maps, data.tilesets, mapId, x, y)
+    end
+    local function shape(e)
+      return { id = e.id, map = e.p.map, x = e.p.x, y = e.p.y,
+               facing = e.p.facing or "down", moving = false,
+               status = "alive", busy = e.p.busy == "battle" }
+    end
+    local sa, sb = shape(a), shape(b)
+    if Engage.target(sa, { sb }, { range = Bots.SIGHT, blocked = blocked }) == b.id then
+      return a, b
+    end
+    if Engage.target(sb, { sa }, { range = Bots.SIGHT, blocked = blocked }) == a.id then
+      return b, a
+    end
+    if Bots.near(a.p, b.p) and Bots.clearBetween(a.p, b.p, blocked) then
+      -- the one not stopped on an errand walks; failing that the lower id
+      if a.p.dwellUntil and not b.p.dwellUntil then return b, a end
+      return a, b
+    end
+    return nil
+  end
+
+  -- The seer walks over; the seen one STOPS, the way the engine freezes
+  -- a player the moment a trainer's ! goes up.  Neither is in the fight
+  -- yet: either may still be jumped by a player or taken by the fog, and
+  -- the marks that say "fighting" wait for the duel.  The ! over the
+  -- seer's head is a mark of its own kind, drawn as the exclamation on
+  -- every screen, that neither blocks a jump nor reads as a fight.
+  function BR:startBotApproach(seer, seen, now)
+    self.botApproach[seer.id] = { to = seen.id, at = 0, steps = 0, startedAt = now }
+    self.botApproaching[seer.id], self.botApproaching[seen.id] = true, true
+    seer.p.path, seen.p.path = nil, nil
+    self:markBot(seer.id, seer.p, "spot")
+    log:say("SPOTTED: %s sees %s", tostring(seer.p.name), tostring(seen.p.name))
+  end
+
+  -- Turn a bot, once, and tell the room.
+  function BR:faceBot(id, p, facing)
+    if not facing or p.facing == facing then return end
+    p.facing = facing
+    self.ghosts:face(id, facing)
+    if self.relay then self.relay:broadcast(Wire.face(facing, p.map, id)) end
+  end
+
+  function BR:tickBotApproaches(now)
+    for seerId, ap in pairs(self.botApproach) do
+      local a, b = self.players[seerId], self.players[ap.to]
+      local function release()
+        self.botApproach[seerId] = nil
+        self.botApproaching[seerId], self.botApproaching[ap.to] = nil, nil
+        if a and a.busy == "spot" then self:markBot(seerId, a, nil) end
+      end
+      -- called off, under the cooldown, so the same sighting does not
+      -- fire again next tick
+      local function callOff()
+        if a then a.lastFight = now end
+        if b then b.lastFight = now end
+        release()
+      end
+      local live = a and b and a.status == "alive" and b.status == "alive"
+        and a.map == b.map and self.phase == "match"
+        and seerId ~= self.botFight and ap.to ~= self.botFight
+      if not live then
+        -- jumped, fogged, or the match moved on
+        callOff()
+      elseif Bots.adjacent(a, b) then
+        -- face to face, and only now the fight
+        self:faceBot(seerId, a, Bots.facingToward(a, b))
+        self:faceBot(ap.to, b, Bots.facingToward(b, a))
+        release()
+        self:openBotDuel({ id = seerId, p = a }, { id = ap.to, p = b }, now)
+      elseif (now - (ap.at or 0)) >= Bots.WALKUP_SECONDS then
+        ap.at = now
+        if ap.steps >= Bots.APPROACH_STEPS then
+          callOff()
+        else
+          local cross = botCross(seerId)
+          if not (ap.path and ap.path[1]) then
+            ap.path = Bots.pathToAny(function(x, y) return cross(a.map, x, y) end,
+              { x = a.x, y = a.y },
+              function(x, y) return (math.abs(x - b.x) + math.abs(y - b.y)) == 1 end)
+          end
+          if not ap.path then
+            callOff()   -- walled off after all: not a fight
+          else
+            local dir = table.remove(ap.path, 1)
+            local d = dir and Bots.DELTA[dir]
+            if d and cross(a.map, a.x + d[1], a.y + d[2]) then
+              ap.steps = ap.steps + 1
+              a.facing = dir
+              a.x, a.y = a.x + d[1], a.y + d[2]
+              a.stepsTaken = (a.stepsTaken or 0) + 1
+              self.relay:broadcast(Wire.step(dir, a.x, a.y, a.map, seerId))
+              self.ghosts:pushStep(seerId, dir)
+            else
+              ap.path = nil   -- somebody moved into us; repath next beat
+            end
+          end
+        end
+      end
+    end
+  end
+
+  -- Two bots face to face: the fight.  A real one off screen, recorded
+  -- for whoever is watching (tickBotDuels settles it); the coin below is
+  -- the fallback when one cannot be built.
+  function BR:openBotDuel(a, b, now)
+    a.p.lastFight, b.p.lastFight = now, now
+    if self:startBotDuel(a, b) then return end
+    -- The RECORDS fight (POK-158 M3), not a coin: base-stat power
+    -- times what each team has left, an upset still possible, and
+    -- the winner walks away hurt.  The loser's record is what the
+    -- spill puts on the ground; the winner's scars ride a botrec so
+    -- every client carries them into its next fight.
+    local w = Bots.resolveFight(self:botRecord(a.id), self:botRecord(b.id),
+                                self.game and self.game.data,
+                                function() return love.math.random() end)
+    local winner = (w == "a") and a or b
+    local loser = (w == "a") and b or a
+    self:eliminateBot(loser.id, loser.p, winner.p.name)
+    local wrec = self:botRecord(winner.id)
+    local drank = Bots.quaff(wrec, wrec.bag)
+    if drank then
+      log:say("POTION: %s used its %s", tostring(winner.p.name),
+              tostring(drank))
+    end
+    if self.relay then
+      self.relay:broadcast(Wire.botrec(winner.id, wrec))
+    end
+  end
+
+  -- ------- two bots fight for real (lib/mirror.lua Mirror.simulate)
+  --
+  -- A bot-versus-bot fight was one weighted coin flip on the host: team
+  -- power each side, a roll, the loser gone.  Now it is a real BattleState
+  -- the host runs off screen at a person's pace -- the first bot's team
+  -- where the player's would be, the second's as the trainer, both picking
+  -- moves with the trainer AI -- and recorded like any player's fight, so a
+  -- spectator watching either bot sees it on the battle screen.  The
+  -- wounds the winner walks away with are the fight's, not a formula's.
+  -- The coin flip stays as the fallback when a fight cannot be built.
+
+  local DUEL_LIMIT = 420   -- seconds of wall clock before a fight is called on HP
+                           -- (a 22-turn fight at a person's pace is legitimately
+                           -- longer than the 150 the first cut allowed)
+
+  local function clampToRecord(party, idx, rec)
+    for k, recI in ipairs(idx or {}) do
+      local mon, m = party[k], rec[recI]
+      if mon and m and (m.hpFrac or 1) < 1 then
+        local maxHp = (mon.stats and mon.stats.hp) or mon.hp
+        if maxHp and maxHp > 0 then
+          mon.hp = math.max(1, math.floor(maxHp * m.hpFrac + 0.5))
+        end
+      end
+    end
+  end
+
+  local function fracLeft(party)
+    local total, left = 0, 0
+    for _, mon in ipairs(party or {}) do
+      local mx = (mon.stats and mon.stats.hp) or 1
+      total = total + mx
+      left = left + math.max(0, mon.hp or 0)
+    end
+    return total > 0 and left / total or 0
+  end
+
+  -- A bot's team built the way the engine builds a trainer's -- through
+  -- newTrainer and the trainer.party hook -- so DVs, moves and special
+  -- moves come out exactly as they do when a player fights it.  Returns
+  -- the battle (its enemyParty is the team, wounded as the record says)
+  -- and the record indices its rows came from.
+  function BR:botDuelParty(pg, botId)
+    local rec = self:botRecord(botId)
+    local stone, pick = self:botEvo(botId)
+    local rows, idx = Bots.fightRows(rec, self:level(), self.game.data, stone, pick)
+    if #rows == 0 then return nil end
+    self:teachBotMoves(rows, rec)
+    local look = self.players[botId]
+    local class = (look and look.class) or BOT_TRAINER_CLASS
+    self.botParty = rows
+    local ok, battle = pcall(function()
+      return require("src.battle.BattleState").newTrainer(pg, class, 1)
+    end)
+    self.botParty = nil
+    if not (ok and battle) then
+      mod.log:warn("bot duel: could not build %s's team (%s)", tostring(botId), tostring(battle))
+      return nil
+    end
+    self:botTrainerOverlay(battle, botId)
+    clampToRecord(battle.enemyParty, idx, rec)
+    return battle, idx
+  end
+
+  function BR:startBotDuel(a, b)
+    local game = self.game
+    if not game then return false end
+    local Mirror = require("mods.battle_royale.lib.mirror")
+    local Protocol = require("src.link.Protocol")
+    -- animations ON, though nobody here sees them: a spectator's replica
+    -- plays them, and a fight that ran quicker on this end than on theirs
+    -- piled frames up there until the replica had to hurry (the user's
+    -- 2026-09-05 "it got fast").  SET, so no SHIFT prompt to answer.
+    local pace = { animations = true, battleStyle = "set" }
+    -- A's team, through a throwaway fight of its own
+    local standIn = { require("src.pokemon.Pokemon").new(game.data, "RATTATA", 5) }
+    local pgA = Mirror.proxyGame(game, { name = a.p.name, party = standIn, options = pace })
+    local mine, idxA = self:botDuelParty(pgA, a.id)
+    if not mine then return false end
+    local partyA = mine.enemyParty
+    -- the fight itself: B is the trainer, A stands where the player would
+    local pg = Mirror.proxyGame(game, { name = a.p.name, party = partyA, options = pace })
+    local battle, idxB = self:botDuelParty(pg, b.id)
+    if not battle then return false end
+    -- A's brain: the trainer AI B fights with, aimed the other way.  Its
+    -- own dice, not the battle's: the battle's stream is what the replica
+    -- follows, and the replica is told A's choice rather than making it.
+    local TrainerAI = require("src.battle.TrainerAI")
+    local dice = Mirror.makeRng(((self.matchSeed or 1) + a.id * 7919 + b.id * 104729) % 2147483646 + 1)
+    local view = setmetatable({
+      enemyAIMods = mine.enemyAIMods, trainer = mine.trainer,
+      ruleset = setmetatable({ enemyUnlimitedPP = false }, { __index = battle.ruleset }),
+    }, { __index = battle })
+    local function chooser(s)
+      view.player = s.enemy
+      local okC, mv = pcall(TrainerAI.chooseMove, s.player, dice, view)
+      if not okC then return nil end
+      for i, m in ipairs(s.player.curMoves) do if m == mv then return i end end
+      return nil
+    end
+    local okS, sim = pcall(Mirror.simulate, pg, battle, {
+      chooser = chooser, log = function(...) mod.log:warn(...) end,
+    })
+    if not okS then
+      mod.log:warn("bot duel: could not open the fight (%s)", tostring(sim))
+      return false
+    end
+    -- recorded for whoever is watching either bot
+    local tag, sentTo = self:battleTag(), {}
+    local okR, rec = pcall(Mirror.record, battle, {
+      kind = "trainer", pack = Protocol.packMon, myName = a.p.name, foeName = b.p.name,
+      badges = {}, send = self:mirrorSender(tag, sentTo, { a.id, b.id }),
+    })
+    if not okR then
+      mod.log:warn("bot duel: could not record the fight (%s)", tostring(rec))
+      sim:abort()
+      return false
+    end
+    rec.b, rec.sentTo = tag, sentTo
+    local d = { a = a.id, b = b.id, sim = sim, rec = rec, idxA = idxA, idxB = idxB,
+                partyA = partyA, partyB = battle.enemyParty, startedAt = clock() or 0 }
+    self.botDuels[#self.botDuels + 1] = d
+    self.inDuel[a.id], self.inDuel[b.id] = true, true
+    self:markBot(a.id, a.p, "battle")
+    self:markBot(b.id, b.p, "battle")
+    log:say("DUEL: %s vs %s", tostring(a.p.name), tostring(b.p.name))
+    -- the watchers already looking at either bot get the start at once
+    for _, id in ipairs({ a.id, b.id }) do
+      for wid in pairs(self.watchers[id] or {}) do self:noteWatcher(wid, id) end
+      if self.status == "out" and self.watching == id then self:noteWatcher("local", id) end
+    end
+    return true
+  end
+
+  function BR:tickBotDuels(dt)
+    if #(self.botDuels or {}) == 0 then return end
+    if not (self.relay and self.relay:isHost()) then return end
+    local now = clock() or 0
+    for i = #self.botDuels, 1, -1 do
+      local d = self.botDuels[i]
+      local a, b = self.players[d.a], self.players[d.b]
+      local gone = self.phase ~= "match"
+                   or not (a and b and a.status == "alive" and b.status == "alive")
+      if not gone then d.sim:tick(dt or 1 / 60) end
+      local called = (now - d.startedAt) > DUEL_LIMIT
+      if gone or d.sim.done or called then
+        table.remove(self.botDuels, i)
+        self.inDuel[d.a], self.inDuel[d.b] = nil, nil
+        if a then self:markBot(d.a, a, nil) end
+        if b then self:markBot(d.b, b, nil) end
+        if gone then
+          d.sim:abort()
+          d.rec:stop("ended")
+        else
+          self:finishBotDuel(d, called and not d.sim.done)
+        end
+      end
+    end
+  end
+
+  function BR:finishBotDuel(d, called)
+    local a, b = self.players[d.a], self.players[d.b]
+    local result = d.sim.result
+    local aWins
+    if called or d.sim.error or (result ~= "win" and result ~= "lose") then
+      -- out of clock, or the fight broke: whoever has more left standing
+      local fa, fb = fracLeft(d.partyA), fracLeft(d.partyB)
+      aWins = fa > fb or (fa == fb and love.math.random() < 0.5)
+      d.sim:abort()
+    else
+      aWins = result == "win"
+    end
+    d.rec:stop(aWins and "win" or "lose")
+    local winner = aWins and { id = d.a, p = a } or { id = d.b, p = b }
+    local loser = aWins and { id = d.b, p = b } or { id = d.a, p = a }
+    -- the wounds are the fight's: each of the winner's mons keeps exactly
+    -- what it had left when the last of the loser's fell
+    local wrec = self:botRecord(winner.id)
+    local party = aWins and d.partyA or d.partyB
+    local idx = aWins and d.idxA or d.idxB
+    local standing = 0
+    for k, recI in ipairs(idx or {}) do
+      local mon, m = party[k], wrec[recI]
+      if mon and m then
+        local mx = (mon.stats and mon.stats.hp) or 1
+        m.hpFrac = math.max(0, math.min(1, (mon.hp or 0) / math.max(1, mx)))
+        if m.hpFrac > 0 then standing = standing + 1 end
+      end
+    end
+    if standing == 0 then
+      -- a called fight can leave the winner flat; a winner stands
+      local m = wrec[(idx and idx[1]) or 1] or wrec[1]
+      if m then m.hpFrac = 0.1 end
+    end
+    local now = clock() or 0
+    if a then a.lastFight = now end
+    if b then b.lastFight = now end
+    log:say("DUEL OVER: %s beat %s after %d turns%s", tostring(winner.p and winner.p.name),
+            tostring(loser.p and loser.p.name), d.sim.battle.turnCount or 0,
+            called and " (called on time)" or "")
+    if loser.p then self:eliminateBot(loser.id, loser.p, winner.p and winner.p.name) end
+    local drank = Bots.quaff(wrec, wrec.bag)
+    if drank then
+      log:say("POTION: %s used its %s", tostring(winner.p and winner.p.name), tostring(drank))
+    end
+    if self.relay then self.relay:broadcast(Wire.botrec(winner.id, wrec)) end
   end
 
   -- A bot is out: its team spills where it fell, exactly as a player's does.
@@ -5490,14 +6565,52 @@ return function(mod)
   -- and eating it would starve the TM economy POK-62 built.  Two teaches
   -- at most: a team that is nothing but machine moves reads as a hack,
   -- not an ace.
-  function BR:teachBotMoves(rows)
+  --
+  -- And the HMs (BR-30): a team that crosses the bay or flies to the
+  -- eye has SURF or FLY on somebody, so the fight's movesets carry them
+  -- too -- one learner each, the oldest move swapped out as for a TM.
+  -- `rec` is the record the rows came from; a duel passes its own, a
+  -- player's fight the bot it is fighting.
+  function BR:teachBotMoves(rows, rec)
     local data = self.game and self.game.data
-    local rec = self.botFight and self:botRecord(self.botFight)
+    rec = rec or (self.botFight and self:botRecord(self.botFight))
     local bag = rec and rec.bag
-    if not (data and bag) then return end
+    if not (data and rec) then return end
     local Pokemon = require("src.pokemon.Pokemon")
+    -- one move onto the first row that can take it and does not have
+    -- it; a row already taught by this pass keeps its list
+    local function teach(moveId, again)
+      if not (data.moves and data.moves[moveId]) then return false end
+      for _, row in ipairs(rows) do
+        if (again or not row.moves)
+           and Bots.canLearn(data.pokemon and data.pokemon[row.species], moveId) then
+          local ids, dup = {}, false
+          if row.moves then
+            for _, mid in ipairs(row.moves) do ids[#ids + 1] = mid end
+          else
+            local okM, built = pcall(Pokemon.new, data, row.species, row.level)
+            for _, mv in ipairs((okM and built and built.moves) or {}) do
+              ids[#ids + 1] = type(mv) == "table" and mv.id or mv
+            end
+          end
+          for _, mid in ipairs(ids) do if mid == moveId then dup = true end end
+          if dup then return false end
+          if #ids > 0 then
+            if #ids >= 4 then ids[1] = moveId else ids[#ids + 1] = moveId end
+            row.moves = ids
+            return true
+          end
+        end
+      end
+      return false
+    end
+    for _, hm in ipairs(Bots.HMS) do
+      local knows = (hm == "SURF" and Bots.canSurf(rec, data))
+        or (hm == "FLY" and Bots.canFly(rec, data))
+      if knows then teach(hm, true) end
+    end
     local taught = 0
-    for _, it in ipairs(bag.items or {}) do
+    for _, it in ipairs((bag and bag.items) or {}) do
       if taught >= 2 then break end
       local moveId = Bots.tmMove(it.id)
       if moveId and data.moves and data.moves[moveId] then
@@ -5520,6 +6633,55 @@ return function(mod)
           end
         end
       end
+    end
+  end
+
+  -- The bot's own name and brain over the class chassis, for a fight a
+  -- player opens (startBotBattle) and for one two bots have (startBotDuel).
+  function BR:botTrainerOverlay(battle, botId)
+    -- Overlay the bot's own name on the class chassis, the engine's own
+    -- rival-name pattern (POK-61).  Every line in BattleState reads
+    -- trainer.name live, so this is enough for all of them -- except
+    -- introText, which newTrainer BAKES before we get the battle back
+    -- (BattleState.lua, "%s wants to fight!").  That is why the fight
+    -- opened as the CLASS and only the defeat line said SAM (POK-89): so
+    -- swap the baked-in class for the name rather than reformatting the
+    -- string, which would drop whatever localisation Strings applied.
+    local bp = self.players[botId]
+    -- The brain rides the overlay too (POK-160).  TrainerAI.classFor
+    -- reads trainer.aiClass before trainer.id, so an ai-tier bot fights
+    -- with a cooltrainer's item-and-switch AI whatever face it wears --
+    -- the face stopped being the brain in Bots.look the same ticket.
+    -- aiUses (wAICount) was already baked from the face's class at
+    -- newTrainer time, so it is re-asked once the overlay is on.
+    local aiClass = Bots.fightAI(self.matchSeed, botId)
+    if bp and (bp.name or aiClass) then
+      local was = battle.trainer and battle.trainer.name
+      -- ...and an ai-tier bot also PICKS its moves (POK-160 item 3): the
+      -- face's own vanilla passes, plus the mod's BR_BOT_MOVES layer on
+      -- top.  A ROOKIE keeps whatever move choice its face class shipped
+      -- with -- no field, so the chassis answers through __index.
+      local aiMods
+      if aiClass then
+        aiMods = {}
+        for _, m in ipairs((battle.trainer and battle.trainer.aiMods) or {}) do
+          aiMods[#aiMods + 1] = m
+        end
+        aiMods[#aiMods + 1] = "BR_BOT_MOVES"
+      end
+      battle.trainer = setmetatable(
+        { name = bp.name, aiClass = aiClass, aiMods = aiMods },
+        { __index = battle.trainer })
+      if bp.name and was and was ~= bp.name
+         and type(battle.introText) == "string" then
+        local pattern = was:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%1")
+        battle.introText = battle.introText:gsub(pattern,
+                                                 (bp.name:gsub("%%", "%%%%")), 1)
+      end
+      -- both were baked from the face's class before the overlay existed
+      -- (newTrainer sets aiUses at construction, enemyAIMods at line ~812)
+      battle.aiUses = battle:aiUsesFor()
+      battle.enemyAIMods = battle.trainer.aiMods
     end
   end
 
@@ -5585,50 +6747,7 @@ return function(mod)
       self.botFightIdx = nil
       return
     end
-    -- Overlay the bot's own name on the class chassis, the engine's own
-    -- rival-name pattern (POK-61).  Every line in BattleState reads
-    -- trainer.name live, so this is enough for all of them -- except
-    -- introText, which newTrainer BAKES before we get the battle back
-    -- (BattleState.lua, "%s wants to fight!").  That is why the fight
-    -- opened as the CLASS and only the defeat line said SAM (POK-89): so
-    -- swap the baked-in class for the name rather than reformatting the
-    -- string, which would drop whatever localisation Strings applied.
-    local bp = self.players[botId]
-    -- The brain rides the overlay too (POK-160).  TrainerAI.classFor
-    -- reads trainer.aiClass before trainer.id, so an ai-tier bot fights
-    -- with a cooltrainer's item-and-switch AI whatever face it wears --
-    -- the face stopped being the brain in Bots.look the same ticket.
-    -- aiUses (wAICount) was already baked from the face's class at
-    -- newTrainer time, so it is re-asked once the overlay is on.
-    local aiClass = Bots.fightAI(self.matchSeed, botId)
-    if bp and (bp.name or aiClass) then
-      local was = battle.trainer and battle.trainer.name
-      -- ...and an ai-tier bot also PICKS its moves (POK-160 item 3): the
-      -- face's own vanilla passes, plus the mod's BR_BOT_MOVES layer on
-      -- top.  A ROOKIE keeps whatever move choice its face class shipped
-      -- with -- no field, so the chassis answers through __index.
-      local aiMods
-      if aiClass then
-        aiMods = {}
-        for _, m in ipairs((battle.trainer and battle.trainer.aiMods) or {}) do
-          aiMods[#aiMods + 1] = m
-        end
-        aiMods[#aiMods + 1] = "BR_BOT_MOVES"
-      end
-      battle.trainer = setmetatable(
-        { name = bp.name, aiClass = aiClass, aiMods = aiMods },
-        { __index = battle.trainer })
-      if bp.name and was and was ~= bp.name
-         and type(battle.introText) == "string" then
-        local pattern = was:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%1")
-        battle.introText = battle.introText:gsub(pattern,
-                                                 (bp.name:gsub("%%", "%%%%")), 1)
-      end
-      -- both were baked from the face's class before the overlay existed
-      -- (newTrainer sets aiUses at construction, enemyAIMods at line ~812)
-      battle.aiUses = battle:aiUsesFor()
-      battle.enemyAIMods = battle.trainer.aiMods
-    end
+    self:botTrainerOverlay(battle, botId)
     battle.onFinish = function(result) ow:afterBattle(result, battle) end
     ow:pushBattle(battle)
   end
@@ -5966,6 +7085,7 @@ return function(mod)
   -- BattleState says battle.started -- LinkBattle never emits it -- and
   -- PvP and bot fights hold tickFog off via status anyway.
   mod.events:on("battle.started", function(ev)
+    if ev and ev.battle and (ev.battle.mirror or ev.battle.botSim) then return end   -- not ours
     -- inSession(), not inRound(): a battle that opens at "over" -- a
     -- scripted one, which no phase guard the mod can reach refuses (see the
     -- script.command wrap below) -- was invisible here, so liveLocalBattle
@@ -6004,14 +7124,25 @@ return function(mod)
         onFlee = function() BR.fleeing = opponent end,
       })
     end
+    -- ...and whoever is watching us follows us in (lib/mirror.lua).  After
+    -- the bot clamp above: the parties go out as they stand at turn one.
+    if ev and ev.battle and ev.battle.kind ~= "link" then BR:startRecording(ev.battle) end
   end)
 
+
+  -- a send-out of ours no switch announced is a replacement (lib/mirror.lua)
+  mod.events:on("battle.battler_switched", function(ev)
+    if ev and ev.battle and not ev.battle.mirror then
+      BR:eachRecorder(function(rec) rec:onSwitched(ev) end)
+    end
+  end)
 
   -- A ball that closed is a catch in flight until Party.add runs: the
   -- engine says "was caught!" first and stores the mon after the page
   -- (BattleState.storeCaughtMon).  Held here so the buzzer's close waits
   -- for it and the page is not left to a player's thumb.
   mod.events:on("battle.ball_thrown", function(ev)
+    if ev and ev.battle and (ev.battle.mirror or ev.battle.botSim) then return end
     if ev and ev.caught and BR:inRound() then BR.catchPending = ev.battle end
   end)
 
@@ -6027,6 +7158,10 @@ return function(mod)
   -- battle.ended rather than link.battle_ended.  A loss blacks the player
   -- out, which world.blacked_out below turns into elimination.
   mod.events:on("battle.ended", function(ev)
+    if ev and ev.battle and (ev.battle.mirror or ev.battle.botSim) then return end   -- not ours
+    if ev and ev.battle and BR.recorder and BR.recorder.battle == ev.battle then
+      BR:stopRecording(ev.result)
+    end
     BR.localBattle = nil
     BR.catchPending = nil
     BR:reclaimGhostLead()   -- the Safari's stand-in leaves with the screen
@@ -6172,6 +7307,7 @@ return function(mod)
   function BR:onBattleClosed(_opponentId)
     -- the channel closed (LinkState:exitWith); the result arrives separately
     -- on link.battle_ended, so here we only drop our handle
+    if self.recorder and self.recorder.link then self:stopRecording("closed") end
     if self.battle then self.battle = nil end
   end
 
@@ -6179,6 +7315,7 @@ return function(mod)
   -- damage the real save.party never does under cable rules.  Party is
   -- health here, so we copy the damage back and a wiped party is elimination.
   mod.events:on("link.battle_ended", function(ev)
+    if BR.recorder and BR.recorder.link then BR:stopRecording(ev and ev.result) end
     if not (BR.phase == "match" and BR.game) then return end
     local save = BR.game.save
     -- self.battle is usually already gone here (LinkState closes the channel
@@ -6569,6 +7706,7 @@ return function(mod)
       BR:tickBots()
       if BR.phase == "match" then
         BR:tickBotFights()
+        BR:tickBotDuels(dt)
         BR:tickRing()
         BR:tickBotFog()
         BR:tickNpcFog()
@@ -6582,6 +7720,7 @@ return function(mod)
         BR:tickLevels()
         BR:spectatorInput(game)
         BR:tickWatch()
+        BR:tickMirror()
       end
     end
 
@@ -7397,7 +8536,8 @@ return function(mod)
           -- position would float the bubble off the sprite mid-step
           if npc and npc.px and npc.py then
             local quad = emoteQuad(bubbles, sheet,
-                                   p.busy == "battle" and "EXCLAMATION_BUBBLE"
+                                   (p.busy == "battle" or p.busy == "spot")
+                                   and "EXCLAMATION_BUBBLE"
                                    or "QUESTION_BUBBLE")
             -- The engine's own bubble slot (fxEmote: px + 4, py - 14),
             -- mapped from the WORLD pass onto this canvas (POK-166): the
@@ -7836,13 +8976,43 @@ return function(mod)
   mod.exports.openSpill = function(key) return BR:openSpill(key) end
   -- a test hook, like debugSpill: the host drops a bot at a cell, so a
   -- smoke can stage an engage instead of praying for one
-  mod.exports.debugPlaceBot = function(id, map, x, y)
+  mod.exports.debugPlaceBot = function(id, map, x, y, facing)
     local p = BR.players[id]
     if not (p and BR.relay) then return false end
-    p.map, p.x, p.y, p.facing = map, x, y, "down"
+    p.map, p.x, p.y, p.facing = map, x, y, facing or "down"
+    -- a placed bot starts afresh: no errand, no Centre it was inside, no
+    -- walk-up it was on
+    p.goal, p.path, p.came, p.through = nil, nil, nil, nil
+    p.dwellUntil, p.dwellKind = nil, nil
+    if p.busy then BR:markBot(id, p, nil) end
+    if BR.botApproaching[id] then
+      for seer, ap in pairs(BR.botApproach) do
+        if seer == id or ap.to == id then
+          BR.botApproach[seer] = nil
+          BR.botApproaching[seer], BR.botApproaching[ap.to] = nil, nil
+        end
+      end
+    end
     BR.ghosts:despawn(id)
-    BR.relay:broadcast(Wire.place(p.map, p.x, p.y, "down", p.status, p.sprite, id))
+    BR.relay:broadcast(Wire.place(p.map, p.x, p.y, p.facing, p.status, p.sprite, id))
     return true
+  end
+  -- turn a bot from outside, for a driver staging a sighting (BR-34)
+  mod.exports.debugFaceBot = function(id, facing)
+    local p = BR.players[id]
+    if not (p and BR.relay and Bots.DELTA[facing]) then return false end
+    BR:faceBot(id, p, facing)
+    return true
+  end
+  -- what a ghost is drawn on right now (BR-33): "surf" on the water
+  mod.exports.ghostSheet = function(id) return BR.ghosts:sheetOf(id) end
+  -- the walk-ups in flight (BR-34): seer -> { to, steps }
+  mod.exports.botApproaches = function()
+    local out = {}
+    for seer, ap in pairs(BR.botApproach) do
+      out[#out + 1] = { seer = seer, to = ap.to, steps = ap.steps }
+    end
+    return out
   end
   -- Put a mark over somebody's head from outside (POK-113).  A bot never
   -- sends `busy` -- it is simulated, not played -- so this is the only way
@@ -8068,9 +9238,16 @@ return function(mod)
           sinceFight = now - (p.lastFight or 0),
           -- what it is doing with its feet, for POK-160's probes
           goal = p.goal and p.goal.kind or nil,
+          goalAt = p.goal and { x = p.goal.x, y = p.goal.y, dest = p.goal.dest } or nil,
           hunting = (p.huntFor and true) or false,
           pathLeft = p.huntPath and #p.huntPath or nil,
           beats = p.dueBeats or 0, steps = p.stepsTaken or 0,
+          -- seams walked rather than skipped (BR-32), and the town a bot
+          -- inside a Centre is judged on (BR-35)
+          seams = p.seamsWalked or 0, flights = p.flights or 0,
+          came = p.came and p.came.id or nil,
+          approaching = BR.botApproaching[id] and true or false,
+          facing = p.facing, busy = p.busy,
           dwell = (p.dwellUntil and p.dwellUntil > now)
             and (p.dwellUntil - now) or nil,
         }
@@ -8098,6 +9275,14 @@ return function(mod)
     end
     local rec = BR:botRecord(id)
     rec[#rec + 1] = { species = species, hpFrac = 1 }
+    if BR.relay then BR.relay:broadcast(Wire.botrec(id, rec)) end
+    return true
+  end
+  -- a test hook: replace a bot's bag, so a driver can stage "no potion"
+  mod.exports.debugBotBag = function(id, items, money)
+    if not (BR.matchSeed and BR.players[id]) then return false end
+    local rec = BR:botRecord(id)
+    rec.bag = { items = items or {}, money = money or 0 }
     if BR.relay then BR.relay:broadcast(Wire.botrec(id, rec)) end
     return true
   end
@@ -8177,4 +9362,54 @@ return function(mod)
   -- derivation, not the last frame sent: in a solo room the frame is
   -- suppressed (POK-102) and there would be nothing to read otherwise.
   mod.exports.busy = function() return myBusy() end
+
+  -- The fight on the battle screen (lib/mirror.lua), both ends of it, for
+  -- drivers.  mirrorLog is what we recorded of our own last fight;
+  -- replayMirror opens a replica of a log on THIS client, through the
+  -- wire's own encode/decode, which is how a single client proves a
+  -- recorded fight replays to the same ending.
+  mod.exports.mirror = function()
+    local st, rx = BR.mirrorState, BR.mirrorRx
+    return { open = st ~= nil and not st.mirrorClosed, kind = st and st.kind,
+             turn = st and st.turnCount, pending = st and #st.mirrorPending,
+             result = st and st.result, why = st and st.mirrorWhy,
+             frames = rx and rx.top, from = rx and rx.from,
+             watchers = #BR:liveWatchers("me"), recording = BR.recorder ~= nil,
+             duels = #(BR.botDuels or {}), last = BR.lastMirror }
+  end
+  mod.exports.botDuels = function()
+    local out = {}
+    for i, d in ipairs(BR.botDuels or {}) do
+      out[i] = { a = d.a, b = d.b, turn = d.sim.battle.turnCount or 0, done = d.sim.done,
+                 frames = #d.rec.log, elapsed = d.sim.elapsed }
+    end
+    return out
+  end
+  mod.exports.mirrorLog = function()
+    local rec = BR.recorder or BR.lastRecorder
+    if not rec then return nil end
+    local out = {}
+    for i, f in ipairs(rec.log) do out[i] = f end
+    return out
+  end
+  mod.exports.replayMirror = function(frames)
+    local Mirror = require("mods.battle_royale.lib.mirror")
+    local decoded = {}
+    for _, f in ipairs(frames or {}) do
+      local m = Wire.decode(Wire.mirror("replay", f))
+      if m then decoded[#decoded + 1] = m.frame end
+    end
+    if not decoded[1] then return nil, "no start frame" end
+    local state, why = Mirror.open(BR.game, decoded[1], {
+      log = function(...) mod.log:info(...) end,
+      onClosed = function(s, w) BR:onMirrorClosed(s, w) end,
+    })
+    if not state then return nil, why end
+    state.mirrorReplay = true
+    BR.mirrorState = state
+    local ow = mod.world:overworld()
+    if ow then ow:pushBattle(state) else BR.game.stack:push(state) end
+    for i = 2, #decoded do state:feed(decoded[i]) end
+    return true
+  end
 end

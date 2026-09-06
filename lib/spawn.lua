@@ -92,6 +92,26 @@ function Spawn.swimmable(maps, tilesets, mapId, x, y)
   return Map.defIsWaterCell(def, tilesetDef, x, y)
 end
 
+-- Is this cell a tree CUT would fell (BR-30)?  The engine's own test
+-- (OverworldState:tryCut): the OVERWORLD tileset's tree tile, in a block
+-- that field.cutTreeSwaps knows how to swap, and not walkable as it
+-- stands.  Answered off the definition, like walkable, so the host can
+-- path a bot with a CUT learner through one on a map nobody is on.
+Spawn.CUT_TREE_TILE = 0x3d
+function Spawn.cuttable(maps, tilesets, field, mapId, x, y)
+  local def = maps and maps[mapId]
+  local ts = def and tilesets and tilesets[def.tileset]
+  if not (def and ts and def.tileset == "OVERWORLD") then return false end
+  if x < 0 or y < 0 or x >= def.width * 2 or y >= def.height * 2 then return false end
+  if Map.defCellTile(def, ts, x, y) ~= Spawn.CUT_TREE_TILE then return false end
+  if Map.defIsWalkableCell(def, ts, x, y) then return false end
+  local block = def.blocks[math.floor(y / 2) * def.width + math.floor(x / 2) + 1]
+  for _, sw in ipairs((field and field.cutTreeSwaps) or {}) do
+    if sw.before == block then return true end
+  end
+  return false
+end
+
 -- Walkable is not escapable (POK-23).  An island behind Surf water, a
 -- Cut-fenced pocket and a ledge-locked hollow all pass the walkable test,
 -- and all of them strand a Lv5 drop with no way off the map.  One

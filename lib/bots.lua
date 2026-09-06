@@ -334,6 +334,31 @@ Bots.NOTICE = 3
 -- across a line.
 Bots.SIGHT = 4
 
+-- THE ENDGAME IS ALL IN (BR-29).  At this many trainers left or fewer, a
+-- bot on the same map as another walks AT them every beat -- healed or
+-- not, no wobble.  A wounded player at two-left still fights: it is
+-- that or the fog.
+Bots.ALL_IN = 3
+
+-- Loot at your feet comes first (BR-29/30): a spill within this many
+-- cells (Manhattan) outranks the walk to the Centre.  Further off the
+-- nurse wins, as she did.
+Bots.LOOT_FIRST = 6
+
+-- A LEAD at a sliver counts as hurt whatever the rest of the team
+-- averages (BR-29): a player heals the mon that fights, not the mean.
+Bots.LEAD_LOW = 0.35
+
+-- A seam walk (BR-32) crosses a whole route and outlives the errand
+-- clock; the visit to the Centre (BR-35) is three legs long.  Both get
+-- this long before they are called stale.
+Bots.LONG_GOAL_SECONDS = 90
+
+-- The walk-up between two bots (BR-34) is a walk across the road, not a
+-- chase: past this many steps it is called off and both go about their
+-- business, under the fight cooldown.
+Bots.APPROACH_STEPS = 12
+
 function Bots.isBot(id)
   return type(id) == "number" and id >= Bots.ID_BASE
 end
@@ -513,7 +538,11 @@ end
 -- declines to move a bot already standing on the map nearest the ring's
 -- eye.  Nothing else was left to move them.  A bot must always have an
 -- errand it can perform HERE.
-Bots.DWELL = { grass = 6, item = 1.5, heal = 4, stroll = 0, ring = 0, seam = 0 }
+--
+-- `heal` is the doorstep and no longer a dwell (BR-35): the bot steps
+-- through the door, and the four seconds are spent at the COUNTER inside.
+Bots.DWELL = { grass = 6, item = 1.5, heal = 0, counter = 4, exit = 0,
+               stroll = 0, ring = 0, seam = 0 }
 
 -- A bot gives up on a goal it cannot reach rather than grinding at a wall.
 Bots.GOAL_SECONDS = 20
@@ -621,6 +650,46 @@ function Bots.path(canWalk, from, to, limit)
   return nil
 end
 
+-- The same search to ANY cell `isGoal(x, y)` accepts -- the nearest edge
+-- cell of a seam (BR-32), the cell beside another trainer (BR-34).
+-- Returns the directions and the cell reached, or nil.
+function Bots.pathToAny(canWalk, from, isGoal, limit)
+  if not (from and isGoal) then return nil end
+  if isGoal(from.x, from.y) then return {}, { x = from.x, y = from.y } end
+  local function key(x, y) return y * 4096 + x end
+  local startKey = key(from.x, from.y)
+  local came = { [startKey] = false }
+  local queue = { { x = from.x, y = from.y, key = startKey } }
+  local head, nodes, cap = 1, 0, limit or Bots.PATH_NODES
+  while queue[head] do
+    local cur = queue[head]
+    head = head + 1
+    nodes = nodes + 1
+    if nodes > cap then return nil end
+    for _, dir in ipairs(DIRS) do
+      local d = DELTA[dir]
+      local nx, ny = cur.x + d[1], cur.y + d[2]
+      local k = key(nx, ny)
+      if came[k] == nil and canWalk(nx, ny) then
+        came[k] = { from = cur, dir = dir }
+        if isGoal(nx, ny) then
+          local dirs, node = {}, came[k]
+          while node do
+            dirs[#dirs + 1] = node.dir
+            node = came[node.from.key]
+          end
+          for i = 1, math.floor(#dirs / 2) do
+            dirs[i], dirs[#dirs - i + 1] = dirs[#dirs - i + 1], dirs[i]
+          end
+          return dirs, { x = nx, y = ny }
+        end
+        queue[#queue + 1] = { x = nx, y = ny, key = k }
+      end
+    end
+  end
+  return nil
+end
+
 -- The cells worth crossing a map for: everything at least MIN_ERRAND away.
 -- Empty when they are all underfoot, which is a real answer -- the caller
 -- falls through to a different kind of errand rather than shuffling.
@@ -664,6 +733,15 @@ function Bots.chooseGoal(bot, ctx, rng)
   -- else on this map matters if standing here is what kills you.
   if ctx.inFog or ctx.ringSoon then return { kind = "seam", why = "ring" } end
 
+  -- Loot at your feet first (BR-29): a bot that stood a few cells from
+  -- two dropped mons and a bag while it walked to the nurse was the
+  -- spectator's complaint.  A spill within LOOT_FIRST is picked up on
+  -- the way; only then does the wound decide.
+  local item = Bots.nearest(bot, ctx.items)
+  if item and (math.abs(item.x - bot.x) + math.abs(item.y - bot.y)) <= Bots.LOOT_FIRST then
+    return { kind = "item", x = item.x, y = item.y }
+  end
+
   -- A wrecked team walks to the Centre before it does anything else
   -- (POK-158 M2).  `heal` is the door cell, offered by the caller only
   -- when the team is hurt enough and the Centre still serves.
@@ -671,7 +749,6 @@ function Bots.chooseGoal(bot, ctx, rng)
 
   -- Loot on the floor beats grass: it is already a team, and somebody
   -- else paid for it.
-  local item = Bots.nearest(bot, ctx.items)
   if item then return { kind = "item", x = item.x, y = item.y } end
 
   -- Grass, most of the time -- but not always, or a bot with grass on its
@@ -1091,42 +1168,149 @@ end
 -- lives by -- somebody on the team knows SURF -- read as capability
 -- from the team it built: a HEALTHY mon whose species takes HM03.  The
 -- "taught ahead of time" half of the goal; a fainted swimmer carries
--- nobody, which is also the player's rule.
-function Bots.canSurf(record, data)
+-- nobody, which is also the player's rule.  FLY and CUT read the same
+-- way (BR-30): a bot teaches every HM its team can take, and the
+-- teaching itself is the fight build (BR:teachBotMoves).
+local function knowsHM(record, data, move)
   for _, m in ipairs(record or {}) do
     if (m.hpFrac or 0) > 0
-       and Bots.canLearn(data and data.pokemon and data.pokemon[m.species],
-                         "SURF") then
+       and Bots.canLearn(data and data.pokemon and data.pokemon[m.species], move) then
       return true
     end
   end
   return false
 end
 
--- Is this record hurt enough that a trainer would walk to a Centre?
--- Half a team's worth of damage, or anything fainted -- a player limps
--- in earlier than that, but a bot that healed every scratch would never
--- be caught wounded, and being caught wounded is half the drama.
-function Bots.wantsHeal(record)
-  local n, total = 0, 0
-  for _, m in ipairs(record or {}) do
-    if (m.hpFrac or 0) <= 0 then return true end
-    n = n + 1
-    total = total + m.hpFrac
+function Bots.canSurf(record, data) return knowsHM(record, data, "SURF") end
+function Bots.canFly(record, data) return knowsHM(record, data, "FLY") end
+function Bots.canCut(record, data) return knowsHM(record, data, "CUT") end
+
+-- the HMs a fight's movesets carry when the team can use them on the
+-- field: what a bot crosses the bay or the sky with, it can also throw
+Bots.HMS = { "SURF", "FLY" }
+
+-- ---------------------------------------------------------------- FLY (BR-30)
+--
+-- "If I have FLY, I use it to reach the ring's centre."  The one
+-- legitimate teleport: a bot with a FLY learner that is this far from the
+-- eye (squared town-map squares) flies to the fly town nearest it rather
+-- than walking three routes.  Also the way out of the fog, and the way
+-- to a nurse when the team is wrecked and nothing on this map serves.
+
+Bots.FLY_FAR = 9
+
+-- Which of `towns` to fly to: the one with the least `distOf`.  With
+-- `hereDist` given the flight has to be worth it -- here is at least
+-- FLY_FAR out and the town strictly closer -- so a bot a square off the
+-- eye walks the last stretch like anyone.  nil: stay on foot.
+function Bots.flyPick(towns, distOf, hereDist)
+  local best, bestD
+  for _, id in ipairs(towns or {}) do
+    local d = distOf and distOf(id)
+    if d and (not bestD or d < bestD) then best, bestD = id, d end
   end
+  if not best then return nil end
+  if hereDist ~= nil and (hereDist < Bots.FLY_FAR or bestD >= hereDist) then
+    return nil
+  end
+  return best
+end
+
+-- ---------------------------------------------------------------- COVERAGE (BR-30)
+--
+-- "If I don't have full type coverage, I swap POKeMON out for better
+-- coverage."  A full team used to refuse every catch and every ball on
+-- the ground.  Now a species that brings a type the team lacks replaces
+-- a member whose every type somebody else already carries -- a fainted
+-- one first, never the lead.  `typesOf(species)` is the caller's, so the
+-- read can be of the line as it stands at the rung.  Returns the record
+-- index to replace, or nil when the newcomer adds nothing or nobody is
+-- redundant.
+function Bots.coverageSwap(record, species, typesOf)
+  if not (record and species and typesOf) then return nil end
+  local have, rowTypes = {}, {}
+  for i, m in ipairs(record) do
+    rowTypes[i] = typesOf(m.species) or {}
+    for _, t in ipairs(rowTypes[i]) do have[t] = (have[t] or 0) + 1 end
+  end
+  local gains = false
+  for _, t in ipairs(typesOf(species) or {}) do
+    if not have[t] then gains = true end
+  end
+  if not gains then return nil end
+  local pick, pickFainted
+  for i = #record, 2, -1 do
+    local redundant = #rowTypes[i] > 0
+    for _, t in ipairs(rowTypes[i]) do
+      if (have[t] or 0) < 2 then redundant = false end
+    end
+    if redundant then
+      if (record[i].hpFrac or 0) <= 0 then
+        if not pickFainted then pick, pickFainted = i, true end
+      elseif not pick then
+        pick = i
+      end
+    end
+  end
+  return pick
+end
+
+-- Is this record hurt enough that a trainer would walk to a Centre?
+-- Half a team's worth of damage, anything fainted, or the LEAD at a
+-- sliver (BR-29: two bots each with one badly hurt mon in two averaged
+-- ABOVE the line and never considered the nurse a route away) -- a
+-- player limps in earlier than that, but a bot that healed every
+-- scratch would never be caught wounded, and being caught wounded is
+-- half the drama.
+--
+-- This is "is it hurt", not "should it stand down": a faint with no
+-- Centre in reach is a wound the bot can do nothing about, and the
+-- callers decide that (BR-29 -- a hurt bot with nowhere to heal still
+-- hunts).
+function Bots.wantsHeal(record)
+  local n, total, lead = 0, 0, nil
+  for _, m in ipairs(record or {}) do
+    local f = m.hpFrac or 0
+    if f <= 0 then return true end
+    if not lead then lead = f end
+    n = n + 1
+    total = total + f
+  end
+  if lead and lead <= Bots.LEAD_LOW then return true end
   return n > 0 and (total / n) <= 0.5
+end
+
+-- Anything in the bag a quaff could drink?
+function Bots.hasPotion(bag)
+  for _, it in ipairs((bag and bag.items) or {}) do
+    if Bots.POTION_HEAL[it.id] and (it.n or 0) >= 1 then return true end
+  end
+  return false
 end
 
 -- The catch a grass dwell earns: a species off the map's own grass table
 -- (data.encounters[map].grass.slots), the same table the player's
 -- encounters roll on.  nil when the team is full, the map has no grass
 -- table, or the roll misses -- a dwell is a hunt, not a vending machine.
-function Bots.rollCatch(record, cap, slots, rng)
+--
+-- A FULL team still catches (BR-30) when the caller hands `typesOf` and
+-- the catch improves the team's coverage: the redundant member goes
+-- (Bots.coverageSwap) and comes back as the second return, the row let
+-- go, for the caller to log or drop.
+function Bots.rollCatch(record, cap, slots, rng, typesOf)
   if not (record and slots and #slots > 0) then return nil end
-  if #record >= (cap or 1) then return nil end
+  local full = #record >= (cap or 1)
+  if full and not typesOf then return nil end
   if rng() >= Bots.CATCH_CHANCE then return nil end
   local pick = slots[rng(1, #slots)]
   if not (pick and pick.species) then return nil end
+  if full then
+    local i = Bots.coverageSwap(record, pick.species, typesOf)
+    if not i then return nil end
+    local old = record[i]
+    record[i] = { species = pick.species, hpFrac = 1 }
+    return pick.species, old
+  end
   record[#record + 1] = { species = pick.species, hpFrac = 1 }
   return pick.species
 end
@@ -1150,6 +1334,176 @@ function Bots.lootTM(seed, id)
   local rng = Spawn.rng((tonumber(seed) or 1) + (tonumber(id) or 0) * 104729)
   local pool = (rng(1, 4) == 1) and Bots.TM_PRIZE or Bots.TM_COMMON
   return pool[rng(1, #pool)]
+end
+
+-- ---------------------------------------------------------------- SEAMS (BR-32)
+--
+-- A bot used to leave a map by being dropped on a random cell of the
+-- next one, which a camera glued to it saw as a teleport.  Now it walks:
+-- the exit is an edge cell of THIS map, and the crossing lands where the
+-- engine lands a player stepping off that cell -- the neighbour strip's
+-- own cell.  The landing math is OverworldState:connectionLanding
+-- (destX = curX - offset*2); the engine then CLAMPS into the neighbour's
+-- bounds, and this deliberately does not -- Spawn.escapableSets learned
+-- that a clamped landing is a bump against the corner, not a crossing.
+
+-- the step that crosses each connection side
+Bots.SEAM_STEP = { north = "up", south = "down", west = "left", east = "right" }
+
+local function connMap(c)
+  return type(c) == "table" and (c.map or c.to or c[1]) or c
+end
+
+-- The side of `mapDef` whose connection is `dest`, or nil.
+function Bots.seamSide(mapDef, dest)
+  for side, c in pairs((mapDef and mapDef.connections) or {}) do
+    if connMap(c) == dest then return side end
+  end
+  return nil
+end
+
+-- Where a step off (x, y) over `side` lands: destMap, lx, ly.  nil when
+-- there is no such connection or the landing is off the neighbour.
+function Bots.seamLanding(maps, mapId, side, x, y)
+  local def = maps and maps[mapId]
+  local conn = def and def.connections and def.connections[side]
+  local destId = conn and connMap(conn)
+  local dest = destId and maps[destId]
+  if not (dest and dest.width and dest.height) then return nil end
+  local off = (type(conn) == "table" and tonumber(conn.offset) or 0) * 2
+  local dw, dh = dest.width * 2, dest.height * 2
+  local lx, ly
+  if side == "north" then lx, ly = x - off, dh - 1
+  elseif side == "south" then lx, ly = x - off, 0
+  elseif side == "west" then lx, ly = dw - 1, y - off
+  elseif side == "east" then lx, ly = 0, y - off
+  else return nil end
+  if lx < 0 or ly < 0 or lx >= dw or ly >= dh then return nil end
+  return destId, lx, ly
+end
+
+-- Every cell on this map's `side` edge a bot can cross from: the edge
+-- cell and its landing both pass `cross(mapId, x, y)` (nil: no filter).
+-- Rows are { x=, y=, lx=, ly=, dest= } in edge order.
+function Bots.seamCells(maps, mapId, side, cross)
+  local def = maps and maps[mapId]
+  local out = {}
+  if not (def and def.width and def.height
+          and def.connections and def.connections[side]) then return out end
+  local w, h = def.width * 2, def.height * 2
+  local function try(x, y)
+    if cross and not cross(mapId, x, y) then return end
+    local dest, lx, ly = Bots.seamLanding(maps, mapId, side, x, y)
+    if dest and (not cross or cross(dest, lx, ly)) then
+      out[#out + 1] = { x = x, y = y, lx = lx, ly = ly, dest = dest }
+    end
+  end
+  if side == "north" then for x = 0, w - 1 do try(x, 0) end
+  elseif side == "south" then for x = 0, w - 1 do try(x, h - 1) end
+  elseif side == "west" then for y = 0, h - 1 do try(0, y) end
+  elseif side == "east" then for y = 0, h - 1 do try(w - 1, y) end end
+  return out
+end
+
+-- ---------------------------------------------------------------- SIGHT (BR-34)
+
+-- Is there an unbroken line between two trainers?  Along a row or a
+-- column it is the sight line itself; on a diagonal either L-shaped walk
+-- must be clear, corner included -- a fence between them fails both.
+-- `blocked(x, y)` is the map's terrain, as Engage.sightLine takes it.
+function Bots.clearBetween(a, b, blocked)
+  if not (a and b) or a.map ~= b.map then return false end
+  local function open(x, y) return not (blocked and blocked(x, y)) end
+  local function run(x0, y0, x1, y1)   -- straight, both ends excluded
+    local dx = x1 > x0 and 1 or (x1 < x0 and -1 or 0)
+    local dy = y1 > y0 and 1 or (y1 < y0 and -1 or 0)
+    local x, y = x0 + dx, y0 + dy
+    while x ~= x1 or y ~= y1 do
+      if not open(x, y) then return false end
+      x, y = x + dx, y + dy
+    end
+    return true
+  end
+  if a.x == b.x or a.y == b.y then return run(a.x, a.y, b.x, b.y) end
+  if open(b.x, a.y) and run(a.x, a.y, b.x, a.y) and run(b.x, a.y, b.x, b.y) then
+    return true
+  end
+  return open(a.x, b.y) and run(a.x, a.y, a.x, b.y) and run(a.x, b.y, b.x, b.y)
+end
+
+-- The way to face to look at `to` from `from`; the bigger gap decides.
+function Bots.facingToward(from, to)
+  local dx, dy = to.x - from.x, to.y - from.y
+  if dx == 0 and dy == 0 then return nil end
+  if math.abs(dx) >= math.abs(dy) then return dx > 0 and "right" or "left" end
+  return dy > 0 and "down" or "up"
+end
+
+-- Orthogonally adjacent: the only way two trainers meet in Kanto.
+function Bots.adjacent(a, b)
+  return a and b and a.map == b.map
+     and (math.abs(a.x - b.x) + math.abs(a.y - b.y)) == 1
+end
+
+-- ---------------------------------------------------------------- THE CENTRE (BR-35)
+--
+-- A bot heals INSIDE the Centre now, the way a player does: through the
+-- door, up to the counter, and back out.  These read the interior off
+-- the map data, so the host can plan the visit for a map nobody is on.
+
+-- The cell a trainer stands on to talk to the nurse: the first walkable
+-- cell below her.  nil when the map has no nurse.
+function Bots.counterCell(maps, tilesets, interiorId)
+  local def = maps and maps[interiorId]
+  for _, o in ipairs((def and def.objects) or {}) do
+    if o.sprite == "SPRITE_NURSE" then
+      for dy = 1, 3 do
+        if Spawn.walkable(maps, tilesets, interiorId, o.x, o.y + dy) then
+          return { x = o.x, y = o.y + dy }
+        end
+      end
+    end
+  end
+  return nil
+end
+
+-- Where a door lets in: the target map and its warp cell (the mat).
+function Bots.warpIn(maps, warp)
+  local dest = warp and maps and maps[warp.destMap]
+  local dw = dest and dest.warps and dest.warps[warp.destWarp]
+  if not dw then return nil end
+  return warp.destMap, dw.x, dw.y
+end
+
+-- Where an interior's exit mat lets out (the engine's Warp.resolve):
+-- LAST_MAP is the outdoor map the bot came in from, and the landing is
+-- that map's warp named by the mat -- the door it walked in by, for
+-- every Centre in Kanto.  `came` is { id=, x=, y= }, the fallback cell.
+function Bots.warpOut(maps, interiorId, warpIndex, came)
+  local def = maps and maps[interiorId]
+  local w = def and def.warps and def.warps[warpIndex]
+  if not w then return nil end
+  local destId = w.destMap
+  if destId == "LAST_MAP" then
+    if not came then return nil end
+    destId = came.id
+    local dw = maps[destId] and maps[destId].warps and maps[destId].warps[w.destWarp]
+    if dw then return destId, dw.x, dw.y end
+    return destId, came.x, came.y
+  end
+  local dw = maps[destId] and maps[destId].warps and maps[destId].warps[w.destWarp]
+  if not dw then return nil end
+  return destId, dw.x, dw.y
+end
+
+-- The mat a bot leaves by: the first warp on the interior whose target is
+-- LAST_MAP (a Centre has two side by side; either works).
+function Bots.exitMat(maps, interiorId)
+  local def = maps and maps[interiorId]
+  for i, w in ipairs((def and def.warps) or {}) do
+    if w.destMap == "LAST_MAP" then return i, w end
+  end
+  return nil
 end
 
 return Bots

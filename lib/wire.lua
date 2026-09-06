@@ -314,7 +314,10 @@ function Wire.again() return { t = "again" } end
 function Wire.busy(kind, as) return { t = "busy", k = kind, as = as } end
 
 -- a spectator asks the trainer they watch what they carry (POK-18)...
-function Wire.peek() return { t = "peek" } end
+-- `id` names a BOT: a peek at a bot goes to the host, who runs its fights
+-- and answers with the bot's battle frames (lib/mirror.lua); the party
+-- and bag a bot carries are still derived locally
+function Wire.peek(id) return { t = "peek", id = id } end
 -- ...and is answered: party rows are { sp, lv, hp, mhp, st, mv } on the
 -- wire, the bag as item stacks plus money
 function Wire.state(state)
@@ -326,6 +329,16 @@ function Wire.state(state)
   return { t = "state", party = party, items = state and state.items or {},
            money = state and state.money or 0 }
 end
+
+-- The fight a spectator is shown, frame by frame (lib/mirror.lua).  `b`
+-- names the battle (so a log re-sent to a late watcher is not mistaken
+-- for a second fight), the frame carries its own sequence number `n`.
+-- Unicast to the trainer's actual watchers -- never broadcast, because
+-- nobody else in the room is looking at it -- and not a protocol bump: a
+-- peer that does not send these leaves its spectators with the mark over
+-- its head, which is what they had before.
+-- `as` tags a frame as a BOT's fight: only the host sends those.
+function Wire.mirror(b, frame, as) return { t = "bmir", b = b, m = frame, as = as } end
 
 -- ------- decoding
 --
@@ -610,7 +623,7 @@ decoders.busy = function(m)
   return { t = "busy", kind = m.k, as = actorOf(m) }
 end
 
-decoders.peek = function() return { t = "peek" } end
+decoders.peek = function(m) return { t = "peek", id = isId(m.id) and m.id or nil } end
 
 local function clampInt(v, lo, hi, default)
   if type(v) ~= "number" or v ~= v then return default end
@@ -658,6 +671,166 @@ decoders.state = function(m)
   if not items then return nil, "bad items" end
   return { t = "state", party = party, items = items,
            money = clampInt(m.money, 0, 999999, 0) }
+end
+
+-- A battle frame (lib/mirror.lua) is the most structured thing on this
+-- wire, and it is rebuilt into a live BattleState on the receiving end, so
+-- every field is typed here and everything unnamed is dropped.  A packed
+-- mon keeps only what Protocol.unpackMon reads, which recomputes the stats
+-- from the species -- a peer cannot invent a number the screen will show.
+local MIRROR_KINDS = { wild = true, trainer = true, link = true }
+local MIRROR_ACTS = { move = true, struggle = true, locked = true, switch = true,
+                      run = true, ball = true, item = true, replace = true,
+                      choice = true, link = true }
+local LINK_TYPES = { action = true, replace = true, bye = true, forfeit = true }
+local LINK_KINDS = { move = true, struggle = true, locked = true, switch = true, run = true }
+local MAX_TEXT = 96
+
+local function shortString(v, max)
+  if type(v) ~= "string" or v == "" or #v > (max or MAX_ID) then return nil end
+  return v
+end
+
+local function numberMap(v)
+  if type(v) ~= "table" then return nil end
+  local out = {}
+  for k, x in pairs(v) do
+    if type(k) == "string" and #k <= 16 and type(x) == "number" and x == x then out[k] = x end
+  end
+  return out
+end
+
+local function packedMon(p)
+  if type(p) ~= "table" or not shortString(p.species) then return nil end
+  local moves = {}
+  for j, mv in ipairs(type(p.moves) == "table" and p.moves or {}) do
+    if j > 4 then break end
+    if type(mv) == "table" and shortString(mv.id) then
+      moves[#moves + 1] = { id = mv.id, pp = clampInt(mv.pp, 0, 99, 0),
+                            ppUps = clampInt(mv.ppUps, 0, 3, 0) }
+    end
+  end
+  local extra
+  if type(p.extra) == "table" then
+    extra = {}
+    for k, x in pairs(p.extra) do
+      local tx = type(x)
+      if type(k) == "string" and #k <= 32
+         and (tx == "number" or tx == "boolean" or (tx == "string" and #x <= 64)) then
+        extra[k] = x
+      end
+    end
+  end
+  return {
+    species = p.species, level = clampInt(p.level, 1, 100, 5),
+    exp = clampInt(p.exp, 0, 9999999, 0), hp = clampInt(p.hp, 0, 999, 0),
+    status = shortString(p.status), nickname = shortString(p.nickname, 10),
+    dvs = numberMap(p.dvs), statExp = numberMap(p.statExp), moves = moves,
+    ot = shortString(p.ot, 10), otId = clampInt(p.otId, 0, 65535, nil),
+    extra = extra,
+  }
+end
+
+local function packedParty(rows)
+  if type(rows) ~= "table" then return nil end
+  local out = {}
+  for i, r in ipairs(rows) do
+    if i > 6 then break end
+    local mon = packedMon(r)
+    if not mon then return nil end
+    out[#out + 1] = mon
+  end
+  return out
+end
+
+local function stringList(v, max, each)
+  local out = {}
+  for i, s in ipairs(type(v) == "table" and v or {}) do
+    if i > max then break end
+    if type(s) == "string" and #s <= each then out[#out + 1] = s end
+  end
+  return out
+end
+
+local function hpPair(v)
+  if type(v) ~= "table" then return nil end
+  return { me = clampInt(v.me, 0, 999, nil), foe = clampInt(v.foe, 0, 999, nil) }
+end
+
+-- a trainer's AI layers: names of registered ai_classes records, or the
+-- numbers the vanilla three are keyed by (TrainerAI resolves n as LAYER_n).
+-- Dropping the numbers left a replica's trainer with no layers at all, and
+-- a layerless AI rolls a die where a layered one does not -- one roll
+-- apart, and the replica watched a different fight from there.
+local function layerList(v)
+  local out = {}
+  for i, x in ipairs(type(v) == "table" and v or {}) do
+    if i > 8 then break end
+    if type(x) == "string" and #x <= MAX_ID then out[#out + 1] = x
+    elseif type(x) == "number" and x == math.floor(x) and x >= 0 and x <= 99 then out[#out + 1] = x end
+  end
+  return out
+end
+
+decoders.bmir = function(m)
+  local b = shortString(m.b, 24)
+  local f = m.m
+  if not b or type(f) ~= "table" then return nil, "bad frame" end
+  local n = clampInt(f.n, 1, 100000, nil)
+  if not n then return nil, "bad frame number" end
+  local out = { n = n, k = f.k }
+  if f.k == "start" then
+    if not MIRROR_KINDS[f.kind] then return nil, "bad battle kind" end
+    local me, foe = packedParty(f.me), packedParty(f.foe)
+    if not (me and foe) then return nil, "bad party" end
+    out.kind, out.me, out.foe = f.kind, me, foe
+    out.seed = clampInt(f.seed, 1, 2147483646, 1)
+    out.myName = shortString(f.myName, 12)
+    out.foeName = shortString(f.foeName, 12)
+    out.hooked = f.hooked == true or nil
+    out.host = (f.host == "me" or f.host == "foe") and f.host or nil
+    out.badges = stringList(f.badges, 8, MAX_ID)
+    if type(f.trainer) == "table" then
+      out.trainer = { class = shortString(f.trainer.class), name = shortString(f.trainer.name, 12),
+                      aiClass = shortString(f.trainer.aiClass),
+                      aiMods = layerList(f.trainer.aiMods) }
+    end
+  elseif f.k == "end" then
+    out.result = shortString(f.result, 16)
+  elseif MIRROR_ACTS[f.k] then
+    out.hp = hpPair(f.hp)
+    out.rolls = clampInt(f.rolls, 0, 1e9, nil)
+    out.trace = shortString(f.trace, 400)
+    out.sig = shortString(f.sig, 300)
+    if f.k == "move" then
+      out.slot = clampInt(f.slot, 1, 4, nil)
+      if not out.slot then return nil, "bad move slot" end
+    elseif f.k == "switch" or f.k == "replace" then
+      out.index = clampInt(f.index, 1, 6, nil)
+      if not out.index then return nil, "bad party index" end
+    elseif f.k == "ball" then
+      out.item = shortString(f.item)
+      if not out.item then return nil, "bad ball" end
+    elseif f.k == "item" then
+      out.msgs = stringList(f.msgs, 6, MAX_TEXT)
+      if type(f.snap) == "table" then
+        out.snap = { hp = clampInt(f.snap.hp, 0, 999, nil), status = shortString(f.snap.status),
+                     stages = numberMap(f.snap.stages) }
+      end
+    elseif f.k == "choice" then
+      out.yes = f.yes == true
+    elseif f.k == "link" then
+      if f.side ~= "host" and f.side ~= "guest" then return nil, "bad side" end
+      local lm = f.m
+      if type(lm) ~= "table" or not LINK_TYPES[lm.type] then return nil, "bad lockstep message" end
+      out.side = f.side
+      out.m = { type = lm.type, kind = LINK_KINDS[lm.kind] and lm.kind or nil,
+                slot = clampInt(lm.slot, 1, 4, nil), index = clampInt(lm.index, 1, 6, nil) }
+    end
+  else
+    return nil, "bad frame kind"
+  end
+  return { t = "bmir", b = b, frame = out, as = isId(m.as) and m.as or nil }
 end
 
 -- The parade is drawn, never trusted: every field is clamped to what the
