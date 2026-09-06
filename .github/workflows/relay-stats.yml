@@ -38,24 +38,36 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: node tools/relay-stats.mjs
 
+      # The event lines behind the heartbeat: rooms, joins, drops, check-ins.
+      # Kept for good in events.json because Railway forgets them in weeks;
+      # play.json is what the page draws from them.
+      - name: read the play log
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_PROJECT_TOKEN: ${{ secrets.RAILWAY_PROJECT_TOKEN }}
+        run: node tools/play-log.mjs
+
       - name: commit if it moved
         id: commit
         run: |
-          if [ -z "$(git status --porcelain site/data/stats.json site/data/releases.json)" ]; then
+          if [ -z "$(git status --porcelain site/data/)" ]; then
             echo "nothing to commit"
             echo "moved=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           summary=$(node -e "
             const s = require('./site/data/stats.json');
-            let r = '';
+            let r = '', p = '';
             try { r = ' | ' + require('./site/data/releases.json').list.length + ' releases'; } catch (e) {}
-            process.stdout.write(\`\${s.conns} connected, \${s.rooms} rooms, \${s.statSolo ?? 0} solo\${r}\`);
+            try { const q = require('./site/data/play.json'); p = ' | ' + q.sessions.length + ' rooms logged'; } catch (e) {}
+            process.stdout.write(\`\${s.conns} connected, \${s.rooms} rooms, \${s.statSolo ?? 0} solo\${r}\${p}\`);
           ")
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add site/data/stats.json
-          if [ -f site/data/releases.json ]; then git add site/data/releases.json; fi
+          for f in site/data/releases.json site/data/events.json site/data/play.json; do
+            if [ -f "$f" ]; then git add "$f"; fi
+          done
           git commit -m "relay: $summary"
           git push
           echo "moved=true" >> "$GITHUB_OUTPUT"

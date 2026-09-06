@@ -149,11 +149,96 @@
   .err { border-left: 2px solid var(--ember); background: var(--panel);
          padding: 12px 14px; font-size: 13px; }
 
+
+  /* ---- play ---- */
+  .range { display: flex; gap: 4px; align-items: center; margin-left: auto; }
+  .range button {
+    font-family: var(--pixel); font-size: 9px; letter-spacing: .1em; text-transform: uppercase;
+    background: none; border: 1px solid var(--line); color: var(--dim);
+    padding: 5px 9px; cursor: pointer;
+  }
+  .range button[aria-pressed="true"] { color: var(--text); border-color: var(--dim); background: var(--panel); }
+  .band.play { margin-bottom: 8px; flex-wrap: wrap; }
+  .band.play::after { display: none; }
+  .band .zone { font-size: 10px; color: var(--dim); letter-spacing: .04em; white-space: nowrap; }
+
+  .readings.four { grid-template-columns: repeat(4, 1fr); margin-top: 22px; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 11px; color: var(--dim);
+            margin: 0 0 10px; }
+  .legend i { display: inline-block; width: 9px; height: 9px; margin-right: 6px; vertical-align: -1px;
+              border-radius: 1px; }
+  .legend .tbl { margin-left: auto; }
+  .legend button { background: none; border: 0; padding: 0; color: var(--ember); cursor: pointer;
+                   font: inherit; text-decoration: underline; text-underline-offset: 3px; }
+
+  .days { display: flex; align-items: flex-end; gap: 2px; height: 128px; }
+  .days.solo { height: 44px; margin-top: 10px; border-top: 1px solid var(--line); padding-top: 6px; }
+  .rowlab { font-family: var(--pixel); font-size: 8px; color: var(--dim); letter-spacing: .1em;
+            text-transform: uppercase; margin: 8px 0 -4px; }
+  .day { flex: 1 1 0; min-width: 0; position: relative; display: flex; flex-direction: column;
+         justify-content: flex-end; height: 100%; gap: 2px; }
+  .day i { display: block; width: 100%; border-radius: 1px; min-height: 2px; }
+  .day i.top { border-radius: 3px 3px 1px 1px; }
+  .day.zero i { background: var(--line); min-height: 2px; }
+  .day:hover i, .day:focus-within i { filter: brightness(1.25); }
+  .day button { position: absolute; inset: -4px 0 -78px 0; width: 100%; background: none; border: 0;
+                padding: 0; cursor: pointer; }
+  .days.solo .day { pointer-events: none; }
+  .q  { background: #e66767; }
+  .d  { background: #3987e5; }
+  .h  { background: #c98500; }
+  .s  { background: #199e70; }
+  .axis { display: flex; gap: 2px; margin-top: 8px; }
+  .axis span { flex: 1 1 0; min-width: 0; font-size: 10px; color: var(--dim); text-align: left;
+               white-space: nowrap; overflow: visible; }
+
+  .grid { display: grid; grid-template-columns: 28px repeat(24, 1fr); gap: 2px; }
+  .grid .lab { font-size: 10px; color: var(--dim); align-self: center; }
+  .grid .hr { font-size: 10px; color: var(--dim); text-align: left; grid-column: span 6; }
+  .cell { position: relative; aspect-ratio: 1 / 1; background: var(--panel); border-radius: 1px; }
+  .cell.v1 { background: #4a1a20; } .cell.v2 { background: #7a2130; }
+  .cell.v3 { background: #ac263c; } .cell.v4 { background: #d5273e; }
+  .cell.now { outline: 1px solid var(--dim); outline-offset: -1px; }
+  .cell button { position: absolute; inset: -2px; background: none; border: 0; cursor: pointer; }
+  .cell:hover, .cell:focus-within { filter: brightness(1.3); }
+
+  .scroll { overflow-x: auto; }
+  td.num + td.num, th.num + th.num { padding-left: 14px; }
+  td.ver { color: var(--dim); white-space: nowrap; font-size: 12px; padding-left: 14px; }
+  td.mode { font-family: var(--pixel); font-size: 10px; white-space: nowrap; }
+  td.mode i { display:inline-block; width:8px; height:8px; margin-right:7px; border-radius:1px; vertical-align:0; }
+  td.trainers { white-space: nowrap; }
+  td.trainers b { color: var(--text); font-weight: 600; }
+  td.trainers span { color: var(--dim); font-size: 12px; }
+  tr.live td { background: linear-gradient(90deg, rgba(213,39,62,.08), transparent); }
+  tr.live td.when::after { content: "live"; font-family: var(--pixel); font-size: 8px; color: var(--red);
+                           margin-left: 6px; letter-spacing: .1em; }
+  .more { margin-top: 10px; font-size: 12px; }
+  .more button { background: none; border: 0; padding: 0; color: var(--ember); cursor: pointer;
+                 font: inherit; text-decoration: underline; text-underline-offset: 3px; }
+
+  .versions { display: grid; grid-template-columns: max-content 1fr max-content; gap: 6px 12px;
+              align-items: center; font-size: 12px; }
+  .versions .v { font-family: var(--pixel); font-size: 10px; }
+  .versions .bar { height: 8px; background: var(--panel); border-radius: 1px; overflow: hidden; }
+  .versions .bar i { display: block; height: 100%; background: var(--red); border-radius: 1px; }
+  .versions .n { color: var(--dim); font-variant-numeric: tabular-nums; }
+  .note { font-size: 12px; color: var(--dim); margin: 12px 0 0; line-height: 1.5; }
+  .note b { color: var(--text); font-weight: 500; }
+  .daytable { margin-top: 12px; }
+
   @media (max-width: 560px) {
-    .readings { grid-template-columns: 1fr 1fr; row-gap: 26px; }
-    .reading:last-child { grid-column: 1 / -1; }
+    .readings, .readings.four { grid-template-columns: 1fr 1fr; row-gap: 26px; }
+    .readings:not(.four) .reading:last-child { grid-column: 1 / -1; }
+    .band.play .zone { order: 3; flex-basis: 100%; }
+    .range { margin-left: 0; }
     td.title { display: none; }
     .ladder { height: 96px; gap: 2px; }
+    .days { height: 96px; }
+    .grid { gap: 1px; }
+    td.ver { display: none; }
+    .reading dd { font-size: clamp(22px, 7vw, 34px); }
   }
   @media (prefers-reduced-motion: reduce) {
     * { animation: none !important; transition: none !important; }
@@ -187,6 +272,68 @@
       <span class="sub" id="playersub">relay not reporting yet</span>
     </div>
   </dl>
+
+
+  <div class="band play">
+    <h2>Play</h2>
+    <span class="zone" id="zone"></span>
+    <div class="range" id="range" role="group" aria-label="window">
+      <button type="button" data-days="7">7 days</button>
+      <button type="button" data-days="30" aria-pressed="true">30 days</button>
+      <button type="button" data-days="0">All</button>
+    </div>
+  </div>
+  <div id="playbox">
+    <dl class="readings four">
+      <div class="reading">
+        <dt>Matches</dt>
+        <dd id="pm" class="void">—</dd>
+        <span class="sub" id="pmsub">on the relay</span>
+      </div>
+      <div class="reading">
+        <dt>With others</dt>
+        <dd id="pt" class="void">—</dd>
+        <span class="sub" id="ptsub">matches with 2+ trainers</span>
+      </div>
+      <div class="reading">
+        <dt>Players</dt>
+        <dd id="pp" class="void">—</dd>
+        <span class="sub" id="ppsub">installs that checked in</span>
+      </div>
+      <div class="reading">
+        <dt>Solo</dt>
+        <dd id="ps" class="void">—</dd>
+        <span class="sub" id="pssub">bot matches, reported at check-in</span>
+      </div>
+    </dl>
+
+    <div class="band"><h2>By day</h2></div>
+    <div class="legend" id="legend">
+      <span><i class="q"></i>Quick play</span>
+      <span><i class="d"></i>Daily</span>
+      <span><i class="h"></i>Hosted</span>
+      <span><i class="s"></i>Solo reported</span>
+      <span class="tbl"><button type="button" id="daytoggle">table</button></span>
+    </div>
+    <div class="days" id="days"></div>
+    <div class="rowlab">Solo reported</div>
+    <div class="days solo" id="solodays"></div>
+    <div class="axis" id="dayaxis"></div>
+    <div class="readout idle" id="dayout">Pick a day to read it.</div>
+    <div class="daytable" id="daytable" hidden></div>
+
+    <div class="band"><h2>When they play</h2></div>
+    <div class="grid" id="heat"></div>
+    <div class="readout idle" id="heatout">Matches started, by weekday and hour, in your local time.</div>
+
+    <div class="band"><h2>Rooms</h2></div>
+    <div id="rooms"></div>
+    <p class="note" id="bounces"></p>
+
+    <div class="band"><h2>Installs</h2></div>
+    <div class="versions" id="versions"></div>
+    <p class="note" id="installnote"></p>
+  </div>
 
   <div class="band"><h2>Every release</h2></div>
   <div id="ladderbox">
@@ -353,6 +500,270 @@ async function relay() {
   } catch (e) {}
 }
 
+// ---- play --------------------------------------------------------------
+//
+// data/play.json is written by tools/play-log.mjs from the relay's own event
+// lines: one room per session, its mode from the host's message census, the
+// trainers who sat in it, and how many matches it locked. Solo matches are
+// counted on the player's machine and reported the next time they connect,
+// so a solo number lands on the day it was reported, not the day it was
+// played -- the tile says so.
+
+const MODE = { quick: ["q", "Quick play"], daily: ["d", "Daily"], host: ["h", "Hosted"] };
+let PLAY = null;
+let rangeDays = 30;
+let showAllRooms = false;
+
+const pad = n => (n < 10 ? "0" : "") + n;
+const dayKey = d => d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+const mins = secs => secs == null ? "" : secs < 60 ? secs + "s" : secs < 3600
+  ? Math.round(secs / 60) + " min" : (secs / 3600).toFixed(1) + " h";
+const hour = h => h === 0 ? "12am" : h === 12 ? "12pm" : h < 12 ? h + "am" : (h - 12) + "pm";
+const when = iso => {
+  const d = new Date(iso), now = new Date();
+  const sameYear = d.getFullYear() === now.getFullYear();
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: sameYear ? undefined : "numeric" })
+       + " " + clock(iso);
+};
+
+function inRange(iso, from) { return !from || new Date(iso) >= from; }
+
+function rangeFrom() {
+  if (!rangeDays) return null;
+  const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - (rangeDays - 1));
+  return d;
+}
+
+function median(xs) {
+  if (!xs.length) return null;
+  const s = xs.slice().sort((a, b) => a - b);
+  return s.length % 2 ? s[(s.length - 1) / 2] : Math.round((s[s.length / 2 - 1] + s[s.length / 2]) / 2);
+}
+
+function hoverable(btn, show) {
+  btn.addEventListener("mouseenter", show);
+  btn.addEventListener("focus", show);
+  btn.addEventListener("click", show);
+}
+
+function drawPlay() {
+  if (!PLAY) return;
+  const from = rangeFrom();
+  const sessions = PLAY.sessions.filter(s => inRange(s.at, from));
+  const solo = PLAY.solo.filter(x => inRange(x.t, from));
+  const bounces = PLAY.bounces.filter(x => inRange(x.t, from));
+  const label = rangeDays ? "in the last " + rangeDays + " days" : "since " + day(PLAY.from);
+
+  // -- tiles
+  const matches = sessions.reduce((n, s) => n + s.matches, 0);
+  const byMode = {};
+  sessions.forEach(s => { byMode[s.mode] = (byMode[s.mode] || 0) + s.matches; });
+  const together = sessions.filter(s => s.together >= 2);
+  const togetherMatches = together.reduce((n, s) => n + s.matches, 0);
+  const seen = new Set();
+  sessions.forEach(s => s.installs.forEach(i => seen.add(i)));
+  solo.forEach(x => seen.add(x.install));
+  const fresh = PLAY.installs.filter(i => seen.has(i.id) && inRange(i.first, from)).length;
+  const soloN = solo.reduce((n, x) => n + x.n, 0);
+  const soloWho = new Set(solo.map(x => x.install)).size;
+
+  const tile = (id, v) => { $(id).textContent = v; $(id).classList.toggle("void", !v); };
+  tile("pm", matches);
+  $("pmsub").textContent = matches
+    ? Object.keys(MODE).filter(m => byMode[m]).map(m => byMode[m] + " " + MODE[m][1].toLowerCase()).join(" · ")
+    : "no relay matches " + label;
+  tile("pt", togetherMatches);
+  $("ptsub").textContent = togetherMatches
+    ? "in " + together.length + " room" + (together.length === 1 ? "" : "s") + " of 2+ trainers"
+    : "every match " + label + " was one trainer and bots";
+  tile("pp", seen.size);
+  $("ppsub").textContent = seen.size
+    ? fresh + " first seen " + label
+    : "no check-ins " + label;
+  tile("ps", soloN);
+  $("pssub").textContent = soloN
+    ? "reported by " + soloWho + " install" + (soloWho === 1 ? "" : "s") + " · counted on the day reported"
+    : "no solo matches reported " + label;
+
+  // -- by day
+  const days = [];
+  const first = from || new Date(PLAY.from);
+  first.setHours(0, 0, 0, 0);
+  for (let d = new Date(first); d <= new Date(); d.setDate(d.getDate() + 1)) {
+    days.push({ key: dayKey(d), date: new Date(d), quick: 0, daily: 0, host: 0, solo: 0, together: 0 });
+  }
+  const byKey = Object.fromEntries(days.map(x => [x.key, x]));
+  sessions.forEach(s => {
+    const k = byKey[dayKey(new Date(s.at))];
+    if (!k) return;
+    k[s.mode] = (k[s.mode] || 0) + s.matches;
+    if (s.together >= 2) k.together += s.matches;
+  });
+  solo.forEach(x => { const k = byKey[dayKey(new Date(x.t))]; if (k) k.solo += x.n; });
+
+  const total = x => x.quick + x.daily + x.host + x.solo;
+  const relay = x => x.quick + x.daily + x.host;
+  const top = Math.max.apply(null, days.map(relay).concat([1]));
+  const soloTop = Math.max.apply(null, days.map(x => x.solo).concat([1]));
+  const box = $("days");
+  box.innerHTML = "";
+  const soloBox = $("solodays");
+  soloBox.innerHTML = "";
+  days.forEach(x => {
+    const scol = document.createElement("div");
+    scol.className = "day" + (x.solo ? "" : " zero");
+    const sbar = document.createElement("i");
+    if (x.solo) { sbar.className = "s top"; sbar.style.height = Math.max(3, (x.solo / soloTop) * 100) + "%"; }
+    scol.appendChild(sbar);
+    soloBox.appendChild(scol);
+
+    const col = document.createElement("div");
+    const t = relay(x);
+    col.className = "day" + (t ? "" : " zero");
+    const segs = [["q", x.quick], ["d", x.daily], ["h", x.host]].filter(p => p[1]);
+    if (!segs.length) {
+      col.appendChild(document.createElement("i"));
+    } else {
+      segs.forEach((p, i) => {
+        const bar = document.createElement("i");
+        bar.className = p[0] + (i === segs.length - 1 ? " top" : "");
+        bar.style.height = Math.max(3, (p[1] / top) * 100) + "%";
+        col.appendChild(bar);
+      });
+    }
+    const btn = document.createElement("button");
+    btn.type = "button";
+    const text = x.date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+    btn.setAttribute("aria-label", text + ": " + (total(x) ? t + " matches, " + x.solo + " solo reported" : "nothing"));
+    hoverable(btn, () => {
+      $("dayout").className = "readout";
+      $("dayout").innerHTML = '<span class="v">' + text + "</span> — " +
+        (total(x) ? [x.quick ? x.quick + " quick play" : "", x.daily ? x.daily + " daily" : "",
+              x.host ? x.host + " hosted" : "", x.solo ? x.solo + " solo reported" : ""]
+                .filter(Boolean).join(", ") +
+              (x.together ? ' <span class="n">· ' + x.together + " with others</span>" : "")
+           : '<span class="n">nothing on the relay</span>');
+    });
+    col.appendChild(btn);
+    box.appendChild(col);
+  });
+  // an axis label every few days, never more than about eight
+  const every = Math.max(1, Math.ceil(days.length / 8));
+  $("dayaxis").innerHTML = days.map((x, i) =>
+    "<span>" + (i % every === 0 ? x.date.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "") + "</span>").join("");
+
+  $("daytable").innerHTML =
+    "<div class=\"scroll\"><table><thead><tr><th>Day</th><th class=\"num\">Quick</th><th class=\"num\">Daily</th><th class=\"num\">Hosted</th><th class=\"num\">With others</th><th class=\"num\">Solo</th></tr></thead><tbody>" +
+    days.slice().reverse().filter(total).map(x =>
+      "<tr><td class=\"when\">" + x.date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }) + "</td>" +
+      ["quick", "daily", "host", "together", "solo"].map(k =>
+        '<td class="num ' + (x[k] ? "" : "zero") + '">' + x[k] + "</td>").join("") + "</tr>").join("") +
+    "</tbody></table></div>";
+
+  // -- when: weekday x hour, local, weighted by matches
+  const heat = Array.from({ length: 7 }, () => new Array(24).fill(0));
+  sessions.forEach(s => {
+    if (!s.matches) return;
+    const d = new Date(s.at);
+    heat[(d.getDay() + 6) % 7][d.getHours()] += s.matches;
+  });
+  const hot = Math.max.apply(null, heat.flat().concat([1]));
+  const now = new Date();
+  const names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  let g = "<span></span>" + [0, 6, 12, 18].map(h => '<span class="hr">' + hour(h) + "</span>").join("");
+  heat.forEach((row, wd) => {
+    g += '<span class="lab">' + names[wd] + "</span>";
+    row.forEach((v, h) => {
+      const step = !v ? 0 : Math.max(1, Math.ceil((v / hot) * 4));
+      const isNow = wd === (now.getDay() + 6) % 7 && h === now.getHours();
+      const text = names[wd] + " " + hour(h) + ": " + v + " match" + (v === 1 ? "" : "es");
+      g += '<span class="cell v' + step + (isNow ? " now" : "") + '"><button type="button" aria-label="' + text + '" data-t="' + text + '"></button></span>';
+    });
+  });
+  $("heat").innerHTML = g;
+  $("heat").querySelectorAll("button").forEach(b => {
+    hoverable(b, () => { $("heatout").className = "readout"; $("heatout").textContent = b.dataset.t; });
+  });
+
+  // -- rooms
+  const played = sessions.filter(s => s.matches > 0 || s.live || s.humans > 1);
+  const rows = showAllRooms ? played : played.slice(0, 25);
+  $("rooms").innerHTML = played.length
+    ? "<div class=\"scroll\"><table><thead><tr><th>When</th><th>Mode</th><th>Trainers</th><th class=\"num\">Matches</th><th class=\"num\">Length</th><th class=\"ver\">Version</th></tr></thead><tbody>" +
+      rows.map(s => {
+        const m = MODE[s.mode] || ["", s.mode];
+        const others = s.humans - 1;
+        return '<tr class="' + (s.live ? "live" : "") + '">' +
+          '<td class="when">' + when(s.at) + "</td>" +
+          '<td class="mode"><i class="' + m[0] + '"></i>' + m[1] + "</td>" +
+          '<td class="trainers"><b>' + s.humans + "</b>" +
+            (others ? " <span>· " + (s.together >= 2 ? s.together + " at once" : "one at a time") + "</span>" : " <span>· bots only</span>") +
+            (s.spectators ? " <span>· " + s.spectators + " watching</span>" : "") +
+            (s.migrated ? " <span>· host handed on</span>" : "") + "</td>" +
+          '<td class="num ' + (s.matches ? "" : "zero") + '">' + s.matches + "</td>" +
+          '<td class="num">' + (s.live ? "open" : mins(s.secs)) + "</td>" +
+          '<td class="ver">' + s.versions.map(v => "v" + v).join(", ") + "</td></tr>";
+      }).join("") + "</tbody></table></div>" +
+      (played.length > rows.length
+        ? '<div class="more"><button type="button" id="moreRooms">show all ' + played.length + " rooms</button></div>"
+        : "")
+    : '<p class="note">No rooms reached a match ' + label + ".</p>";
+  const more = $("moreRooms");
+  if (more) more.addEventListener("click", () => { showAllRooms = true; drawPlay(); });
+
+  const lobbyOnly = sessions.length - played.length;
+  const quickBounce = bounces.filter(b => b.tried === "quick").length;
+  const lengths = sessions.filter(s => s.matches > 0 && s.secs != null).map(s => s.secs);
+  $("bounces").innerHTML =
+    (lobbyOnly ? "<b>" + lobbyOnly + "</b> room" + (lobbyOnly === 1 ? "" : "s") + " opened and closed without a match. " : "") +
+    (quickBounce ? "<b>" + quickBounce + "</b> quick-play arrival" + (quickBounce === 1 ? "" : "s") + " found a match already running and left instead of watching. " : "") +
+    (lengths.length ? "A room that reached a match stayed open " + mins(median(lengths)) + " at the median." : "");
+
+  // -- installs: the version each was last seen on
+  const active = PLAY.installs.filter(i => seen.has(i.id));
+  const vers = {};
+  active.forEach(i => { vers[i.v] = (vers[i.v] || 0) + 1; });
+  const order = Object.keys(vers).sort((a, b) => cmp(semver(b), semver(a)));
+  const most = Math.max.apply(null, order.map(v => vers[v]).concat([1]));
+  $("versions").innerHTML = order.map(v =>
+    '<span class="v">v' + v + '</span><span class="bar"><i style="width:' + (vers[v] / most * 100) + '%"></i></span>' +
+    '<span class="n">' + vers[v] + "</span>").join("");
+  const latest = order[0];
+  const behind = active.filter(i => cmp(semver(i.v), semver(latest || "0")) < 0).length;
+  $("installnote").innerHTML = active.length
+    ? "<b>" + active.length + "</b> install" + (active.length === 1 ? "" : "s") + " checked in " + label +
+      (behind ? ", <b>" + behind + "</b> last seen on something older than v" + latest : "") +
+      ". An install is a random id minted on first launch, never a name; a player who only ever plays solo never checks in, so they are not here."
+    : "Nobody checked in " + label + ".";
+}
+
+async function play() {
+  try {
+    const r = await fetch("data/play.json", { cache: "no-cache" });
+    if (!r.ok) throw new Error("no data/play.json (" + r.status + ")");
+    PLAY = await r.json();
+    const off = -new Date().getTimezoneOffset() / 60;
+    $("zone").textContent = "local time, UTC" + (off >= 0 ? "+" : "") + off + " · read " + day(PLAY.readAt) + " " + clock(PLAY.readAt);
+    drawPlay();
+  } catch (e) {
+    $("playbox").innerHTML = '<div class="err">' + e.message + "</div>";
+  }
+}
+
+$("range").addEventListener("click", e => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  rangeDays = Number(b.dataset.days);
+  showAllRooms = false;
+  $("range").querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", x === b ? "true" : "false"));
+  drawPlay();
+});
+$("daytoggle").addEventListener("click", () => {
+  const t = $("daytable");
+  t.hidden = !t.hidden;
+  $("daytoggle").textContent = t.hidden ? "table" : "hide table";
+});
+
 function drawReleases(list) {
   const total = list.reduce((n, r) => n + r.dl, 0);
   $("dl").textContent = total;
@@ -366,6 +777,7 @@ function drawReleases(list) {
 (async () => {
   feed();
   relay();
+  play();
   let shown = null;
   try {
     shown = await baked();
