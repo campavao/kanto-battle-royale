@@ -125,35 +125,39 @@ Info on each game settings can be seen down in the Game lobby options section do
 
 ### Game lobby options
 
-- Code
-  - This is the code you'd share out with others for them to join your game
-- Player list
-  - Represented by a "-" and their name
-  - Example "- Red"
+The lobby is the room itself: everyone in it as their Sprite with their name, and the room code up top to share. The host gets an **OPTIONS** button, everyone else gets **LEAVE**. Press A on a trainer to see their card (name, wins) - the host can **REMOVE** them from there.
+
+- Fill
+  - Two options: ON or OFF
+  - If ON, bots take any empty seats when the match starts
+  - If OFF, the match is exactly who's in the room
+- Max
+  - How many can be in the room: 2, 4, 6, 8, 12, 16, 20, 26 or 30
+  - Nobody can join past it, so a game with friends stays a game with friends
+  - In Solo VS Bots it's how many bots you fight
+  - The relay seats 16 humans at most; the rest of the seats are bots
 - Open
-  - Two options: OFF (default) or ON
-  - If ON, allows players to join from Quick Play option
-- Bots
-  - Create a set amount of Bots
+  - Two options: NO (default) or YES
+  - If YES, allows players to join from Quick Play option
 - Fog
   - Control how long it takes before the Fog rolls in
 - Safari
   - Control how long the Safari intro is
-- Debug Log (for nerds)
-  - Enables debugging logs locally 
-- Send Stats
-  - Two options: ON (default) or OFF
-  - Counts how many matches get played — see "What gets sent" below
-- Fill To
-  - Set amount to fill with Bots (if players aren't available)
-- Trainers
-  - Non-interactive
-  - Shows the total count of Trainers that will be in the battle
+- Match Options
+  - Text: FAST, MEDIUM or SLOW
+  - Animation: ON or OFF
+  - What the host picks is what everyone in the match plays at, so nobody is a page behind in a fight
+  - Remembered between games - Revert To Default puts the game's own settings back (MEDIUM, ON)
+  - Debug: ON or OFF (for nerds) - turns on the deep log, and only on your machine
+  - Solo and hosted games only - Quick Play and the Daily Game always run at the defaults
 - Start Match
   - Starts the match!
   - When starting a game via "Quick Play" this kicks off automatically
+  - After a match it reads Play Again and runs the same room back
 - Leave
   - Back out of the menu
+
+Send Stats moved out of the lobby: it's in the gen1recomp launcher under Mods, in Battle Royale's options - see "What gets sent" below.
 
 ## What gets sent
 
@@ -172,7 +176,7 @@ Short version: how many matches get played, and nothing about you.
   - Solo stays offline, so playing with no wifi works like it always did
   - Only play solo? Nothing is counted until the first time you go online
 - **Don't want it?**
-  - `SEND STATS: OFF` in the lobby
+  - `SEND STATS: OFF` in the launcher, under Mods → Battle Royale's options
   - Off stops the counting as well as the sending
 
 You can see what it adds up to on the [live stats page](https://campavao.github.io/kanto-battle-royale/).
