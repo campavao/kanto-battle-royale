@@ -22,6 +22,14 @@
 //   room CODE closed (reason, no heir)
 //   drop NAME#ID [room CODE] (reason) after Ns | in quick_joinx1 host_roomx1 lock_roomx3 ...
 //   stat ID vVER | solo +N | since DATE
+//   match CODE started (quick|host|daily) | N trainers [M watching] | max K
+//   match CODE ended after Ns
+//
+// The two `match` lines are the exact record, written by relays deployed
+// from 2026-09-06 on. Before them a match left no trace but a lock_room
+// count on the host's drop line, and the census reading below is how those
+// older rooms are still read; a room that has match lines is read from
+// them and the census is ignored.
 //
 // The drop line's census is what names the mode. Quick play that finds an
 // open room sends quick_join and lands; quick play that finds nothing hosts
@@ -190,6 +198,13 @@ export function parseLine(message, fallbackAt) {
   if ((m = body.match(/^stat ([0-9a-f]{1,32}) v(\S+) \| solo \+(\d+) \| since (\S+)$/)))
     return { t, kind: "stat", install: hashId(m[1]), v: m[2], solo: Number(m[3]), since: m[4] };
 
+  if ((m = body.match(/^match ([A-Z0-9]+) started \((quick|host|daily)\) \| (\d+) trainers?(?: (\d+) watching)? \| max (\d+)$/)))
+    return { t, kind: "match", code: m[1], mode: m[2], trainers: Number(m[3]),
+             watching: Number(m[4] || 0), max: Number(m[5]) };
+
+  if ((m = body.match(/^match ([A-Z0-9]+) ended after (\d+)s$/)))
+    return { t, kind: "matchend", code: m[1], secs: Number(m[2]) };
+
   if ((m = body.match(/^room ([A-Z0-9]+) is now (open|private)$/)))
     return { t, kind: "door", code: m[1], door: m[2] };
 
@@ -233,7 +248,15 @@ export function derive(events) {
   // heir after a migration -- once at each start and once at each kept
   // end, so the room's matches come from the room's total, not a conn's.
   const settle = (s) => {
-    s.matches = Math.ceil(s.locks / 2);
+    if (s.played.length) {
+      // the relay said so: no guessing from the census
+      s.matches = s.played.length;
+      s.mode = s.played[0].mode;
+      s.together = Math.max(s.together, ...s.played.map(m => m.trainers));
+      s.exact = true;
+    } else {
+      s.matches = Math.ceil(s.locks / 2);
+    }
     if (s.mode === "open" || s.mode === "private") s.mode = s.door === "daily" ? "daily" : "host";
   };
   const finish = (s, at) => {
@@ -249,7 +272,7 @@ export function derive(events) {
                     door: ev.door, mode: ev.door === "daily" ? "daily" : ev.door,
                     humans: 1, together: 1, spectators: 0, matches: 0, locks: 0,
                     joins: [], versions: [], installs: [], members: new Map(),
-                    opener: ev.who };
+                    opener: ev.who, played: [] };
         s.members.set(ev.who, { spectator: false, in: true });
         rooms.set(ev.code, s);
         seat(ev.code, ev.who);
@@ -298,8 +321,8 @@ export function derive(events) {
           s.locks += ev.sent.lock_room || 0;
           // the room's opener names the mode; a promoted heir does not,
           // and neither does the fallback `settle` picked before this
-          // drop was logged
-          if (ev.who === s.opener) s.mode = modeOf(ev.sent, s.door);
+          // drop was logged.  A room with match lines already knows.
+          if (ev.who === s.opener && !s.played.length) s.mode = modeOf(ev.sent, s.door);
           if (s.end) settle(s);
         } else if (ev.who.endsWith("#-")) {
           // a connection gets its number on entering a room, so `#-` never
@@ -310,6 +333,20 @@ export function derive(events) {
                       : ev.sent.join_room ? "code" : null;
           if (tried) bounces.push({ t: ev.t, tried, secs: ev.secs });
         }
+        break;
+      }
+      case "match": {
+        const s = rooms.get(ev.code);
+        if (!s) break;
+        s.played.push({ t: ev.t, mode: ev.mode, trainers: ev.trainers,
+                        watching: ev.watching, secs: null });
+        break;
+      }
+      case "matchend": {
+        const s = rooms.get(ev.code);
+        if (!s) break;
+        const last = s.played[s.played.length - 1];
+        if (last && last.secs == null) last.secs = ev.secs;
         break;
       }
       case "close": {

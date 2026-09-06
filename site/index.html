@@ -487,7 +487,9 @@ async function relay() {
     // it covers rather than letting it read as a record.
     $("relaytext").textContent =
       "Peak " + (s.peakConns || 0) + " connected across " + (s.peakRooms || 0) +
-      " room" + (s.peakRooms === 1 ? "" : "s") + " since this deploy on " + day(s.deployedAt) + ".";
+      " room" + (s.peakRooms === 1 ? "" : "s") +
+      (s.matches != null ? ", " + s.matches + " match" + (s.matches === 1 ? "" : "es") + " started," : "") +
+      " since this deploy on " + day(s.deployedAt) + ".";
 
     const solo = s.statSolo == null ? null : s.statSolo;
     $("relayhint").innerHTML =

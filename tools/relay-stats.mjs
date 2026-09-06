@@ -127,6 +127,7 @@ function parse(message) {
     ...one(/rooms (\d+)\/(\d+)/, "rooms", "roomCap"),
     ...one(/conns (\d+)\/(\d+)/, "conns", "connCap"),
     ...one(/peak (\d+) rooms (\d+) conns/, "peakRooms", "peakConns"),
+    ...one(/matches (\d+)/, "matches"),
     ...one(/stats (\d+) \(solo (\d+)\)/, "statSeen", "statSolo"),
     ...one(/refused (\d+)/, "refused"),
     sent: sent ? sent[1] : null,
@@ -181,7 +182,7 @@ if (!line) {
   // noise. So the stored `at` is the last time these numbers were actually
   // true, which is the more useful reading anyway, and the page labels it
   // that way.
-  moved = !["rooms", "conns", "peakRooms", "peakConns", "statSeen", "statSolo", "lines"]
+  moved = !["rooms", "conns", "peakRooms", "peakConns", "statSeen", "statSolo", "lines", "matches"]
     .every(k => previous[k] === stats[k]);
   if (moved) {
     writeFileSync(OUT, JSON.stringify(stats, null, 2) + "\n");

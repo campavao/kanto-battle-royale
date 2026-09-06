@@ -28,7 +28,10 @@
 //                                      answered -- the client sends it on a
 //                                      connection it already had (POK-124).
 //   {type:"lock_room", locked}         host only: refuse new joiners (a match
-//                                      in progress)
+//                                      in progress).  Logged as one `match`
+//                                      line at the lock and one at the
+//                                      unlock -- the relay's only record of
+//                                      a match as a thing that happened
 //   {type:"kick", id}                  host only: remove a member and refuse
 //                                      their IP for the room's life (POK-130)
 //   {type:"leave_room"}
@@ -101,7 +104,8 @@ const NAME_MAX = 10;
 // Bytes actually written, so "what is this costing" has an answer that is not
 // a guess.  Egress is the line item that scales with players.
 const traffic = { bytesOut: 0, linesOut: 0, roomsOpened: 0, peakRooms: 0,
-                  peakConns: 0, rejected: 0, statSolo: 0, statSeen: 0 };
+                  peakConns: 0, rejected: 0, statSolo: 0, statSeen: 0,
+                  matches: 0 };
 
 export function stats() { return { ...traffic }; }
 
@@ -195,6 +199,13 @@ class Room {
     // how many may be in it: the host's MAX (the lobby's row), never more
     // than the relay's own member ceiling.  `full` past it.
     this.max = max;
+    // How the room came to be, for the match line: "quick" when its
+    // opener arrived by quick_join and found nothing, "daily" for the
+    // shared daily room, "host" for the lobby's HOST row.  Fixed at
+    // opening -- an heir after a migration inherits the room, not a mode.
+    this.mode = "host";
+    // when the current match locked the door, or null between matches
+    this.lockedAt = null;
     // IPs the host has removed (POK-130).  Per-room and in-memory, like
     // everything else here: a removal lasts as long as the room does.  IP
     // is the only identity a connection has -- coarse (a shared NAT goes
@@ -419,6 +430,7 @@ export function createRelay(options = {}) {
         conn.name = cleanName(msg.name);
         const room = new Room(makeCode(rooms), conn, limits.members);
         room.daily = true;
+        room.mode = "daily";
         room.open = true;   // discoverable for spectate; quick_join skips it
         rooms.set(room.code, room);
         room.add(conn);
@@ -441,6 +453,7 @@ export function createRelay(options = {}) {
         conn.name = cleanName(msg.name);
         const room = new Room(makeCode(rooms), conn, cleanMax(msg.max));
         room.open = msg.open === true;
+        if (conn.seen.get("quick_join")) room.mode = "quick";
         rooms.set(room.code, room);
         room.add(conn);
         traffic.roomsOpened += 1;
@@ -539,7 +552,29 @@ export function createRelay(options = {}) {
       case "lock_room": {
         const room = conn.room;
         if (!room || room.host !== conn) return;
+        const was = room.locked;
         room.locked = msg.locked !== false;
+        // The lock IS the match starting and the unlock IS it ending, and
+        // until this line the only trace either left was a lock_room count
+        // on the host's drop line -- from which "how many matches, with
+        // how many people" had to be inferred.  One line each way, with
+        // the room's mode and who was seated, so the record is exact.
+        if (room.locked && !was) {
+          let trainers = 0, watching = 0;
+          for (const m of room.members.values()) {
+            if (m.spectator) watching += 1; else trainers += 1;
+          }
+          room.lockedAt = Date.now();
+          traffic.matches += 1;
+          log(`match ${room.code} started (${room.mode})`
+              + ` | ${trainers} trainer${trainers === 1 ? "" : "s"}`
+              + (watching ? ` ${watching} watching` : "")
+              + ` | max ${room.max}`);
+        } else if (!room.locked && was && room.lockedAt) {
+          log(`match ${room.code} ended after`
+              + ` ${Math.round((Date.now() - room.lockedAt) / 1000)}s`);
+          room.lockedAt = null;
+        }
         // The door reopening seats the watchers (POK-133): a spectator is
         // a player of the NEXT match, and the unlock at match end is where
         // the next match's lobby begins.
@@ -720,6 +755,7 @@ export function createRelay(options = {}) {
     log(`rooms ${rooms.size}/${limits.rooms} conns ${conns.size}/${limits.conns}`
         + ` | sent ${human(traffic.bytesOut)} in ${traffic.linesOut} lines`
         + ` | peak ${traffic.peakRooms} rooms ${traffic.peakConns} conns`
+        + (traffic.matches ? ` | matches ${traffic.matches}` : "")
         + (traffic.statSeen
            ? ` | stats ${traffic.statSeen} (solo ${traffic.statSolo})` : "")
         + (traffic.rejected ? ` | refused ${traffic.rejected}` : ""));

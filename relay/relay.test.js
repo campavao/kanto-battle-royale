@@ -681,6 +681,90 @@ test("a spectator enters a locked room and is seated at the unlock", async () =>
   });
 });
 
+// ------- the match line: a lock is a match starting, an unlock is it ending
+
+async function withLoggedRelay(fn, limits) {
+  const lines = [];
+  const relay = createRelay({ limits, log: (l) => lines.push(l) });
+  const addr = await relay.listen(0, "127.0.0.1");
+  try {
+    await fn(addr.port, lines);
+  } finally {
+    await relay.close();
+  }
+}
+
+test("a lock logs the match with its mode and who was seated; the unlock logs the end", async () => {
+  await withLoggedRelay(async (port, lines) => {
+    const before = stats().matches;
+    // quick play that found nothing and hosted its own -- the room is "quick"
+    const host = await connect(port);
+    host.send({ type: "quick_join", name: "HOST" });
+    assert.equal((await host.next()).type, "no_open_rooms");
+    host.send({ type: "host_room", name: "HOST", open: true, max: 6 });
+    const code = (await host.until("room_hosted")).code;
+    const guest = await connect(port);
+    guest.send({ type: "join_room", code, name: "GUEST" });
+    await guest.until("room_joined");
+    host.send({ type: "lock_room", locked: true });
+    const watcher = await connect(port);
+    watcher.send({ type: "join_room", code, name: "LATE", spectate: true });
+    await watcher.until("room_joined");
+    await host.settled();
+
+    const started = lines.find((l) => l.startsWith(`match ${code} started`));
+    assert.equal(started, `match ${code} started (quick) | 2 trainers | max 6`,
+      "the watcher arrived after the lock and is not in the count");
+    assert.equal(stats().matches, before + 1);
+
+    // a second lock while locked is not a second match
+    host.send({ type: "lock_room", locked: true });
+    await host.settled();
+    assert.equal(lines.filter((l) => l.startsWith(`match ${code} started`)).length, 1);
+    assert.equal(stats().matches, before + 1);
+
+    host.send({ type: "lock_room", locked: false });
+    await host.settled();
+    const ended = lines.find((l) => l.startsWith(`match ${code} ended`));
+    assert.match(ended, new RegExp(`^match ${code} ended after \\d+s$`));
+
+    // an unlock with nothing running says nothing
+    host.send({ type: "lock_room", locked: false });
+    await host.settled();
+    assert.equal(lines.filter((l) => l.startsWith(`match ${code} ended`)).length, 1);
+
+    // the next match counts the seated watcher as a trainer
+    host.send({ type: "lock_room", locked: true });
+    await host.settled();
+    const again = lines.filter((l) => l.startsWith(`match ${code} started`));
+    assert.equal(again.length, 2);
+    assert.equal(again[1], `match ${code} started (quick) | 3 trainers | max 6`);
+
+    host.end(); guest.end(); watcher.end();
+  });
+});
+
+test("a room from the HOST row is a host match, and the daily is the daily", async () => {
+  await withLoggedRelay(async (port, lines) => {
+    const a = await connect(port);
+    a.send({ type: "host_room", name: "A" });
+    const code = (await a.until("room_hosted")).code;
+    a.send({ type: "lock_room", locked: true });
+    await a.settled();
+    assert.equal(lines.find((l) => l.startsWith(`match ${code}`)),
+      `match ${code} started (host) | 1 trainer | max 16`);
+
+    const d = await connect(port);
+    d.send({ type: "daily_join", name: "D" });
+    const daily = (await d.until("room_hosted")).code;
+    d.send({ type: "lock_room", locked: true });
+    await d.settled();
+    assert.equal(lines.find((l) => l.startsWith(`match ${daily}`)),
+      `match ${daily} started (daily) | 1 trainer | max 16`);
+    a.end(); d.end();
+  });
+});
+
 // ------- POK-161: the official game time, served not shipped
 
 test("info answers with the bounded motd and live counts", async () => {

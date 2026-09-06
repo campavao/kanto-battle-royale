@@ -47,6 +47,19 @@ const LINES = [
   "2026-09-06T00:38:55.076Z room 5YKZAM closed (host_gone, no heir)",
   // a room still open when the log was read
   "2026-09-06T13:50:01.391Z room ZZZZZZ hosted by CAM#1 (open)",
+  // a relay that writes match lines: the opener's census would say "host"
+  // and its locks would say two matches; the lines say quick and three,
+  // and they win
+  "2026-09-06T15:00:00.000Z room EXACT1 hosted by KIT#1 (open)",
+  "2026-09-06T15:00:30.000Z room EXACT1: FOX#2 joined",
+  "2026-09-06T15:01:00.000Z match EXACT1 started (quick) | 2 trainers | max 8",
+  "2026-09-06T15:09:00.000Z match EXACT1 ended after 480s",
+  "2026-09-06T15:09:20.000Z room EXACT1: OWL#3 spectates",
+  "2026-09-06T15:10:00.000Z match EXACT1 started (quick) | 3 trainers 1 watching | max 8",
+  "2026-09-06T15:14:00.000Z match EXACT1 ended after 240s",
+  "2026-09-06T15:15:00.000Z match EXACT1 started (quick) | 3 trainers | max 8",
+  "2026-09-06T15:20:00.000Z drop KIT#1 room EXACT1 (closed) after 1200s | in allx900 pingx240 lock_roomx3 host_roomx1 can_hostx1 statx1 | headroom 1195/1200",
+  "2026-09-06T15:20:00.001Z room EXACT1 closed (host_gone, no heir)",
 ];
 
 const events = LINES.map(l => parseLine(l, "2026-09-06T00:00:00.000Z")).filter(Boolean);
@@ -136,4 +149,25 @@ test("installs are counted across check-ins with their solo backlog", () => {
 test("sessions come newest first", () => {
   const at = play.sessions.map(s => s.at);
   assert.deepEqual(at, at.slice().sort().reverse());
+});
+
+test("the match lines are parsed whole", () => {
+  const start = parseLine("2026-09-06T15:10:00.000Z match EXACT1 started (quick) | 3 trainers 1 watching | max 8", "x");
+  assert.deepEqual(start, { t: "2026-09-06T15:10:00.000Z", kind: "match", code: "EXACT1",
+                            mode: "quick", trainers: 3, watching: 1, max: 8 });
+  const one = parseLine("2026-09-06T15:01:00.000Z match EXACT1 started (host) | 1 trainer | max 16", "x");
+  assert.equal(one.trainers, 1);
+  assert.equal(one.watching, 0);
+  const end = parseLine("2026-09-06T15:09:00.000Z match EXACT1 ended after 480s", "x");
+  assert.deepEqual(end, { t: "2026-09-06T15:09:00.000Z", kind: "matchend", code: "EXACT1", secs: 480 });
+});
+
+test("a room with match lines is read from them, not from the census", () => {
+  const s = room("EXACT1");
+  assert.equal(s.exact, true);
+  assert.equal(s.matches, 3, "three starts, whatever the lock count says");
+  assert.equal(s.mode, "quick", "the relay's word over the opener's census");
+  assert.equal(s.together, 3, "the widest match, spectators excluded");
+  assert.deepEqual(s.played.map(m => m.secs), [480, 240, null]);
+  assert.equal(s.played[1].watching, 1);
 });
