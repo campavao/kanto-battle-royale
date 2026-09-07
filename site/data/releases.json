@@ -1,17 +1,17 @@
 {
-  "readAt": "2026-09-07T04:33:57.348Z",
+  "readAt": "2026-09-07T19:18:16.763Z",
   "list": [
     {
       "tag": "v0.47.0",
       "name": "the host sets the pace",
       "at": "2026-09-06T01:48:30Z",
-      "dl": 31
+      "dl": 62
     },
     {
       "tag": "v0.46.1",
       "name": "USE returns to the bag, bots click their attacks",
       "at": "2026-09-06T00:25:09Z",
-      "dl": 2
+      "dl": 3
     },
     {
       "tag": "v0.46.0",
@@ -53,7 +53,7 @@
       "tag": "v0.40.0",
       "name": "the bots can win",
       "at": "2026-08-28T12:43:41Z",
-      "dl": 218
+      "dl": 233
     },
     {
       "tag": "v0.39.0",
