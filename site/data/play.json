@@ -1,7 +1,86 @@
 {
- "readAt": "2026-09-06T16:21:30.168Z",
+ "readAt": "2026-09-07T00:06:59.697Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "6VEYJS",
+   "at": "2026-09-06T23:45:43.723Z",
+   "end": null,
+   "secs": null,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.47.0"
+   ],
+   "installs": [
+    "a76f46c4"
+   ],
+   "played": [
+    {
+     "t": "2026-09-07T00:00:00.199Z",
+     "mode": "daily",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "live": true,
+   "exact": true
+  },
+  {
+   "code": "ACQDED",
+   "at": "2026-09-06T22:53:44.710Z",
+   "end": "2026-09-06T22:54:00.557Z",
+   "secs": 16,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.47.0"
+   ],
+   "installs": [
+    "0df3a942"
+   ],
+   "played": []
+  },
+  {
+   "code": "7CSHSM",
+   "at": "2026-09-06T22:48:23.248Z",
+   "end": "2026-09-06T22:52:48.294Z",
+   "secs": 265,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.47.0"
+   ],
+   "installs": [
+    "0df3a942"
+   ],
+   "played": [
+    {
+     "t": "2026-09-06T22:49:23.651Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "exact": true
+  },
   {
    "code": "PTX8WH",
    "at": "2026-09-06T13:46:07.248Z",
@@ -1628,16 +1707,17 @@
   {
    "id": "a76f46c4",
    "first": "2026-09-02T17:34:57.607Z",
-   "last": "2026-09-05T23:41:57.348Z",
+   "last": "2026-09-06T23:45:43.828Z",
    "since": "2026-08-27",
    "versions": [
     "0.43.0",
     "0.44.0",
-    "0.45.0"
+    "0.45.0",
+    "0.47.0"
    ],
-   "solo": 136,
-   "checkins": 16,
-   "v": "0.45.0"
+   "solo": 149,
+   "checkins": 17,
+   "v": "0.47.0"
   },
   {
    "id": "1fde7048",
@@ -1746,9 +1826,27 @@
    "solo": 0,
    "checkins": 4,
    "v": "0.47.0"
+  },
+  {
+   "id": "0df3a942",
+   "first": "2026-09-06T22:48:23.451Z",
+   "last": "2026-09-06T22:53:44.863Z",
+   "since": "2026-09-06",
+   "versions": [
+    "0.47.0"
+   ],
+   "solo": 0,
+   "checkins": 2,
+   "v": "0.47.0"
   }
  ],
  "solo": [
+  {
+   "t": "2026-09-06T23:45:43.828Z",
+   "install": "a76f46c4",
+   "n": 13,
+   "v": "0.47.0"
+  },
   {
    "t": "2026-09-05T23:41:57.348Z",
    "install": "a76f46c4",
