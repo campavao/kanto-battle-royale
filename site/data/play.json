@@ -1,12 +1,41 @@
 {
- "readAt": "2026-09-07T19:18:16.975Z",
+ "readAt": "2026-09-07T22:09:16.421Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
   {
+   "code": "WFJN65",
+   "at": "2026-09-07T19:18:17.707Z",
+   "end": "2026-09-07T19:24:05.037Z",
+   "secs": 347,
+   "door": "open",
+   "mode": "host",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.47.0"
+   ],
+   "installs": [
+    "479d66f1"
+   ],
+   "played": [
+    {
+     "t": "2026-09-07T19:18:25.004Z",
+     "mode": "host",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "exact": true
+  },
+  {
    "code": "S258BC",
    "at": "2026-09-07T19:14:01.532Z",
-   "end": null,
-   "secs": null,
+   "end": "2026-09-07T19:33:50.858Z",
+   "secs": 1189,
    "door": "open",
    "mode": "host",
    "humans": 1,
@@ -29,7 +58,6 @@
      "secs": null
     }
    ],
-   "live": true,
    "exact": true
   },
   {
@@ -2376,17 +2404,23 @@
   {
    "id": "479d66f1",
    "first": "2026-09-07T19:04:26.215Z",
-   "last": "2026-09-07T19:04:26.215Z",
+   "last": "2026-09-07T19:18:17.907Z",
    "since": "2026-09-07",
    "versions": [
     "0.47.0"
    ],
-   "solo": 0,
-   "checkins": 1,
+   "solo": 1,
+   "checkins": 2,
    "v": "0.47.0"
   }
  ],
  "solo": [
+  {
+   "t": "2026-09-07T19:18:17.907Z",
+   "install": "479d66f1",
+   "n": 1,
+   "v": "0.47.0"
+  },
   {
    "t": "2026-09-07T18:58:34.947Z",
    "install": "15ec816b",
