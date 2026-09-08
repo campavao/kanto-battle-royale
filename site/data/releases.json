@@ -1,11 +1,17 @@
 {
-  "readAt": "2026-09-08T00:22:09.165Z",
+  "readAt": "2026-09-08T04:55:58.687Z",
   "list": [
+    {
+      "tag": "v0.48.0",
+      "name": "the Marts climb with the fog, and bots that hop ledges",
+      "at": "2026-09-08T03:28:20Z",
+      "dl": 7
+    },
     {
       "tag": "v0.47.0",
       "name": "the host sets the pace",
       "at": "2026-09-06T01:48:30Z",
-      "dl": 80
+      "dl": 83
     },
     {
       "tag": "v0.46.1",
@@ -53,7 +59,7 @@
       "tag": "v0.40.0",
       "name": "the bots can win",
       "at": "2026-08-28T12:43:41Z",
-      "dl": 233
+      "dl": 242
     },
     {
       "tag": "v0.39.0",
