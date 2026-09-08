@@ -27,6 +27,9 @@ Flee.BASE = 64             -- x out of 256 at equal speed: one in four
 Flee.CAP = 160             -- the ceiling, however fast you are: five in eight
 Flee.RETRY = 20            -- each earlier attempt in this battle adds this
 Flee.CEILING = 240         -- retries never make an escape certain
+-- the third line rides a \v scroll: three \n in a two-line box drop it
+-- (the engine's own _NoRunningText lesson, BattleState:tryRun)
+Flee.NO_DOLL_TEXT = "No POKe DOLL left!\nThere's no other\vway to run!"
 Flee.GRACE_SECONDS = 4     -- neither of the pair engages the other
 Flee.LOCKOUT_SECONDS = 30  -- the runner does not initiate on who they fled from
 
@@ -50,6 +53,27 @@ function Flee.roll(pSpd, eSpd, attempts, prior, rng)
   return rng(0, 255) <= Flee.chance(pSpd, eSpd, attempts, prior)
 end
 
+-- Spend one POKe DOLL from the bag.  True when there was one to spend.
+function Flee.spendDoll(save)
+  local inv = save and save.inventory
+  if not (inv and (inv.POKE_DOLL or 0) > 0) then return false end
+  inv.POKE_DOLL = inv.POKE_DOLL - 1
+  if inv.POKE_DOLL <= 0 then inv.POKE_DOLL = nil end
+  save.bagOrder = nil            -- rebuilt from the inventory on the next open
+  return true
+end
+
+-- The escape a POKe DOLL buys from a battle the engine would not let you
+-- run from: the fields BagMenu's own consumed_escape branch sets for a
+-- wild one.  pokeDollEscape is the engine's flag for "this run was a
+-- doll", so anything reading the result afterwards can tell.
+function Flee.escape(battle)
+  battle.pokeDollEscape = true
+  battle.result = "run"
+  battle.afterQueue = "finish"
+  battle.phase = "messages"
+end
+
 -- Wrap a lockstep battle's tryRun (an instance field on LinkBattle) so a
 -- run action is only submitted when the roll -- or a POKe DOLL -- says so.
 --   ctx = { save = <save>, prior = <earlier escapes from this pursuer>,
@@ -61,12 +85,7 @@ function Flee.wrap(battle, ctx)
   ctx = ctx or {}
   local attempts = 0
   battle.tryRun = function(s)
-    local save = ctx.save
-    local inv = save and save.inventory
-    if inv and (inv.POKE_DOLL or 0) > 0 then
-      inv.POKE_DOLL = inv.POKE_DOLL - 1
-      if inv.POKE_DOLL <= 0 then inv.POKE_DOLL = nil end
-      save.bagOrder = nil            -- rebuilt from the inventory on the next open
+    if Flee.spendDoll(ctx.save) then
       if ctx.onFlee then ctx.onFlee("doll") end
       return base(s)
     end
@@ -85,6 +104,37 @@ function Flee.wrap(battle, ctx)
     s.phase = "messages"
     s.afterQueue = "menu"
     return false
+  end
+  return true
+end
+
+-- The bot-fight wrap (POK-194).  A fight against a bot is an engine
+-- trainer battle, and BattleState:tryRun refuses one ("No! There's no
+-- running from a trainer battle!") before any roll -- so no roll: a POKe
+-- DOLL is the one way out, spent, and without one RUN is the engine's
+-- own refusal.  The bag's doll lands here too: using it in a bot fight
+-- closes the bag and calls tryRun, so the two are one path.
+--   ctx = { save = <save>, text = <the escape line>, onFlee = function(how) end }
+-- Returns true when the battle was wrappable.
+function Flee.wrapTrainer(battle, ctx)
+  local base = battle and battle.tryRun
+  if type(base) ~= "function" then return false end
+  ctx = ctx or {}
+  battle.tryRun = function(s)
+    if not Flee.spendDoll(ctx.save) then
+      -- the engine's line is "No! There's no running from a trainer
+      -- battle!", which is true and useless here: the player has a way
+      -- out and is short of it (the user, 2026-09-08)
+      if not s.say then return base(s) end
+      s.phase = "messages"
+      s.afterQueue = "menu"
+      s:say(ctx.noDoll or Flee.NO_DOLL_TEXT)
+      return false
+    end
+    if s.say then s:say(ctx.text or "Got away safely!") end
+    Flee.escape(s)
+    if ctx.onFlee then ctx.onFlee("doll") end
+    return true
   end
   return true
 end

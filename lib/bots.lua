@@ -39,6 +39,20 @@ function Bots.nextCount(n)
   return 0
 end
 
+-- A match needs somebody to beat (POK-197).  The winner check fires when
+-- the living fall TO one, so a roster that opens at one never sees the
+-- transition and sits at "1 LEFT" until the fog eats the last party: a
+-- hosted room with FILL: OFF and no guests, or a solo room with BOTS: 0.
+-- Every start entry asks this first, in humans (watchers excluded) and
+-- bots, and shows the reason when it says no.
+Bots.MIN_TRAINERS = 2
+
+function Bots.canStart(humans, bots)
+  local n = (tonumber(humans) or 0) + (tonumber(bots) or 0)
+  if n >= Bots.MIN_TRAINERS then return true end
+  return false, ("Need at least\n%d trainers\nto start."):format(Bots.MIN_TRAINERS)
+end
+
 -- The same idea counted in whole trainers rather than bots, for the FILL TO
 -- row: a target for the roster that bots make up the shortfall in.  Zero is
 -- off, and one is pointless (a match of one is already over), so the ladder
@@ -356,6 +370,13 @@ end
 
 -- After a fight, both sides get a breather before another one, so a crowded
 -- map does not resolve its whole roster in a couple of ticks.
+-- A shot clock on the FIGHT menu of a bot fight (the user, 2026-09-08):
+-- the bot always picks; the player who does not pick in time is not
+-- penalised beyond the turn -- their mon does nothing while the bot's
+-- moves, and the menu comes back with a fresh clock.  The PvP clock
+-- (PVP_TURN_SECONDS) forfeits; this one only spends the turn.
+Bots.TURN_SECONDS = 30
+
 Bots.FIGHT_COOLDOWN = 12
 
 -- ...and so does the PLAYER (POK-174).  Bots stalking a trainer who is

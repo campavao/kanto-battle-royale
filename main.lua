@@ -124,13 +124,18 @@ local BOT_LOOT = { items = { { id = "POKE_BALL", n = 2 }, { id = "POTION", n = 1
 -- The starting loadout, all in one place (docs/DESIGN.md D7).
 local START_SPECIES = "RATTATA"
 local START_LEVEL = 5
--- TOWN_MAP: the fog ring draws on the TownMap screen, so the map is match
--- equipment, not a collectible (POK-39)
+-- No TOWN_MAP (POK-196): the fog ring draws on the TownMap screen, which
+-- made the map match equipment (POK-39) -- but the start menu's own MAP
+-- row (POK-100) is that screen without the item, and its FLY row is what
+-- the bag's map used to be for.  One map, not two.
 -- SECRET_KEY rides along (POK-69): BLAINE's door is `blocked = not
 -- inventory.SECRET_KEY`, and the mansion crawl for it has no place in a
 -- twenty-minute match when the gym is a POK-26 objective.
-local START_ITEMS = { POKE_BALL = 6, POTION = 1, TOWN_MAP = 1, SECRET_KEY = 1,
-                      [Rods.FIRST] = 1 }
+-- POKE_DOLL (POK-194): the one way out of a fight in a pinch.  RUN or the
+-- bag spends it -- in a PvP battle a guaranteed escape, in a bot fight the
+-- only escape there is -- and everyone starts with exactly one.
+local START_ITEMS = { POKE_BALL = 6, POTION = 1, SECRET_KEY = 1,
+                      POKE_DOLL = 1, [Rods.FIRST] = 1 }
 local START_MONEY = 3000
 
 -- Every badge and every HM, from the drop.
@@ -381,6 +386,7 @@ return function(mod)
     lastOpponent = nil,
     fledFrom = {},        -- opponent id -> how often we ran from them (POK-24)
     fleeGrace = {},       -- opponent id -> clock until neither of us engages
+    fledMark = {},        -- trainer id -> clock: they RAN from us, the shoe rides the grace
     fleeLockout = {},     -- opponent id -> clock until we may initiate on them
     fleeing = nil,        -- who we are running from, while the battle unwinds
     peeked = nil,         -- what the trainer we watch carries, as last answered (POK-18)
@@ -881,6 +887,21 @@ return function(mod)
     return math.max(0, math.min(want, Bots.MAX))
   end
 
+  -- the humans who will fight: every member who is not a watcher
+  function BR:trainerCount()
+    local n = 0
+    for _, m in ipairs((self.relay and self.relay.members) or {}) do
+      if not m.spectate then n = n + 1 end
+    end
+    return n
+  end
+
+  -- Whether a start would open a match anyone could win (POK-197): the
+  -- roster startMatch is about to build, counted before it is built.
+  function BR:canStart()
+    return Bots.canStart(self:trainerCount(), self:botsAtStart())
+  end
+
   function BR:setFill(n)
     self.fillTo = math.max(0, math.min(Bots.MAX + 1, math.floor(tonumber(n) or 0)))
     -- a number set is a number remembered: FILL: OFF then ON comes back
@@ -1131,6 +1152,10 @@ return function(mod)
     local relay = self.relay
     if not (relay and relay:isHost() and relay:isOpen()) then return false end
     if self.phase ~= "lobby" or self.autoStartAt then return false end
+    -- a countdown to a start that would be refused is a countdown to a
+    -- text box (POK-197): say it now, and arm nothing
+    local can, why = self:canStart()
+    if not can then say(why) return false, why end
     self.autoStartAt = love.timer.getTime() + QUICK_START_SECONDS
     log:say("ready: the next match starts in %ds", QUICK_START_SECONDS)
     return true
@@ -1362,11 +1387,17 @@ return function(mod)
         self.game and self.game.data, self.shopPrices)
       self.shopPrices = nil
     end
+    -- ...and the Safari's item balls their ROM contents (POK-195)
+    if self.safariLoot then
+      Safari.restore(self.safariLoot.slots, self.safariLoot.orig)
+      self.safariLoot = nil
+    end
     -- ...and this player's own TEXT SPEED and BATTLE ANIMATION (POK-186),
     -- here for the same reason as the TMs: every exit comes through
     self:restorePace()
     self.lastOpponent = nil
     self.fledFrom, self.fleeGrace, self.fleeLockout, self.fleeing = {}, {}, {}, nil
+    self.fledMark, self.myFledUntil = {}, nil
     self.peeked, self.lastPeekAt = nil, nil
     self:stopRecording("reset")
     self:closeMirror("reset")
@@ -1638,6 +1669,14 @@ return function(mod)
     -- started the next match on the same frame.  "The room just went
     -- again": no result read, no party checked, no way out.
     self.autoStartAt = nil
+    -- Nobody to beat is no match (POK-197): the START row, the countdown
+    -- and the drivers' start all land here, so the one refusal covers
+    -- every entry, and says why rather than doing nothing.
+    local can, why = self:canStart()
+    if not can then
+      say(why)
+      return false, why
+    end
     -- A solo match is the one nothing else can see: it runs on a LocalRoom
     -- and never opens a socket (POK-124).  This is a counter bump and a
     -- local file write -- deliberately NOT a connection, because
@@ -1684,6 +1723,7 @@ return function(mod)
     relay:broadcast(Wire.start(seed, spawns, safari, self:fogSeconds(), pace))
     self:onStart({ seed = seed, spawns = spawns, safari = safari,
                    fog = self:fogSeconds(), pace = pace })
+    return true
   end
 
   function BR:onStart(msg)
@@ -1747,6 +1787,9 @@ return function(mod)
     -- rather than sent, so the draft is the same for everyone (POK-118)
     self.safariPool, self.safariTheme = Safari.pool(msg.seed, self.game and self.game.data)
     log:say("the zone today: %s", Safari.describe(self.safariPool, self.safariTheme))
+    -- ...and its item balls (POK-195), written over the shared map data
+    -- now so any entry finds them; resetMatch puts the ROM's back
+    self:dealSafariLoot(msg.seed)
     log:match(self.relay and self.relay.code, msg.seed)
     self.players = {}
     for _, s in ipairs(msg.spawns) do
@@ -4105,6 +4148,25 @@ return function(mod)
   -- phase that earned it.
   function BR:catching()
     return self.phase == "safari" or self.phase == "drop"
+  end
+
+  -- Whether the start menu's FLY row can do anything (POK-196): the
+  -- party menu's own two gates -- FLY known, the sky reachable (an
+  -- outside map) -- plus alive, in a session, and not the Safari
+  -- opening, which is played on one map by design.
+  function BR:canFly()
+    if not (self:inSession() and self.status == "alive") or self:catching() then
+      return false
+    end
+    local ow = mod.world:overworld()
+    local okM, Map = pcall(require, "src.world.Map")
+    local okF, FieldDefaults = pcall(require, "src.world.FieldDefaults")
+    if not (ow and ow.map and ow.map.def and okM and okF and self.game) then
+      return false
+    end
+    return ow:partyKnows("FLY")
+       and Map.isOutside(ow.map.def,
+                         FieldDefaults.field(self.game.data, "outsideTilesets")) == true
   end
 
   -- inRound() is the RULES window -- levels, bag, encounters.  This is the
@@ -7033,6 +7095,55 @@ return function(mod)
     end
   end
 
+  -- The bot fight's shot clock (Bots.TURN_SECONDS).  Wrapped on the
+  -- instance the way LinkBattle wraps its own tournament clock: while
+  -- the FIGHT menu is the player's, a count runs top-right; at zero the
+  -- turn is spent the way a used item spends it (BattleState:itemUsed) --
+  -- the player's mon does nothing, the bot's move runs, residuals tick,
+  -- the turn ends -- and the menu returns with a fresh clock.  Never a
+  -- forfeit: a bot never idles, so the clock is only ever the player's.
+  local function armBotClock(battle)
+    if not battle or battle.brClock then return end
+    local baseUpdate, baseDraw = battle.update, battle.draw
+    if type(baseUpdate) ~= "function" or type(baseDraw) ~= "function" then return end
+    battle.brClock = true
+    battle.update = function(s, dt)
+      if s.phase == "menu" and not s.result then
+        if not s.turnClockActive then
+          s.turnClockActive = true
+          s.turnClock = Bots.TURN_SECONDS
+        end
+        s.turnClock = s.turnClock - (tonumber(dt) or 0)
+        if s.turnClock <= 0 then
+          s.turnClockActive = false
+          s.phase = "messages"
+          s.afterQueue = "menu"
+          s:say(("Time's up!\n%s did\nnothing!"):format(
+            (s.player and s.player.name) or "Your POKeMON"))
+          s:act(function()
+            s:executeAction(s.enemy, s.player, s:enemyAction())
+          end)
+          s:queueResidual(s.player, s.enemy)
+          s:act(function() s:endOfTurn() end)
+          return
+        end
+      else
+        s.turnClockActive = false
+      end
+      return baseUpdate(s, dt)
+    end
+    battle.draw = function(s, ...)
+      baseDraw(s, ...)
+      if s.phase == "menu" and s.turnClockActive and s.turnClock then
+        pcall(function()
+          love.graphics.setColor(1, 1, 1, 1)
+          require("src.render.Font").draw(
+            tostring(math.max(0, math.ceil(s.turnClock))), 144, 4)
+        end)
+      end
+    end
+  end
+
   function BR:startBotBattle(botId)
     -- POK-145: asked HERE, at the moment the fight opens, and not at the
     -- moment the walk-up that leads to it was armed.
@@ -7103,6 +7214,23 @@ return function(mod)
     -- seen dropping.  Same clamp a duel's party gets (clampToRecord);
     -- the battle.started pass below is idempotent and stays as the net.
     clampToRecord(battle.enemyParty, idx, rec)
+    -- ...and the BAR the intro draws (the user, 2026-09-08: still a full
+    -- bar that dropped at the first turn).  newTrainer builds the enemy
+    -- battler before this clamp, and the battler carries its own shownHP
+    -- and shownPx -- the drain animation's start -- copied from the mon
+    -- at full.  So the mon opened wounded and the bar opened full, then
+    -- drained to it on the first HUD update.  Resync the battler to the
+    -- mon it wraps.
+    local lead = battle.enemy
+    if lead and lead.mon and lead.mon.hp then
+      lead.shownHP = lead.mon.hp
+      pcall(function()
+        local Timing = require("src.core.Timing")
+        lead.shownPx = Timing.hpBarPixels(lead.mon.hp,
+                                          math.max(1, (lead.mon.stats and lead.mon.stats.hp) or 1))
+      end)
+    end
+    armBotClock(battle)
     battle.onFinish = function(result) ow:afterBattle(result, battle) end
     ow:pushBattle(battle)
   end
@@ -7418,6 +7546,84 @@ return function(mod)
     BR.npcFight = { map = here.mapId, obj = obj, x = npc.cellX, y = npc.cellY }
   end)
 
+  -- The Safari's item balls, drawn from the match seed (POK-195): the
+  -- same on every client, different every match, and valuable.  The
+  -- engine reads a ball's contents off the map object at pickup, so the
+  -- draw is written over the shared map data here and the ROM's put back
+  -- in resetMatch, the same restore-on-every-exit rule as the machines
+  -- and the shop prices.  A second call in one match restores first.
+  function BR:dealSafariLoot(seed)
+    local data = self.game and self.game.data
+    if not (data and data.maps) then return end
+    if self.safariLoot then
+      Safari.restore(self.safariLoot.slots, self.safariLoot.orig)
+      self.safariLoot = nil
+    end
+    local slots = Safari.slots(data.maps, data.field)
+    if #slots == 0 then return end
+    local loot = Safari.loot(seed, data, #slots)
+    local orig = Safari.apply(slots, loot)
+    self.safariLoot = { slots = slots, orig = orig, loot = loot }
+    local names = {}
+    for i, s in ipairs(slots) do
+      names[#names + 1] = ("%s:%s=%s"):format(
+        (s.map:gsub("^SAFARI_ZONE_", "")), s.index or (s.x .. "," .. s.y), tostring(loot[i]))
+    end
+    log:say("the zone's balls: %s", table.concat(names, " "))
+  end
+
+  -- The boot in a bubble (the runner's mark), the mod's own art, loaded
+  -- once; a failure caches as false so nothing retries every frame.
+  function BR:shoeImage()
+    if self.shoeImg == nil then
+      local okS, shoe = pcall(love.graphics.newImage,
+                              "mods/battle_royale/assets/shoe.png")
+      self.shoeImg = (okS and shoe) or false
+    end
+    return self.shoeImg or nil
+  end
+
+  -- The reward chain a boss win runs (POK-193), cut on THIS overworld
+  -- instance for the session: checkVictoryRewards pushes the badge pages
+  -- when the battle did not show them and the TM hand-over pages either
+  -- way, and neither describes anything a match player gets.  The flags
+  -- still land -- the leader's beaten event, the deactivated underlings,
+  -- the hidden objects, the badge -- because the base scripts key on
+  -- them; the vanilla TM is skipped (the match's own prize TM and purse
+  -- come from the battle.ended handler).  Outside a session, or for any
+  -- trainer who is not a boss, the engine's own runs.  Idempotent: the
+  -- instance is wrapped once and asks BR:inSession() at call time.
+  function BR:cutVictoryRewards(ow)
+    if not ow or ow.brVictoryCut then return end
+    local base = ow.checkVictoryRewards
+    if type(base) ~= "function" then return end
+    ow.brVictoryCut = true
+    ow.checkVictoryRewards = function(self_, trainerClass, partyIndex, shown)
+      if not (BR:inSession() and Gyms.boss(trainerClass)) then
+        return base(self_, trainerClass, partyIndex, shown)
+      end
+      local game = BR.game
+      local okV, victories = pcall(require, "data.scripts.victories")
+      local reward = okV and victories[trainerClass .. "#" .. tostring(partyIndex or 1)]
+      if reward and game and game.save then
+        local save = game.save
+        if reward.flag then save.flags[reward.flag] = true end
+        for _, flag in ipairs(reward.deactivate or {}) do save.flags[flag] = true end
+        if reward.hide then
+          pcall(function()
+            local Commands = require("src.script.Commands")
+            local ctx = { game = game, save = save, overworld = self_ }
+            for _, entry in ipairs(reward.hide) do
+              Commands.hide_object(ctx, entry[1], entry[2])
+            end
+          end)
+        end
+        if reward.badge then save.inventory[reward.badge] = 1 end
+      end
+      if self_.runVictoryHook then return self_:runVictoryHook() end
+    end
+  end
+
   function BR:npcDefeated(npc, party)
     local data = self.game and self.game.data
     if not data then return end
@@ -7478,6 +7684,30 @@ return function(mod)
         prior = BR.fledFrom[opponent] or 0,
         onFlee = function() BR.fleeing = opponent end,
       })
+    end
+    -- ...and a bot fight gets the doll's bail too (POK-194): RUN or the
+    -- bag spends one and the fight ends as a run; without one RUN is the
+    -- engine's own "no running from a trainer battle"
+    if BR.botFight and ev and ev.battle and ev.battle.kind == "trainer"
+       and not ev.battle.mirror and not ev.battle.botSim and BR.game then
+      local b = ev.battle
+      Flee.wrapTrainer(b, {
+        save = BR.game.save,
+        text = b.romText and b:romText("_GotAwayText", "Got away safely!")
+          or "Got away safely!",
+        onFlee = function()
+          pcall(function() require("src.core.Sound").play(BR.game.data, "Run") end)
+        end,
+      })
+    end
+    -- The shot clock on EVERY local battle in a session (the user,
+    -- 2026-09-08): a route trainer's, a gym leader's, a wild one's -- the
+    -- FIGHT menu is not a roof anywhere.  Not the Safari's (its menu has
+    -- no move to skip), not a link battle (its own clock, POK-59), never
+    -- a mirror.  Idempotent: the bot fight armed at build keeps its wrap.
+    if ev and ev.battle and BR:inSession() and ev.battle.kind ~= "link"
+       and not ev.battle.mirror and not ev.battle.botSim and not ev.battle.safari then
+      armBotClock(ev.battle)
     end
     -- ...and whoever is watching us follows us in (lib/mirror.lua).  After
     -- the bot clamp above: the parties go out as they stand at turn one.
@@ -7614,6 +7844,20 @@ return function(mod)
       end
       if BR.relay then BR.relay:broadcast(Wire.botrec(botId, rec)) end
     end
+    if ev.result == "run" then
+      -- a POKe DOLL bail (POK-194): the same head start a PvP flee buys.
+      -- The grace keeps the bot from calling the fight again on the spot
+      -- (tryBotEngage honours fleeAvoid), the lockout keeps us from
+      -- restarting it, and the count halves nothing here -- a bot fight
+      -- has no roll to halve -- but keeps the record honest.
+      local now = clock() or 0
+      BR.fledFrom[botId] = (BR.fledFrom[botId] or 0) + 1
+      BR.fleeLockout[botId] = now + Flee.LOCKOUT_SECONDS
+      BR.fleeGrace[botId] = now + Flee.GRACE_SECONDS
+      BR.myFledUntil = now + Flee.GRACE_SECONDS   -- we wear the boot
+      log:say("FLEE: a POKe DOLL got you away from %s",
+              tostring((BR.players[botId] or {}).name or botId))
+    end
     if ev.result == "win" then
       local bot = BR.players[botId]
       -- `alive` guards the race where the host already put this bot out
@@ -7689,11 +7933,16 @@ return function(mod)
     if opponent then
       local now = clock() or 0
       if BR.fleeing == opponent then
+        BR.myFledUntil = now + Flee.GRACE_SECONDS   -- we wear the boot
         BR.fledFrom[opponent] = (BR.fledFrom[opponent] or 0) + 1
         BR.fleeLockout[opponent] = now + Flee.LOCKOUT_SECONDS
         BR.fleeGrace[opponent] = now + Flee.GRACE_SECONDS
       elseif ev.result == "draw" then
         BR.fleeGrace[opponent] = now + Flee.GRACE_SECONDS
+        -- a draw we did not run from is a run THEY made (a lockstep ends
+        -- as a draw the moment either side submits one): the runner wears
+        -- the shoe for the length of the grace (the user, 2026-09-08)
+        BR.fledMark[opponent] = now + Flee.GRACE_SECONDS
       end
     end
     BR.fleeing = nil
@@ -8452,6 +8701,20 @@ return function(mod)
   -- through to the vanilla read-only map, as does every other item.
   mod.hooks:wrap("item.use", function(next, game, battle, id, target, list,
                                       moveIndex, picker)
+    -- A POKe DOLL from the bag in a bot fight (POK-194).  The engine's
+    -- ItemEffects says "not the time" for a doll in any non-wild battle;
+    -- here it is the way out.  The bag closes and RUN is pressed for you:
+    -- Flee.wrapTrainer on this battle spends the doll and ends the fight,
+    -- so the bag and the RUN row are one path.  A link battle never opens
+    -- the bag at all (LinkBattle.openItems), and its RUN spends the doll
+    -- through Flee.wrap already.
+    if id == "POKE_DOLL" and battle and BR.botFight and BR:inSession()
+       and battle.kind == "trainer" and not battle.mirror and not battle.botSim
+       and type(battle.tryRun) == "function" then
+      if list and list.close then list:close() end
+      battle:tryRun()
+      return
+    end
     if id == "TOWN_MAP" and not battle
        and BR:inSession() and BR.status == "alive" then
       local ow = mod.world:overworld()
@@ -8559,6 +8822,46 @@ return function(mod)
           return
         end
       end
+    end
+    -- A boss talks for one page in a match (POK-193).  The gym scripts'
+    -- leaderTalk prints the leader's whole pre-battle speech and hands
+    -- the battle every badge page as its end text; then the engine's
+    -- checkVictoryRewards runs the TM hand-over chain on top, and the
+    -- next talk is the advice speech.  Talk is single-winner with mods
+    -- ahead of base, so this replaces leaderTalk (and story4's
+    -- e4LeaderTalk) outright for the length of a session: the speech's
+    -- first page, then engageTrainer with no end text and the pre-battle
+    -- box skipped.  The reward chain is cut on the overworld instance
+    -- (matchVictoryRewards): the flags still land, the badge too, but no
+    -- vanilla TM and no pages -- the match's own prize and purse are
+    -- said by the battle.ended handler.  Outside a session the base
+    -- scripts run untouched.
+    local boss = BR:inSession() and def and Gyms.boss(def.trainerClass)
+    if boss and ow and ow.map and ow.map.def and data then
+      if ow:trainerDefeated(npc) then
+        say(Gyms.beatenLine(boss.name))
+        return
+      end
+      local label = ow.map.def.label
+      local header = data.trainerHeader and data:trainerHeader(label, def.index)
+      local pre = header and header.battle and data.text and data.text[header.battle]
+      if not pre and data.resolveText then
+        pre = select(1, data:resolveText(label, def.text))
+      end
+      BR:cutVictoryRewards(ow)
+      local function bossFight()
+        ow:engageTrainer(npc, nil, nil, true, nil, false)
+      end
+      local page = Gyms.firstPage(pre)
+      if page then
+        local okT, TextBox = pcall(require, "src.render.TextBox")
+        if okT then
+          BR.game.stack:push(TextBox.new(BR.game, page, bossFight))
+          return
+        end
+      end
+      bossFight()
+      return
     end
     -- the gate worker sells no admission during a round (POK-40): the
     -- talk path could otherwise charge a second 500 and re-open the zone
@@ -8923,23 +9226,37 @@ return function(mod)
       end)
       if okZ and z and z > 0 then markZ = z end
       local h = here()
+      local now = clock() or 0
       for id, p in pairs(BR.players) do
         -- On OUR map and actually drawn.  Both halves matter: a bot that
         -- roams away changes p.map on the wire a tick before sync gets
         -- round to despawning its ghost, and npcOf still resolved the old
         -- handle in that window -- which put a bubble over bare ground
         -- where somebody used to be standing.
-        if p.busy and p.status ~= "out" and h and p.map == h.mapId
+        -- The shoe (the user, 2026-09-08): a trainer who RAN from us wears
+        -- it for the flee grace, over any busy mark.  Our own art, drawn
+        -- in the bubble's style, since the cart's sheet has only !, ? and
+        -- a smile.
+        local fled = BR.fledMark[id] and BR.fledMark[id] > now
+        if (p.busy or fled) and p.status ~= "out" and h and p.map == h.mapId
            and BR.ghosts:isSpawned(id) then
           local npc = BR.ghosts:npcOf(id)
           -- the ghost's px/py is where this screen has DRAWN them, which is
           -- the cell tryEngage reads too (POK-96); marking the wire
           -- position would float the bubble off the sprite mid-step
           if npc and npc.px and npc.py then
-            local quad = emoteQuad(bubbles, sheet,
-                                   (p.busy == "battle" or p.busy == "spot")
-                                   and "EXCLAMATION_BUBBLE"
-                                   or "QUESTION_BUBBLE")
+            local img, quad = sheet, nil
+            if fled then
+              img = BR:shoeImage()
+              if img then
+                quad = love.graphics.newQuad(0, 0, 16, 16, img:getDimensions())
+              end
+            else
+              quad = emoteQuad(bubbles, sheet,
+                               (p.busy == "battle" or p.busy == "spot")
+                               and "EXCLAMATION_BUBBLE"
+                               or "QUESTION_BUBBLE")
+            end
             -- The engine's own bubble slot (fxEmote: px + 4, py - 14),
             -- mapped from the WORLD pass onto this canvas (POK-166): the
             -- world is drawn at worldViewSize() and the zoom's scale, both
@@ -8950,11 +9267,25 @@ return function(mod)
             mx, my = math.floor(mx), math.floor(my)
             -- only when it would land on the screen: a bubble for somebody
             -- across a big map is a smear at the edge, not information
-            if quad and mx >= -16 and mx <= 160 and my >= -16 and my <= 144 then
+            if img and quad and mx >= -16 and mx <= 160 and my >= -16 and my <= 144 then
               g.setColor(1, 1, 1, 1)
-              g.draw(sheet, quad, mx, my, 0, markZ, markZ)
+              g.draw(img, quad, mx, my, 0, markZ, markZ)
             end
           end
+        end
+      end
+      -- ...and our own boot (the user, 2026-09-08: ran from a bot in a
+      -- solo match and saw nothing -- the runner was us, and the loop
+      -- above only marks ghosts).  Same slot, over the player's sprite.
+      if BR.myFledUntil and BR.myFledUntil > now then
+        local shoe = BR:shoeImage()
+        local ow = mod.world:overworld()
+        local me = ow and ow.player
+        if shoe and me and me.px and me.py then
+          local mx, my = Ghosts.markAt(me.px, me.py, cam, markVw, markVh, markZ)
+          g.setColor(1, 1, 1, 1)
+          g.draw(shoe, love.graphics.newQuad(0, 0, 16, 16, shoe:getDimensions()),
+                 math.floor(mx), math.floor(my), 0, markZ, markZ)
         end
       end
     end
@@ -8999,11 +9330,23 @@ return function(mod)
       -- trainer's bag (POK-18), so watching someone who never picked one
       -- up left you with no way to see the fog at all.  So the map gets
       -- its own row, always, however the match is going for you (POK-100).
+      -- ...and the row FLIES when it can (POK-196; the user, 2026-09-08:
+      -- one row, not two): alive, outdoors, a party mon that knows FLY,
+      -- and not inside the Safari opening -- the same gates the bag's
+      -- TOWN MAP used, now that the bag no longer carries one.  Otherwise
+      -- it is the plain map with the ring on it.
       mod.ui.insertBefore(out, "QUIT", {
         label = "MAP",
         onSelect = function()
+          local ow = mod.world:overworld()
+          local fly = BR:canFly() and ow
           local okMap = pcall(function()
-            require("src.ui.Screens").push(game, "TownMap")
+            if fly then
+              require("src.ui.Screens").push(game, "TownMap", { fly = true,
+                onFly = function(mapId) ow:flyTo(mapId) end })
+            else
+              require("src.ui.Screens").push(game, "TownMap")
+            end
           end)
           if not okMap then say("The TOWN MAP is\nunreadable here.") end
         end,
@@ -9494,6 +9837,21 @@ return function(mod)
   -- challenge to LAND while the other screen is busy, and the eyeline
   -- will not fire one at a trainer marked busy any more -- so the driver
   -- sends it by hand, the same way tryEngage would have.
+  -- the shoe over a trainer who ran from us, for a driver's screenshot
+  mod.exports.debugFledMark = function(id, secs)
+    if not BR.players[id] then return false end
+    BR.fledMark[id] = (clock() or 0) + (tonumber(secs) or Flee.GRACE_SECONDS)
+    return true
+  end
+  -- ...and our own
+  mod.exports.debugFled = function(secs)
+    BR.myFledUntil = (clock() or 0) + (tonumber(secs) or Flee.GRACE_SECONDS)
+    return true
+  end
+  -- a wild battle on demand, for the clock driver
+  mod.exports.debugWild = function(species, level)
+    return mod.world:startWildBattle(species, level)
+  end
   mod.exports.debugChallenge = function(id)
     if not (BR.relay and BR.relay:isOpen() and BR.players[id]) then return false end
     if BR.phase ~= "match" or BR.status ~= "alive" or BR.battle or BR.pending then

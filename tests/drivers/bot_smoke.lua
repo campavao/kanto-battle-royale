@@ -271,6 +271,13 @@ return function(game)
   if lead.hp ~= want then
     return C.fail(("the bot's lead opened at %d/%d HP, not the record's %d (frac %.2f)"):format(lead.hp, maxHp, want, frac))
   end
+  -- ...and the BAR agrees: the battler's own shownHP is what the healthbox
+  -- draws and the drain starts from, and it is copied at build, before
+  -- the wound went on (the user, 2026-09-08: full bar, then a drop)
+  local shown = battle.enemy and battle.enemy.shownHP
+  if shown ~= want then
+    return C.fail(("the bar opens at %s, not the wound's %d"):format(tostring(shown), want))
+  end
   U.log(("BOT: the lead opened at %d/%d, the record's wound (%.2f), before the intro drew it"):format(lead.hp, maxHp, frac))
   shot("intro")
 

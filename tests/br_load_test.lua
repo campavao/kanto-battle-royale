@@ -111,6 +111,19 @@ do
       end
       T.check(hook:find('label = "MAP"', 1, true) ~= nil,
               "the map gets its own row")
+      -- one map (POK-196): the row flies, and the bag carries no TOWN MAP
+      T.check(hook:find('label = "FLY"', 1, true) == nil,
+              "no FLY row of its own -- the MAP row flies")
+      T.check(hook:find("BR:canFly()", 1, true) ~= nil,
+              "...when it can happen")
+    end
+    local items = src:match("local START_ITEMS = (%b{})")
+    T.check(items ~= nil, "found START_ITEMS")
+    if items then
+      T.check(items:find("TOWN_MAP", 1, true) == nil,
+              "the bag starts without a TOWN MAP (" .. items:gsub("%s+", " ") .. ")")
+      T.check(items:find("POKE_DOLL = 1", 1, true) ~= nil,
+              "...and with one POKe DOLL")
       T.check(hook:find('insertBefore%(out, "OPTION"') == nil,
               "nothing anchors on OPTION any more -- it is not there to anchor on")
     end

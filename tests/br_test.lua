@@ -478,6 +478,21 @@ do
   ok(seen[Bots.MAX], "the ladder reaches the cap")
   eq(Bots.LADDER[#Bots.LADDER], Bots.MAX, "the ladder ends at the cap")
 
+  -- a match needs somebody to beat (POK-197): the roster rule every start
+  -- entry asks first
+  ok(not Bots.canStart(1, 0), "one human and no bots cannot start")
+  ok(not Bots.canStart(0, 1), "one bot and nobody cannot start")
+  ok(not Bots.canStart(0, 0), "an empty roster cannot start")
+  ok(Bots.canStart(1, 1), "one human and one bot can start")
+  ok(Bots.canStart(2, 0), "two humans and no bots can start")
+  ok(Bots.canStart(1, Bots.MAX), "a full house can start")
+  ok(not Bots.canStart(nil, nil), "no counts at all cannot start")
+  local _, why = Bots.canStart(1, 0)
+  ok(type(why) == "string" and why:find("2 trainers", 1, true),
+     "the refusal says how many it needs")
+  eq(Bots.MIN_TRAINERS, 2, "two is the floor")
+  eq(Bots.TURN_SECONDS, 30, "a bot fight's FIGHT menu runs a thirty-second clock")
+
   ok(Bots.isBot(Bots.ID_BASE), "ID_BASE is a bot id")
   ok(not Bots.isBot(1), "a room id is not a bot")
   ok(not Bots.isBot(nil), "nil is not a bot")
@@ -2007,6 +2022,45 @@ do
   eq(save.inventory.POKE_DOLL, nil, "the last one leaves the bag entirely")
   eq(doll.submitted, 2, "and still bails")
 
+  -- the bot-fight wrap (POK-194): no roll, a doll or the engine's refusal
+  local refused = 0
+  local function fakeTrainer()
+    local b = { said = {} }
+    b.tryRun = function(s) refused = refused + 1; s.afterQueue = "menu" end
+    b.say = function(s, t) s.said[#s.said + 1] = t end
+    return b
+  end
+  ok(not Flee.wrapTrainer({}, {}), "nothing to wrap is reported")
+  local bsave = { inventory = { POKE_DOLL = 1 }, bagOrder = { "POKE_DOLL" } }
+  local hows = {}
+  local tb = fakeTrainer()
+  ok(Flee.wrapTrainer(tb, { save = bsave, text = "Got away safely!",
+                            onFlee = function(how) hows[#hows + 1] = how end }),
+     "a trainer battle with a tryRun is wrapped")
+  ok(tb:tryRun(), "with a doll RUN escapes")
+  eq(tb.result, "run", "the fight ends as a run")
+  ok(tb.pokeDollEscape, "flagged as a doll escape")
+  eq(tb.afterQueue, "finish", "and finishes")
+  eq(tb.phase, "messages", "through the message queue")
+  eq(tb.said[1], "Got away safely!", "saying so")
+  eq(bsave.inventory.POKE_DOLL, nil, "the doll is spent")
+  eq(bsave.bagOrder, nil, "and the bag order rebuilds")
+  eq(hows[1], "doll", "recorded as a doll")
+  eq(refused, 0, "the engine's refusal never ran")
+  local tb2 = fakeTrainer()
+  Flee.wrapTrainer(tb2, { save = bsave })
+  ok(not tb2:tryRun(), "without a doll RUN does not escape")
+  eq(refused, 0, "...and the engine's 'no running' line never prints")
+  eq(tb2.said[1], Flee.NO_DOLL_TEXT, "the line says the doll is what is missing")
+  eq(tb2.afterQueue, "menu", "and the menu comes back")
+  eq(tb2.result, nil, "and nothing ends")
+  local mute = { tryRun = function() refused = refused + 1 end }
+  Flee.wrapTrainer(mute, { save = bsave })
+  mute:tryRun()
+  eq(refused, 1, "a battle that cannot say falls through to the engine's own line")
+  ok(not Flee.spendDoll(nil), "no save, nothing to spend")
+  ok(not Flee.spendDoll({ inventory = {} }), "an empty bag has no doll")
+
   -- the grace and the lockout: an avoided trainer is not a target, and
   -- does not shield anyone behind them
   local me = { id = 1, map = "R", x = 5, y = 5, facing = "up", moving = false,
@@ -2231,6 +2285,23 @@ do
   eq(count, 8, "eight gyms, eight leaders, eight prizes")
   ok(Gyms.leader(nil) == nil, "no class, no leader")
   ok(Gyms.leader("OPP_YOUNGSTER") == nil, "a youngster runs no gym")
+
+  -- bosses talk for one page in a match (POK-193)
+  ok(Gyms.boss("OPP_BROCK") == Gyms.LEADERS.OPP_BROCK, "a leader is a boss")
+  eq((Gyms.boss("OPP_LORELEI") or {}).name, "LORELEI", "so is an Elite Four member")
+  ok(Gyms.boss("OPP_YOUNGSTER") == nil, "a youngster is not")
+  ok(Gyms.boss(nil) == nil, "nor is nobody")
+  local elite = 0
+  for _ in pairs(Gyms.ELITE) do elite = elite + 1 end
+  eq(elite, 4, "four of them")
+  eq(Gyms.firstPage("I'm BROCK!\nI'm PEWTER's GYM\vLEADER!\fI believe in rock\nhard defense!"),
+     "I'm BROCK!\nI'm PEWTER's GYM\vLEADER!", "the first page of a speech")
+  eq(Gyms.firstPage("One page only"), "One page only", "a one-page speech is itself")
+  ok(Gyms.firstPage("") == nil, "an empty speech has no page")
+  ok(Gyms.firstPage("\fLate start") == nil, "an empty first page is no page")
+  ok(Gyms.firstPage(nil) == nil, "no speech, no page")
+  ok(Gyms.beatenLine("BROCK"):find("^BROCK: "), "a beaten boss is named")
+  ok(not Gyms.beatenLine("BROCK"):find("\f"), "and says one page")
   if okD and Data and Data.load then
     pcall(function() Data:load() end)
     if Data.items then
@@ -4461,6 +4532,87 @@ do
   local sorted = true
   for i = 2, #a1 do sorted = sorted and (a1[i - 1] <= a1[i]) end
   ok(sorted, "a zone comes back in a stable order")
+
+  -- ------- the zone's item balls, from the seed (POK-195)
+  ok(Safari.isZoneMap("SAFARI_ZONE_EAST"), "EAST is the zone")
+  ok(not Safari.isZoneMap("SAFARI_ZONE_GATE"), "the gate is not")
+  ok(not Safari.isZoneMap("SAFARI_ZONE_WEST_REST_HOUSE"), "nor a rest house")
+  -- a stand-in Kanto: two zone maps with balls, one hidden item, a gate
+  local function fakeWorld()
+    return {
+      maps = {
+        SAFARI_ZONE_WEST = { objects = {
+          { index = 3, item = "MAX_POTION" }, { index = 1, item = "GOLD_TEETH" },
+          { index = 2, text = "TEXT_X" }, { index = 4, item = "0" } } },
+        SAFARI_ZONE_CENTER = { objects = { { index = 1, item = "NUGGET" } } },
+        SAFARI_ZONE_GATE = { objects = { { index = 1, item = "NUGGET" } } },
+      },
+      field = { hiddenItems = {
+        SAFARI_ZONE_WEST = { { x = 6, y = 5, item = "REVIVE" } },
+        SAFARI_ZONE_GATE = { { x = 10, y = 1, item = "NUGGET" } },
+      } },
+    }
+  end
+  local w = fakeWorld()
+  local slots = Safari.slots(w.maps, w.field)
+  eq(#slots, 4, "three balls and one hidden item in the zone; the gate's are not slots")
+  eq(slots[1].map .. ":" .. slots[1].index, "SAFARI_ZONE_CENTER:1", "maps in id order")
+  eq(slots[2].index, 1, "balls in object order, not table order")
+  eq(slots[3].index, 3, "...")
+  eq(slots[4].x, 6, "the hidden item last")
+  ok(slots[4].obj == w.field.hiddenItems.SAFARI_ZONE_WEST[1], "a slot points at the live table")
+
+  local l1 = Safari.loot(4242, nil, 13)
+  local l2 = Safari.loot(4242, nil, 13)
+  eq(#l1, 13, "one item a slot")
+  eq(table.concat(l1, ","), table.concat(l2, ","), "the same seed deals the same balls")
+  local l3 = Safari.loot(4243, nil, 13)
+  ok(table.concat(l1, ",") ~= table.concat(l3, ","), "another seed deals other balls")
+  local allowed = { [Safari.MASTER_BALL] = true }
+  for _, t in ipairs(Safari.LOOT) do for _, id in ipairs(t.ids) do allowed[id] = true end end
+  local masters, seen = 0, {}
+  for seed = 1, 400 do
+    local m = 0
+    for _, id in ipairs(Safari.loot(seed, nil, 13)) do
+      ok(allowed[id], "seed " .. seed .. " deals a listed item (" .. tostring(id) .. ")")
+      seen[id] = true
+      if id == Safari.MASTER_BALL then m = m + 1 end
+    end
+    ok(m <= 1, "seed " .. seed .. " deals at most one MASTER BALL")
+    masters = masters + m
+  end
+  ok(masters > 0, "some match deals a MASTER BALL")
+  ok(masters < 200, "...but not most (" .. masters .. " in 400)")
+  ok(seen.POKE_DOLL and seen.RARE_CANDY and seen.NUGGET, "every tier comes up")
+  eq(#Safari.loot(1, nil, 0), 0, "no slots, no draw")
+  -- only ids this build knows: a data table without TMs deals none
+  local noTm = { items = { POKE_DOLL = {}, NUGGET = {}, RARE_CANDY = {}, GREAT_BALL = {},
+                           ULTRA_BALL = {}, MAX_POTION = {} } }
+  for _, id in ipairs(Safari.loot(7, noTm, 40)) do
+    ok(noTm.items[id], "an unknown item is never dealt (" .. tostring(id) .. ")")
+  end
+  eq(#Safari.loot(7, { items = {} }, 5), 0, "a build that knows nothing deals nothing")
+
+  -- apply writes the live tables and restore puts the ROM's back
+  local orig = Safari.apply(slots, { "A", "B", "C", "D" })
+  eq(w.maps.SAFARI_ZONE_CENTER.objects[1].item, "A", "a ball reads the draw")
+  eq(w.field.hiddenItems.SAFARI_ZONE_WEST[1].item, "D", "so does the hidden item")
+  eq(w.maps.SAFARI_ZONE_GATE.objects[1].item, "NUGGET", "the gate's is untouched")
+  eq(orig[1], "NUGGET", "the originals are returned")
+  Safari.restore(slots, orig)
+  eq(w.maps.SAFARI_ZONE_CENTER.objects[1].item, "NUGGET", "restore puts the ROM's back")
+  eq(w.maps.SAFARI_ZONE_WEST.objects[1].item, "MAX_POTION", "...every one")
+  eq(w.field.hiddenItems.SAFARI_ZONE_WEST[1].item, "REVIVE", "...hidden included")
+  local okD, Data = pcall(require, "src.core.Data")
+  if okD and Data and Data.load then pcall(function() Data:load() end) end
+  if okD and Data and Data.items and Data.maps then
+    for _, t in ipairs(Safari.LOOT) do
+      for _, id in ipairs(t.ids) do ok(Data.items[id], "the build sells " .. id) end
+    end
+    ok(Data.items[Safari.MASTER_BALL], "and the MASTER BALL")
+    local real = Safari.slots(Data.maps, Data.field)
+    ok(#real >= 12, "the real zone has a dozen balls to deal (" .. #real .. ")")
+  end
 end
 
 -- ------------------------------------------------------------------

@@ -206,4 +206,126 @@ function Safari.describe(pool, theme)
   return list
 end
 
+-- ------- the zone's item balls, drawn from the match seed (POK-195)
+--
+-- The ROM's balls are fixed -- a regular knows where the CARBOS is and
+-- nobody else bothers -- so every ball in the four zone maps (and the
+-- zone's one hidden item) rolls its contents from the match seed, the
+-- same on every client, the way the species do.  Valuable on purpose: a
+-- ball is worth the detour while the buzzer runs.  Weighted tiers, and
+-- the MASTER BALL is a separate roll capped at one per match.
+
+-- a zone map: the four areas, not the gate and not the rest houses
+function Safari.isZoneMap(mapId)
+  return mapId == "SAFARI_ZONE_CENTER" or mapId == "SAFARI_ZONE_EAST"
+      or mapId == "SAFARI_ZONE_NORTH" or mapId == "SAFARI_ZONE_WEST"
+end
+
+Safari.LOOT = {
+  { weight = 8, ids = { "TM_EARTHQUAKE", "TM_ICE_BEAM", "TM_THUNDERBOLT",
+                        "TM_FIRE_BLAST", "TM_PSYCHIC_M", "TM_BODY_SLAM",
+                        "TM_HYPER_BEAM", "TM_BLIZZARD", "TM_THUNDER",
+                        "TM_ROCK_SLIDE", "TM_SOLARBEAM", "TM_DOUBLE_EDGE",
+                        "TM_SUBMISSION", "TM_MEGA_KICK", "TM_SWORDS_DANCE",
+                        "TM_TOXIC", "TM_REFLECT", "TM_THUNDER_WAVE",
+                        "TM_DIG", "TM_SEISMIC_TOSS" } },
+  { weight = 4, ids = { "POKE_DOLL" } },
+  { weight = 5, ids = { "HYPER_POTION", "MAX_POTION", "FULL_RESTORE",
+                        "REVIVE", "MAX_REVIVE", "FULL_HEAL" } },
+  { weight = 5, ids = { "GREAT_BALL", "ULTRA_BALL" } },
+  { weight = 2, ids = { "RARE_CANDY" } },
+  { weight = 3, ids = { "NUGGET" } },
+}
+Safari.MASTER_ODDS = 8      -- one match in eight puts a MASTER BALL in one ball
+Safari.MASTER_BALL = "MASTER_BALL"
+
+-- Every slot the draw fills, in one deterministic order: the item balls
+-- (map objects with an `item`) then the hidden items of the zone maps.
+-- Each is { map, index } for a ball or { map, x, y } for a hidden item,
+-- ordered by map id then position, so two clients agree on which slot is
+-- which whatever order the tables were written in.
+function Safari.slots(maps, field)
+  local out = {}
+  local ids = {}
+  for id in pairs(maps or {}) do
+    if Safari.isZoneMap(id) then ids[#ids + 1] = id end
+  end
+  table.sort(ids)
+  for _, id in ipairs(ids) do
+    local balls = {}
+    for _, o in ipairs((maps[id] and maps[id].objects) or {}) do
+      if o.item and o.item ~= "0" and o.item ~= 0 and o.index then
+        balls[#balls + 1] = { map = id, index = o.index, obj = o }
+      end
+    end
+    table.sort(balls, function(a, b) return a.index < b.index end)
+    for _, b in ipairs(balls) do out[#out + 1] = b end
+    local hidden = {}
+    for _, h in ipairs((field and field.hiddenItems and field.hiddenItems[id]) or {}) do
+      if h.item and h.x and h.y then
+        hidden[#hidden + 1] = { map = id, x = h.x, y = h.y, obj = h }
+      end
+    end
+    table.sort(hidden, function(a, b)
+      if a.y ~= b.y then return a.y < b.y end
+      return a.x < b.x
+    end)
+    for _, h in ipairs(hidden) do out[#out + 1] = h end
+  end
+  return out
+end
+
+-- The draw: `n` item ids from the seed, weighted by tier, only ids the
+-- build's item table knows (a tier with nothing known is skipped).  Then
+-- the MASTER BALL roll, one slot at most.
+function Safari.loot(seed, data, n)
+  n = math.max(0, math.floor(tonumber(n) or 0))
+  local items = data and data.items
+  local tiers, total = {}, 0
+  for _, t in ipairs(Safari.LOOT) do
+    local ids = {}
+    for _, id in ipairs(t.ids) do
+      if not items or items[id] then ids[#ids + 1] = id end
+    end
+    if #ids > 0 then
+      tiers[#tiers + 1] = { weight = t.weight, ids = ids }
+      total = total + t.weight
+    end
+  end
+  local out = {}
+  if n == 0 or total == 0 then return out end
+  local rng = Spawn.rng((tonumber(seed) or 1) + 7919)
+  for i = 1, n do
+    local roll, pick = rng(1, total), tiers[#tiers]
+    for _, t in ipairs(tiers) do
+      if roll <= t.weight then pick = t break end
+      roll = roll - t.weight
+    end
+    out[i] = pick.ids[rng(1, #pick.ids)]
+  end
+  if (not items or items[Safari.MASTER_BALL]) and rng(1, Safari.MASTER_ODDS) == 1 then
+    out[rng(1, n)] = Safari.MASTER_BALL
+  end
+  return out
+end
+
+-- Write the draw over the slots' own tables (the engine reads a ball's
+-- `item` off the map object at pickup, and a hidden item's off the field
+-- entry), returning what was there so resetMatch can put it back: the
+-- data is shared with the real save, and nothing leaks.
+function Safari.apply(slots, loot)
+  local orig = {}
+  for i, s in ipairs(slots or {}) do
+    orig[i] = s.obj.item
+    if loot and loot[i] then s.obj.item = loot[i] end
+  end
+  return orig
+end
+
+function Safari.restore(slots, orig)
+  for i, s in ipairs(slots or {}) do
+    if orig and orig[i] ~= nil then s.obj.item = orig[i] end
+  end
+end
+
 return Safari
