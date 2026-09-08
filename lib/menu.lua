@@ -226,7 +226,7 @@ function Menu.items(mod, BR, game)
     row("MATCH IN PROGRESS")
     local n = BR.runningMatch and BR.runningMatch.members
     if n then row(n .. (n == 1 and " TRAINER IN IT" or " TRAINERS IN IT")) end
-    setting("JOIN NEXT MATCH", function()
+    setting("WATCH, PLAY NEXT", function()
       if not BR:watchNext() then
         say(mod, "Couldn't reach\nthat game.")
       end

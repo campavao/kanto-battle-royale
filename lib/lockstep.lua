@@ -149,6 +149,43 @@ Lockstep.REPAIRS = {
   },
 }
 
+-- The Elite Four exit doors (POK-143).  e4ExitSeal (data/scripts/story4.lua)
+-- does one more thing than the two walks above: on every entry it sets
+-- the block above the exit warp CLOSED unless EVENT_BEAT_<ROOM>_TRAINER_0
+-- is up -- and that flag is the leader's own beaten flag
+-- (OverworldState:trainerDefeated reads the trainer header's event), so
+-- listing it in STORY_FLAGS would delete three contestable bosses.  On a
+-- match's throwaway save it is clear, so the door shut the moment you
+-- walked in, and the only way out was to beat the leader at the rung or
+-- die to the ring.  A movement lock of exactly the kind this file exists
+-- to remove.
+--
+-- The seal is an onEnter, and map_scripts runs a mod's onEnter BEFORE
+-- base (the ticket assumed after; MapScripts.contributions slots base in
+-- behind the mods), so a mod onEnter that opened the door would be shut
+-- again a moment later.  replaceBlock emits world.block_replaced, though,
+-- and that fires after the seal has done its work: main.lua listens, and
+-- when a match is on and the block that landed is a room's closed door,
+-- it puts the open one there.  The leader stays where they are and stays
+-- fightable; only the door is different.  Lance's room gates its
+-- ENTRANCE by a flag that is never set in a match, so it needs nothing.
+Lockstep.E4_DOORS = {
+  LORELEIS_ROOM = { bx = 2, by = 0, closed = 0x24, open = 0x05 },
+  BRUNOS_ROOM   = { bx = 2, by = 0, closed = 0x24, open = 0x05 },
+  AGATHAS_ROOM  = { bx = 2, by = 0, closed = 0x3b, open = 0x0e },
+}
+
+-- The block to put back when `block` has just landed at (bx, by) on
+-- `mapId`: the room's open door when that was its closed one, else nil
+-- (any other block, any other cell, any other map -- leave it).
+function Lockstep.reopen(mapId, bx, by, block)
+  local door = Lockstep.E4_DOORS[mapId]
+  if not door then return nil end
+  if bx ~= door.bx or by ~= door.by then return nil end
+  if block ~= door.closed then return nil end
+  return door.open
+end
+
 -- True when this cell would start a scripted walk that a match should not
 -- have to sit through.  Callers gate on BR:inSession() first.
 function Lockstep.blocks(mapId, x, y)

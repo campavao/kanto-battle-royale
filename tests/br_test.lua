@@ -422,6 +422,35 @@ do
   ok(Wire.decode({ t = "ring", phase = 1, cx = 1, cy = 1, r = -7 }) == nil,
      "but an arbitrary negative radius is still refused")
 
+  -- `late`: the match in progress, for a watcher who arrived after the
+  -- start (2026-09-07).  A start with statuses and the ring riding along.
+  local late = Wire.decode(Wire.late(77,
+    { { id = 1, map = "CERULEAN_CITY", x = 4, y = 5 },
+      { id = 2, map = "ROUTE_24", x = 11, y = 22, st = "out" },
+      { id = 1001, map = "PEWTER_CITY", x = 1, y = 1, st = "alive" } },
+    240, { textSpeed = 3, animations = false },
+    { phase = 2, cx = 8, cy = 9, r = 7, place = "CELADON CITY", e = 301.5 }))
+  ok(late ~= nil and late.t == "late" and late.late == true, "a late decodes as a late")
+  eq(late and late.seed, 77, "with the match seed")
+  eq(late and #late.spawns, 3, "every trainer's cell")
+  eq(late and late.spawns[2].st, "out", "the fallen marked out")
+  eq(late and late.spawns[3].st, nil, "and nobody else marked at all")
+  eq(late and late.safari, 0, "no Safari for a watcher")
+  eq(late and late.fog, 240, "the host's fog length")
+  eq(late and late.pace and late.pace.textSpeed, 3, "and the host's pace")
+  eq(late and late.ring and late.ring.phase, 2, "the ring the host is on")
+  eq(late and late.ring and late.ring.elapsed, 301.5, "...with its clock")
+  eq(late and late.ring and late.ring.place, "CELADON CITY", "...and its eye")
+  ok(Wire.decode(Wire.late(77, { { id = 1, map = "ROUTE_1", x = 1, y = 1 } }, 240)).ring == nil,
+     "a late before the first ring carries none")
+  ok(Wire.decode({ t = "late", seed = 1, spawns = { { id = 1, map = "ROUTE_1", x = 1, y = 1 } },
+                   ring = { phase = 1, cx = 1, cy = 1, r = -7 } }) == nil,
+     "a late with a bad ring is refused whole")
+  ok(Wire.decode({ t = "late", seed = 1, spawns = {} }) == nil,
+     "and one with nobody in it")
+  eq(Wire.decode(Wire.start(5, { { id = 1, map = "ROUTE_1", x = 1, y = 1 } })).late, nil,
+     "a plain start is not a late")
+
   -- `as`: the host relaying a bot's movement
   eq(Wire.decode(Wire.step("up", 1, 2, "ROUTE_1", 1001)).as, 1001,
      "step carries the relayed actor")
@@ -550,6 +579,31 @@ do
   local blocked = Bots.wander({ map = "M", x = 5, y = 5, facing = "up" },
                               Bots.rng(4, id), wall, { x = 12, y = 5 })
   ok(blocked ~= "right", "but not through a wall")
+  -- ...and a roam drops off a ledge like a player would (POK-191): the
+  -- only way off this shelf is the hop, and the landing comes back with
+  -- the direction
+  local shelf = function(_, x, y) return (y == 5 or y == 7) and x >= 4 and x <= 6 end
+  local drop = function(_, x, y, dir)
+    if dir == "down" and y == 5 then return x, 7 end
+    return nil
+  end
+  local hops, other = 0, 0
+  local rngL = Bots.rng(5, id)
+  for _ = 1, 60 do
+    local dir, lx, ly = Bots.wander({ map = "M", x = 5, y = 5, facing = "down" },
+                                    rngL, shelf, nil, drop)
+    if dir == "down" then
+      hops = hops + 1
+      eq(tostring(lx) .. "," .. tostring(ly), "5,7", "a wandered hop lands two cells on")
+    elseif dir then
+      other = other + 1
+      eq(ly, 5, "and a plain roam step lands one cell on")
+    end
+  end
+  ok(hops > 0, "a roaming bot takes the ledge (" .. hops .. " hops, " .. other .. " steps)")
+  eq(Bots.wander({ map = "M", x = 5, y = 5, facing = "down" }, Bots.rng(5, id),
+                 function(_, x, y) return y == 5 and x == 5 end, nil, nil), nil,
+     "without a hop the shelf is a cell it never leaves")
 
   -- open field: it does move, and only ever one of the four grid directions
   local always = function() return true end
@@ -645,6 +699,49 @@ do
     ok(Bots.approach({ x = 0, y = 0, map = "M" }, function(_, x, y) return walled(x, y) end,
                      { x = 5, y = 0 }) ~= nil,
        "...whereas the stride only ever tries the greedy step")
+
+    -- --- a ledge (POK-191): one-way, two cells, and only with `hop`
+    -- a 3-wide corridor with a ledge row at y = 2: not walkable, hoppable
+    -- downward from y = 1 onto y = 3, never upward
+    local function ledged(x, y) return open6(x, y) and y ~= 2 end
+    local function hopDown(x, y, dir)
+      if dir == "down" and y == 1 then return x, 3 end
+      return nil
+    end
+    eq(Bots.path(ledged, { x = 1, y = 0 }, { x = 1, y = 5 }), nil,
+       "without a hop the ledge is a wall")
+    local hopped = Bots.path(ledged, { x = 1, y = 0 }, { x = 1, y = 5 }, nil, hopDown)
+    eq(hopped and #hopped, 4, "with a hop the drop is one step of the path")
+    eq(hopped and hopped[2], "down", "...taken downward")
+    eq(Bots.path(ledged, { x = 1, y = 5 }, { x = 1, y = 0 }, nil, hopDown), nil,
+       "and the way back up is still a wall")
+    local nx, ny = Bots.landing(ledged, hopDown, 1, 1, "down")
+    eq(nx .. "," .. ny, "1,3", "landing re-derives the hop's far cell")
+    eq(Bots.landing(ledged, hopDown, 1, 3, "up"), nil, "and refuses the climb")
+    eq(Bots.landing(ledged, nil, 1, 1, "down"), nil, "no hop, no landing")
+    local pa, at = Bots.pathToAny(ledged, { x = 1, y = 0 },
+      function(x, y) return y == 4 end, nil, hopDown)
+    ok(pa and #pa == 3 and at.y == 4, "pathToAny hops too")
+    -- the stride: hops when the prey is beyond the landing, refuses to
+    -- land ON the prey (the engine would refuse it too), so across the
+    -- ledge is where the fight opens
+    local function walkM(_, x, y) return ledged(x, y) end
+    local function hopM(_, x, y, dir) return hopDown(x, y, dir) end
+    local sd, sx, sy = Bots.approach({ x = 1, y = 1, map = "M" }, walkM, { x = 1, y = 4 }, hopM)
+    eq((sd or "nil") .. " " .. tostring(sx) .. "," .. tostring(sy), "down 1,3",
+       "the stride takes the drop toward prey beyond it")
+    eq(Bots.approach({ x = 1, y = 1, map = "M" }, walkM, { x = 1, y = 3 }, hopM), nil,
+       "...but never onto the prey's own cell")
+    eq(Bots.approach({ x = 1, y = 1, map = "M" }, walkM, { x = 1, y = 4 }), nil,
+       "and without a hop it is walled off, as before")
+    -- sight: the eye passes a ledge the seer could hop, not one it could not
+    local blockedT = function(x, y) return not ledged(x, y) end
+    local eyeDown = Bots.seeOver(blockedT, hopDown, "down")
+    ok(not eyeDown(1, 2), "looking down, the ledge does not stop the eye")
+    ok(eyeDown(-1, 0), "...the map's edge still does")
+    local eyeUp = Bots.seeOver(blockedT, hopDown, "up")
+    ok(eyeUp(1, 2), "looking up, the ledge is a wall to the eye")
+    eq(Bots.seeOver(blockedT, nil, "down"), blockedT, "no hop: the terrain test as it was")
 
     -- --- goals
     local function fixedRng(seq)
@@ -1392,8 +1489,8 @@ do
   ok(stock ~= nil, "the 4F clerk is the stone counter")
   eq(table.concat(stock, ","), "POKE_DOLL,FIRE_STONE,THUNDER_STONE,WATER_STONE,LEAF_STONE,MOON_STONE",
      "the ROM's list in its order, then the stone it lacked")
-  ok(Shops.stock("ViridianMartClerkText", { "POKE_BALL", "POTION" }) == nil,
-     "every other mart is left alone")
+  ok(Shops.stock("CeladonMart5FClerk1Text", { "X_ACCURACY", "DIRE_HIT" }) == nil,
+     "every other counter is left alone (the stores climb on their own rule, POK-192)")
   ok(Shops.stock(nil, rom) == nil, "no label, no counter")
   local twice = Shops.stock("CeladonMart4FClerkText", Shops.stock("CeladonMart4FClerkText", rom))
   eq(#twice, 6, "extending an already extended list adds nothing")
@@ -1414,6 +1511,119 @@ do
   eq(priced.items.MOON_STONE.price, 50, "a build that already prices it keeps its price")
   ok(Shops.priceMoonStone(nil) == nil and Shops.priceMoonStone({}) == nil,
      "no items, nothing to price")
+end
+
+  -- ------- the Elite Four exit doors (POK-143)
+
+do
+  local Lockstep = require("mods.battle_royale.lib.lockstep")
+  eq(Lockstep.reopen("LORELEIS_ROOM", 2, 0, 0x24), 0x05, "Lorelei's closed door reopens")
+  eq(Lockstep.reopen("BRUNOS_ROOM", 2, 0, 0x24), 0x05, "so does Bruno's")
+  eq(Lockstep.reopen("AGATHAS_ROOM", 2, 0, 0x3b), 0x0e, "and Agatha's, with her own blocks")
+  eq(Lockstep.reopen("LORELEIS_ROOM", 2, 0, 0x05), nil, "the open door is left alone (no loop)")
+  eq(Lockstep.reopen("LORELEIS_ROOM", 3, 0, 0x24), nil, "another cell is not the door")
+  eq(Lockstep.reopen("LANCES_ROOM", 2, 0, 0x24), nil, "Lance's room gates its entrance, not here")
+  eq(Lockstep.reopen("CERULEAN_CITY", 2, 0, 0x24), nil, "and no other map has a door to reopen")
+  for room in pairs(Lockstep.E4_DOORS) do
+    ok(Lockstep.CELLS[room] ~= nil, room .. " is also a lockstep mouth (POK-128)")
+  end
+end
+
+-- ------- a seed two launches do not share (POK-157)
+
+do
+  local Spawn = require("mods.battle_royale.lib.spawn")
+  local a = Spawn.seedFrom("0123456789abcdef", 1757300000, 0.25, 12345)
+  eq(Spawn.seedFrom("0123456789abcdef", 1757300000, 0.25, 12345), a, "deterministic over its inputs")
+  ok(a >= 1 and a <= 2 ^ 30 and a == math.floor(a), "a seed in 1 .. 2^30")
+  ok(Spawn.seedFrom("fedcba9876543210", 1757300000, 0.25, 12345) ~= a,
+     "another install, the same second: another seed")
+  ok(Spawn.seedFrom("0123456789abcdef", 1757300000, 0.26, 12345) ~= a,
+     "the same install a hundredth of a second later: another seed")
+  ok(Spawn.seedFrom("0123456789abcdef", 1757300001, 0.25, 12345) ~= a,
+     "or a second later")
+  ok(Spawn.seedFrom("0123456789abcdef", 1757300000, 0.25, 12346) ~= a,
+     "or with another draw from the shared generator")
+  ok(Spawn.seedFrom(nil, nil, nil, nil) >= 1, "nothing to mix still seeds")
+  -- the old roll: the same second, the same number -- which is the bug
+  local seen, n = {}, 0
+  for i = 1, 200 do
+    local v = Spawn.seedFrom("0123456789abcdef", 1757300000, i / 1000, 1)
+    if not seen[v] then seen[v] = true n = n + 1 end
+  end
+  eq(n, 200, "two hundred launches inside one second are two hundred seeds")
+end
+
+-- ------- the tiered stores (POK-192)
+
+do
+  local Shops = require("mods.battle_royale.lib.shops")
+  local Levels = require("mods.battle_royale.lib.levels")
+  -- the clock is the fog's phase, like the level ladder's
+  eq(Shops.tier(nil), 1, "no ring yet is the drop's tier")
+  eq(Shops.tier(1) .. Shops.tier(2) .. Shops.tier(3) .. Shops.tier(4) .. Shops.tier(5),
+     "11234", "POKe through the first shrink, then a rung a phase")
+  eq(Shops.tier(8), 4, "past the table the top tier holds")
+  eq(Shops.tier(0), 1, "and below it the bottom")
+  eq(#Shops.TIER_AT, 5, "the shelf tops out where the ladder's Lv75 rung is")
+  eq(Levels.at(5), 75, "...which is the rung MASTER BALLs arrive at")
+  eq(#Shops.BALLS, 4, "four balls")
+  eq(#Shops.POTIONS, 4, "four potions")
+
+  -- Viridian's ROM list: balls and potions first, the cures after
+  local viridian = { "POKE_BALL", "POTION", "ANTIDOTE", "PARLYZ_HEAL", "BURN_HEAL" }
+  eq(table.concat(Shops.stock("ViridianMartClerkText", viridian, 1), ","),
+     "POKE_BALL,POTION,ANTIDOTE,PARLYZ_HEAL,BURN_HEAL",
+     "at the drop Viridian sells what it always sold")
+  eq(table.concat(Shops.stock("ViridianMartClerkText", viridian, 3), ","),
+     "POKE_BALL,GREAT_BALL,POTION,SUPER_POTION,REVIVE,ANTIDOTE,PARLYZ_HEAL,BURN_HEAL",
+     "at phase 3 it adds GREAT BALL, SUPER POTION and a REVIVE, and keeps the cheap rungs")
+  eq(table.concat(Shops.stock("ViridianMartClerkText", viridian, 5), ","),
+     "POKE_BALL,GREAT_BALL,ULTRA_BALL,MASTER_BALL,POTION,SUPER_POTION,HYPER_POTION,MAX_POTION,"
+     .. "REVIVE,FULL_HEAL,FULL_RESTORE,ANTIDOTE,PARLYZ_HEAL,BURN_HEAL",
+     "at phase 5 the whole ladder is on the shelf, MASTER BALL included")
+  -- ...and the far end of Kanto sells the SAME shelf: the drop no longer decides
+  local indigo = { "ULTRA_BALL", "GREAT_BALL", "FULL_RESTORE", "MAX_POTION", "FULL_HEAL", "REVIVE" }
+  eq(table.concat(Shops.stock("IndigoPlateauLobbyClerkText", indigo, 1), ","),
+     "POKE_BALL,POTION", "at the drop Indigo's shelf is Viridian's")
+  eq(table.concat(Shops.stock("IndigoPlateauLobbyClerkText", indigo, 5), ","),
+     "POKE_BALL,GREAT_BALL,ULTRA_BALL,MASTER_BALL,POTION,SUPER_POTION,HYPER_POTION,MAX_POTION,"
+     .. "REVIVE,FULL_HEAL,FULL_RESTORE",
+     "and at the top it is the ladder, nothing more")
+  local cinnabar = { "ULTRA_BALL", "GREAT_BALL", "HYPER_POTION", "MAX_REPEL", "ESCAPE_ROPE", "FULL_HEAL" }
+  eq(table.concat(Shops.stock("CinnabarMartClerkText", cinnabar, 4), ","),
+     "POKE_BALL,GREAT_BALL,ULTRA_BALL,POTION,SUPER_POTION,HYPER_POTION,REVIVE,FULL_HEAL,MAX_REPEL,ESCAPE_ROPE",
+     "a store's own extras follow the ladder in the ROM's order")
+  -- the specialty counters are not stores
+  ok(Shops.stock("CeladonMart2FClerk2Text", { "TM_DOUBLE_TEAM", "TM_REFLECT" }, 5) == nil,
+     "the TM counter is left alone")
+  ok(Shops.stock("CeladonMart5FClerk2Text", { "HP_UP", "PROTEIN" }, 5) == nil,
+     "so is the vitamin counter")
+  ok(not Shops.isStore({ "POKE_DOLL", "FIRE_STONE" }), "and the stone counter sells no ball")
+  eq(table.concat(Shops.stock("CeladonMart4FClerkText", { "POKE_DOLL", "FIRE_STONE" }, 5), ","),
+     "POKE_DOLL,FIRE_STONE,MOON_STONE,THUNDER_STONE,WATER_STONE,LEAF_STONE",
+     "...it stays the stone counter at every phase")
+  ok(Shops.stock("Anyone", {}, 3) == nil and Shops.stock("Anyone", nil, 3) == nil,
+     "an empty list is nobody's store")
+  ok(Shops.isStore({ "ANTIDOTE", "SUPER_POTION" }), "a potion alone makes a store")
+
+  -- the MASTER BALL is priced for the match beside the MOON STONE, and both go back
+  local data = { items = { MOON_STONE = { price = 0 }, MASTER_BALL = { price = 0 },
+                           ULTRA_BALL = { price = 1200 } } }
+  local was = Shops.price(data)
+  eq(was.MOON_STONE .. "/" .. was.MASTER_BALL, "0/0", "the ROM prices are remembered")
+  eq(data.items.MASTER_BALL.price, Shops.MASTER_BALL_PRICE, "the MASTER BALL costs its match price")
+  eq(data.items.MOON_STONE.price, Shops.MOON_STONE_PRICE, "the MOON STONE the stones' price")
+  eq(data.items.ULTRA_BALL.price, 1200, "nothing else is touched")
+  ok(Shops.MASTER_BALL_PRICE > 1200, "a MASTER BALL costs more than an ULTRA BALL")
+  Shops.restore(data, was)
+  eq(data.items.MASTER_BALL.price .. "/" .. data.items.MOON_STONE.price, "0/0",
+     "restore puts both ROM prices back")
+  local priced = { items = { MASTER_BALL = { price = 9 } } }
+  Shops.price(priced)
+  eq(priced.items.MASTER_BALL.price, 9, "a build that already prices it keeps its price")
+  ok(Shops.price(nil) == nil and Shops.price({}) == nil, "no items, nothing to price")
+  Shops.restore(nil, was) Shops.restore(data, nil)   -- neither throws
 end
 
 -- ------- a spill is walked through, not walled by (POK-175)
@@ -1698,6 +1908,29 @@ do
       ok(count(hops["ROUTE_9"]) > count(noHops["ROUTE_9"]),
          "ledge hops open ROUTE_9's shelves ("
          .. count(noHops["ROUTE_9"]) .. " -> " .. count(hops["ROUTE_9"]) .. ")")
+      -- and a bot reads the same rows one cell at a time (POK-191):
+      -- Viridian's ledge row -- (24, 8) drops to (24, 10), the ledge tile
+      -- between is no floor, and nothing hops back up
+      local lx, ly = Spawn.hopLanding(maps, tilesets, ledges, "VIRIDIAN_CITY", 24, 8, "down")
+      eq(tostring(lx) .. "," .. tostring(ly), "24,10", "Viridian's ledge drops two cells")
+      ok(not Spawn.walkable(maps, tilesets, "VIRIDIAN_CITY", 24, 9),
+         "the ledge tile itself is not walkable")
+      eq(Spawn.hopLanding(maps, tilesets, ledges, "VIRIDIAN_CITY", 24, 10, "up"), nil,
+         "and there is no hop back up it")
+      eq(Spawn.hopLanding(maps, tilesets, ledges, "VIRIDIAN_CITY", 24, 8, "left"), nil,
+         "nor sideways off the standing cell")
+      eq(Spawn.hopLanding(maps, tilesets, nil, "VIRIDIAN_CITY", 24, 8, "down"), nil,
+         "no rows, no hop")
+      local Bots = require("mods.battle_royale.lib.bots")
+      local function walkV(x, y) return Spawn.walkable(maps, tilesets, "VIRIDIAN_CITY", x, y) end
+      local function hopV(x, y, dir)
+        return Spawn.hopLanding(maps, tilesets, ledges, "VIRIDIAN_CITY", x, y, dir)
+      end
+      local down = Bots.path(walkV, { x = 24, y = 8 }, { x = 24, y = 11 }, nil, hopV)
+      ok(down and #down == 2 and down[1] == "down",
+         "a bot above Viridian's ledge paths straight down it (" .. tostring(down and #down) .. ")")
+      local up = Bots.path(walkV, { x = 24, y = 11 }, { x = 24, y = 8 }, 60, hopV)
+      ok(up == nil or #up > 2, "and never climbs it")
     end
 
     -- the placement search must route around a door rather than stack on
@@ -2655,6 +2888,56 @@ do
   eq(Bots.quaff(drained, { items = { { id = "POKE_BALL", n = 9 } } }), nil,
      "no medicine, no gulp")
 
+  -- ------- the items a bot fights with come out of its bag (POK-190)
+
+  local kitBag = { items = { { id = "X_ATTACK", n = 2 }, { id = "POKE_BALL", n = 1 } } }
+  ok(Bots.takeItem(kitBag, "X_ATTACK"), "an X ATTACK the bag holds is taken")
+  eq(kitBag.items[1].n, 1, "...and the stack is one lighter")
+  ok(Bots.takeItem(kitBag, "X_ATTACK"), "the second goes too")
+  eq(#kitBag.items, 1, "and the empty stack leaves the bag")
+  ok(not Bots.takeItem(kitBag, "X_ATTACK"), "a third is not there to take")
+  ok(not Bots.takeItem(nil, "X_ATTACK") and not Bots.takeItem({}, "X_ATTACK"),
+     "no bag, nothing to take")
+  -- the brain: the class action over the bag, then the move
+  local fakeAI = {}
+  fakeAI.want = { special = "aiItem", item = "X_ATTACK" }
+  fakeAI.classAction = function(_) return fakeAI.want end
+  fakeAI.chooseMove = function() return { id = "TACKLE" } end
+  local rec = { bag = { items = { { id = "X_ATTACK", n = 1 } } } }
+  local took = {}
+  local brain = Bots.brain(rec, fakeAI, function(item) took[#took + 1] = item end)
+  local turn = brain({ enemy = {}, rng = function() return 0 end })
+  eq(turn and turn.special, "aiItem", "with one in the bag the X ATTACK is used")
+  eq(took[1], "X_ATTACK", "...and the take is reported")
+  eq(#rec.bag.items, 0, "...and the bag is lighter for it")
+  turn = brain({ enemy = {}, rng = function() return 0 end })
+  eq(turn and turn.id, "TACKLE", "with none left the turn is a move, not a conjured item")
+  eq(#took, 1, "nothing was taken the second time")
+  fakeAI.want = { special = "aiSwitch", index = 2 }
+  eq(brain({}).special, "aiSwitch", "a switch passes through untouched")
+  fakeAI.want = nil
+  eq(brain({}).id, "TACKLE", "no class action, the move")
+  -- the kit an ai-tier bot packs
+  local classes = { OPP_COOLTRAINER_M = { uses = 2, chance = 64, item = "X_ATTACK" },
+                    OPP_COOLTRAINER_F = { uses = 1, item = "HYPER_POTION", hpBelow = 10 },
+                    OPP_GENERIC = { uses = 0 } }
+  local kit = Bots.aiKit(classes, "OPP_COOLTRAINER_M")
+  eq(kit.id .. "x" .. kit.n, "X_ATTACKx2", "a COOLTRAINER packs its two X ATTACKs")
+  eq(Bots.aiKit(classes, "OPP_COOLTRAINER_F").id, "HYPER_POTION", "...or her HYPER POTION")
+  eq(Bots.aiKit(classes, "OPP_GENERIC"), nil, "a class with no item packs nothing")
+  eq(Bots.aiKit(classes, nil), nil, "no brain, no kit")
+  eq(Bots.aiKit(nil, "OPP_COOLTRAINER_M"), nil, "no registry, no kit")
+
+  -- ------- a prey the stalk cannot reach is written off (POK-187)
+
+  local stalker = { x = 5, y = 5, gaveUp = { x = 9, y = 5, until_ = 100 } }
+  ok(Bots.gaveUp(stalker, { x = 9, y = 5 }, 50), "the trainer across the rock is written off")
+  ok(Bots.gaveUp(stalker, { x = 10, y = 6 }, 50), "...even after a shuffle of a cell or two")
+  ok(not Bots.gaveUp(stalker, { x = 9, y = 9 }, 50), "but not once it has really moved")
+  ok(not Bots.gaveUp(stalker, { x = 9, y = 5 }, 100), "and the memo lapses on the clock")
+  ok(not Bots.gaveUp({ x = 5, y = 5 }, { x = 9, y = 5 }, 50), "no memo, no write-off")
+  ok(Bots.GIVE_UP_SECONDS >= 20, "long enough that the pair does not re-stalk every beat")
+
   Bots.bagMerge(bag, { items = { { id = "POKE_BALL", n = 3 },
                                  { id = "TM_ICE_BEAM", n = 1 } },
                        money = 250 })
@@ -3275,6 +3558,7 @@ do
         flaggedAbsent = function(self) return self.absent or {} end,
         clearRefusal = function(self) self.refused = nil end,
         kick = function(self, id) self.kicked = id return true end,
+        dismissFlag = function(self, id) self.dismissed = id return true end,
       }
       for k, v in pairs(over or {}) do BR[k] = v end
       return BR
@@ -3390,7 +3674,20 @@ do
       })
       eq(names(Lobby.seats(bounced)), "RED|BLUE|GUESTB!?",
          "the turned-away trainer sits under the roster, dim and flagged")
-      ok(Lobby.seats(bounced)[3].id == nil, "...and cannot be opened")
+      -- 2026-09-07: three refusals in ten seconds left three of these on a
+      -- host's screen, and a seat A does nothing on reads as a hang.  It
+      -- opens now, says they left and what they were on, and can be waved
+      -- off ahead of the door's own clock -- but not REMOVEd: they are gone.
+      local gone = Lobby.seats(bounced)[3]
+      eq(gone.id, 9, "...and opens like any seat")
+      local note = labels(Lobby.seatItems(bounced, gone))
+      ok(note:find("|LEFT: CANNOT BATTLE|", 1, true),
+         "the card says they left: " .. note)
+      ok(note:find("|GAME v9.9.9|", 1, true), "...and names their build")
+      ok(note:find("|DISMISS|", 1, true), "...and offers to wave the note off")
+      ok(not note:find("|REMOVE|", 1, true), "...but not to remove somebody gone")
+      find(Lobby.seatItems(bounced, gone), "DISMISS").onSelect()
+      eq(bounced.dismissed, 9, "DISMISS clears that trainer's note")
 
       -- ------- the face a refused guest actually lands on
       --
@@ -3615,7 +3912,7 @@ do
     items, view = BRMenu.items({}, BR, {})
     eq(view, "running", "a running match is its own face")
     eq(labels(items),
-       "MATCH IN PROGRESS|3 TRAINERS IN IT|JOIN NEXT MATCH|SOLO VS BOTS|LEAVE",
+       "MATCH IN PROGRESS|3 TRAINERS IN IT|WATCH, PLAY NEXT|SOLO VS BOTS|LEAVE",
        "the offer: watch-and-play-next, or bots right now")
     for _, it in ipairs(items) do
       ok(#it.label <= 17, ("offer row fits (%d): %s"):format(#it.label, it.label))
@@ -3864,7 +4161,8 @@ do
       eq(labels(Lobby.seatItems(plain, { id = 1, name = "RED", me = true, host = true, wins = 0 })),
          "RED|HOST|WINS: 0|BACK", "myself")
       eq(labels(Lobby.seatItems(plain, { name = "GONE", absent = true, flag = true })),
-         "GONE|CANNOT BATTLE|BACK", "a trainer the door turned away: nothing to remove")
+         "GONE|LEFT: CANNOT BATTLE|BACK",
+         "a trainer the door turned away: nothing to remove, nothing to dismiss without an id")
       for _, it in ipairs(Lobby.seatItems(plain, { id = 2, name = "BLUE", flag = true,
                                                    next = true, wins = 12 })) do
         ok(#it.label <= 17, ("seat card row fits (%d): %s"):format(#it.label, it.label))

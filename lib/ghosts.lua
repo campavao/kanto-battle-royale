@@ -362,9 +362,14 @@ end
 
 -- A step a peer committed.  Queued rather than applied now: the ghost may
 -- still be walking off the previous one, and steps must not overlap.
-function Ghosts:pushStep(id, dir)
+-- `cells` is how many the step covers: 2 for a hop down a ledge
+-- (POK-191), replayed as two plain steps -- stepNow does not judge
+-- collision, so the ghost walks over the ledge tile and lands where the
+-- wire says, instead of stepping once and snapping the second cell.
+function Ghosts:pushStep(id, dir, cells)
   local g = self.ghosts[id]
-  if g then g.queue[#g.queue + 1] = dir end
+  if not g then return end
+  for _ = 1, cells or 1 do g.queue[#g.queue + 1] = dir end
 end
 
 function Ghosts:face(id, facing)

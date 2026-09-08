@@ -397,6 +397,25 @@ Bots.LEAD_LOW = 0.35
 -- this long before they are called stale.
 Bots.LONG_GOAL_SECONDS = 90
 
+-- How long a trainer the stalk could not reach stays written off
+-- (POK-187).  Two bots either side of a cliff each picked the other as
+-- the nearest trainer on the map, found no path, and took the greedy
+-- step at the rock instead -- "the greedy step is still better than
+-- standing down" -- for as long as they both stood there, which was the
+-- rest of the match.  Now an unreachable prey is remembered, the bot
+-- goes about its errands, and the memo lapses so a prey that walks
+-- round the cliff is prey again.
+Bots.GIVE_UP_SECONDS = 30
+
+-- Is `prey` the trainer this bot wrote off, and is the memo still warm?
+-- Within two cells of where it stood: the prey may have shuffled.
+function Bots.gaveUp(bot, prey, now)
+  local g = bot and bot.gaveUp
+  if not (g and prey) then return false end
+  if now and g.until_ and now >= g.until_ then return false end
+  return (math.abs(g.x - prey.x) + math.abs(g.y - prey.y)) <= 2
+end
+
 -- The walk-up between two bots (BR-34) is a walk across the road, not a
 -- chase: past this many steps it is called off and both go about their
 -- business, under the fight cooldown.
@@ -494,13 +513,23 @@ end
 -- bot-versus-bot fights would be a feature that exists and never happens.
 -- With it they close on each other, which is both what makes the roster
 -- thin itself and the same predatory behaviour the players are under.
-function Bots.wander(bot, rng, canWalk, toward)
+-- `hop(map, x, y, dir)` is optional (POK-191): with it a roaming bot
+-- drops off a ledge the way a player strolling Kanto does, so a shelf is
+-- somewhere it walks off rather than paces along.  Returns the direction
+-- and the cell it lands on, two cells on for a hop.
+function Bots.wander(bot, rng, canWalk, toward, hop)
   if rng() < 0.2 then return nil end -- a pause, so they are not machines
 
+  local function walk(x, y) return canWalk(bot.map, x, y) end
+  local function jump(x, y, d) return hop(bot.map, x, y, d) end
+  local lands = {}
   local function ok(dir)
-    local d = DELTA[dir]
-    return d and canWalk(bot.map, bot.x + d[1], bot.y + d[2])
+    if not DELTA[dir] then return false end
+    local nx, ny = Bots.landing(walk, hop and jump, bot.x, bot.y, dir)
+    if nx then lands[dir] = { nx, ny } end
+    return nx ~= nil
   end
+  local function take(dir) return dir, lands[dir][1], lands[dir][2] end
 
   if toward then
     -- close the bigger gap first; fall through to a stroll if boxed in
@@ -514,18 +543,18 @@ function Bots.wander(bot, rng, canWalk, toward)
       wants[2] = dx > 0 and "right" or (dx < 0 and "left" or nil)
     end
     for _, dir in ipairs(wants) do
-      if ok(dir) then return dir end
+      if ok(dir) then return take(dir) end
     end
   end
 
-  if bot.facing and ok(bot.facing) and rng() < 0.7 then return bot.facing end
+  if bot.facing and ok(bot.facing) and rng() < 0.7 then return take(bot.facing) end
 
   -- try the others in a rotated order so no direction is systematically
   -- preferred across the roster
   local start = rng(1, #DIRS)
   for i = 0, #DIRS - 1 do
     local dir = DIRS[(start + i - 1) % #DIRS + 1]
-    if ok(dir) then return dir end
+    if ok(dir) then return take(dir) end
   end
   return nil
 end
@@ -655,7 +684,47 @@ end
 -- (Also: no `unpack`.  It is a global in LuaJIT and `table.unpack` in 5.2+,
 -- and the mod sandbox is not the harness -- the POK-90 lesson.  Nothing
 -- here needs it.)
-function Bots.path(canWalk, from, to, limit)
+-- Sight down a ledge (POK-191).  Wraps a terrain `blocked(x, y)` for a
+-- seer looking `facing`: a ledge tile that the cell behind it could hop
+-- in that direction does not stop the eye.  It is a knee-high drop the
+-- walk-up can take -- and the tile is not walkable, so the plain terrain
+-- test read it as a wall and a bot at the top never saw the player two
+-- cells below.  Looking UP a ledge stays blocked: no row hops that way,
+-- and a fight it cannot walk to is not one it should call.
+function Bots.seeOver(blocked, hop, facing)
+  local d = DELTA[facing]
+  if not (hop and d and blocked) then return blocked end
+  return function(x, y)
+    if not blocked(x, y) then return false end
+    return hop(x - d[1], y - d[2], facing) == nil
+  end
+end
+
+-- Where one step in `dir` from (x, y) puts a bot (POK-191): the next
+-- cell when it can be walked, else the far side of a ledge when
+-- `hop(x, y, dir)` says the engine would let a player jump from here and
+-- the landing can be walked.  nil when neither.  Both closures are bound
+-- to the map, as the BFS takes them; `hop` is optional and is
+-- Spawn.hopLanding in the game.
+--
+-- A ledge tile is not walkable, so without this a path stops at the top
+-- of the drop and a player two cells below is unreachable -- which is
+-- what a bot stood above a ledge and did, in a live match, with the
+-- player right under it.  Upward stays impossible: hop only answers in a
+-- ledge row's own direction, the one the engine hops.
+function Bots.landing(canWalk, hop, x, y, dir)
+  local d = DELTA[dir]
+  if not d then return nil end
+  local nx, ny = x + d[1], y + d[2]
+  if canWalk(nx, ny) then return nx, ny end
+  if hop then
+    local lx, ly = hop(x, y, dir)
+    if lx and canWalk(lx, ly) then return lx, ly end
+  end
+  return nil
+end
+
+function Bots.path(canWalk, from, to, limit, hop)
   if not (from and to) then return nil end
   if from.x == to.x and from.y == to.y then return {} end
   local function key(x, y) return y * 4096 + x end
@@ -669,10 +738,11 @@ function Bots.path(canWalk, from, to, limit)
     nodes = nodes + 1
     if nodes > cap then return nil end
     for _, dir in ipairs(DIRS) do
-      local d = DELTA[dir]
-      local nx, ny = cur.x + d[1], cur.y + d[2]
-      local k = key(nx, ny)
-      if came[k] == nil and canWalk(nx, ny) then
+      -- a step, or a hop down a ledge: the path is still a list of
+      -- directions, and Bots.landing re-derives the cell when it is walked
+      local nx, ny = Bots.landing(canWalk, hop, cur.x, cur.y, dir)
+      local k = nx and key(nx, ny)
+      if k and came[k] == nil then
         came[k] = { from = cur, dir = dir }
         if nx == to.x and ny == to.y then
           local dirs, node = {}, came[k]
@@ -696,7 +766,7 @@ end
 -- The same search to ANY cell `isGoal(x, y)` accepts -- the nearest edge
 -- cell of a seam (BR-32), the cell beside another trainer (BR-34).
 -- Returns the directions and the cell reached, or nil.
-function Bots.pathToAny(canWalk, from, isGoal, limit)
+function Bots.pathToAny(canWalk, from, isGoal, limit, hop)
   if not (from and isGoal) then return nil end
   if isGoal(from.x, from.y) then return {}, { x = from.x, y = from.y } end
   local function key(x, y) return y * 4096 + x end
@@ -710,10 +780,9 @@ function Bots.pathToAny(canWalk, from, isGoal, limit)
     nodes = nodes + 1
     if nodes > cap then return nil end
     for _, dir in ipairs(DIRS) do
-      local d = DELTA[dir]
-      local nx, ny = cur.x + d[1], cur.y + d[2]
-      local k = key(nx, ny)
-      if came[k] == nil and canWalk(nx, ny) then
+      local nx, ny = Bots.landing(canWalk, hop, cur.x, cur.y, dir)
+      local k = nx and key(nx, ny)
+      if k and came[k] == nil then
         came[k] = { from = cur, dir = dir }
         if isGoal(nx, ny) then
           local dirs, node = {}, came[k]
@@ -829,8 +898,10 @@ end
 -- keeps its heading, it strolls off when boxed in -- which is right for a
 -- bot with nowhere to be and wrong for one that has just spotted you and
 -- is walking over.  nil means it cannot get closer: already adjacent, or
--- walled off.
-function Bots.approach(bot, canWalk, toward)
+-- walled off.  Returns the direction and the cell it lands on -- two
+-- cells on when the step is a hop down a ledge (`hop(map, x, y, dir)`,
+-- optional; POK-191).
+function Bots.approach(bot, canWalk, toward, hop)
   if not (bot and toward and bot.x and bot.y and toward.x and toward.y) then
     return nil
   end
@@ -845,9 +916,13 @@ function Bots.approach(bot, canWalk, toward)
     wants[1] = dy > 0 and "down" or (dy < 0 and "up" or nil)
     wants[2] = dx > 0 and "right" or (dx < 0 and "left" or nil)
   end
+  local function walk(x, y) return canWalk(bot.map, x, y) end
+  local function jump(x, y, d) return hop(bot.map, x, y, d) end
   for _, dir in ipairs(wants) do
-    local d = DELTA[dir]
-    if d and canWalk(bot.map, bot.x + d[1], bot.y + d[2]) then return dir end
+    local nx, ny = Bots.landing(walk, hop and jump, bot.x, bot.y, dir)
+    -- a hop that would land ON them is no stride: the engine refuses an
+    -- occupied landing, and across the ledge is as close as it gets
+    if nx and not (nx == toward.x and ny == toward.y) then return dir, nx, ny end
   end
   return nil
 end
@@ -1189,6 +1264,56 @@ function Bots.bagMerge(bag, loot)
   end
   bag.money = (bag.money or 0) + (loot.money or 0)
   return bag
+end
+
+-- Take one of `id` out of the bag (POK-190): true and the stack is a
+-- unit lighter (gone at zero), false when there is none to take.
+function Bots.takeItem(bag, id)
+  for i, it in ipairs((bag and bag.items) or {}) do
+    if it.id == id and (it.n or 0) >= 1 then
+      it.n = it.n - 1
+      if it.n <= 0 then table.remove(bag.items, i) end
+      return true
+    end
+  end
+  return false
+end
+
+-- The brain a bot fights with (POK-190).  The engine's class AI
+-- (TrainerAI.classAction) conjures its item -- a COOLTRAINER's X ATTACK,
+-- twice a fight, every fight -- with no inventory behind it, which is
+-- why a player who watched a bot pop X ATTACKs never found one in its
+-- bag.  This brain runs the same class action and then asks the bag:
+-- an item the bag holds is taken (so what is left rides to the spill)
+-- and used; one it lacks is not used, and the turn is a move like any
+-- other.  Switches pass through untouched.  `ai` is the TrainerAI
+-- module; `onTake(item)` fires after a take so the host can relay the
+-- record.  Sits on trainer.brain, the engine's own seam that supersedes
+-- classAction and move scoring (BattleState:enemyAction).
+function Bots.brain(record, ai, onTake)
+  return function(battle)
+    local act = ai.classAction(battle)
+    if act and act.special == "aiItem" then
+      if Bots.takeItem(record and record.bag, act.item) then
+        if onTake then onTake(act.item) end
+        return act
+      end
+      act = nil
+    end
+    if act then return act end
+    return ai.chooseMove(battle.enemy, battle.rng, battle)
+  end
+end
+
+-- What an ai-tier bot packs for its class's item AI (POK-190): the
+-- class's item, as many as it has uses -- the X ATTACKs the COOLTRAINER
+-- brain will reach for, now bought and carried rather than conjured.
+-- `classes` is the ai_classes registry.  nil for a bot with no such
+-- brain, or a class with no item.
+function Bots.aiKit(classes, aiClass)
+  local class = classes and aiClass and classes[aiClass]
+  if not (class and class.item) then return nil end
+  return { id = class.item, n = math.max(1, tonumber(class.uses) or 1) }
 end
 
 -- The move inside a TM item id, or nil for anything else.

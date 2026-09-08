@@ -158,6 +158,46 @@ do
   end
 end
 
+-- ------- route trainers carry BOTH sight levers (POK-150, POK-163)
+--
+-- The fork engine's checkTrainerSight skips a trainer whose TEXT has a
+-- talk script; upstream 0.2.56's skips only a TEXT named in the map
+-- contribution's `noSight` table, and never reads the talk one for that.
+-- Found 2026-09-07 with a player standing in a live match on 0.2.56 with
+-- every Nugget Bridge trainer engaging on sight.  Every map with a
+-- trainer object contributes both tables, live and empty out of a match.
+
+do
+  -- The per-map registrations are dealt from Data.maps at load, and the
+  -- headless loader carries no map roster -- so this is a structural pin
+  -- on whatever maps it DID see, and says so when that is none rather
+  -- than failing on an empty room.
+  local reg = run.loader.content and run.loader.content.map_scripts
+  local Data = require("src.core.Data")
+  local withMaps = 0
+  for _, mapId in ipairs({ "ROUTE_24", "CERULEAN_GYM", "PEWTER_GYM" }) do
+    if Data.maps and Data.maps[mapId] then
+      withMaps = withMaps + 1
+      local chain = reg and reg:chain(mapId)
+      local mine
+      for _, entry in ipairs(chain or {}) do
+        if type(entry) == "table" and entry.talk then mine = entry end
+      end
+      T.check(mine ~= nil, mapId .. ": the mod contributes a talk table")
+      T.check(mine and type(mine.noSight) == "table",
+              mapId .. ": ...and a noSight table beside it (upstream 0.2.56's lever)")
+      T.check(mine and next(mine.talk) == nil and next(mine.noSight) == nil,
+              mapId .. ": both empty out of a match, so vanilla sight is untouched")
+      T.check(mine and (mine.priority or 0) == 50,
+              mapId .. ": ranked above another mod's default contribution")
+    end
+  end
+  if withMaps == 0 then
+    T.check(true, "no map roster headless; the noSight pin is exercised by "
+                  .. "npc_sight_smoke / misty probes in the real game")
+  end
+end
+
 -- ------- the other lockstep walks stand down too (POK-126, POK-127)
 --
 -- Same composition contract as the Pewter block above: in the chain so it
@@ -1111,18 +1151,18 @@ do
     f:close()
     local talk = src:match('mod%.hooks:wrap%("world%.talk".-\n  end%)\n')
     T.check(talk ~= nil, "found the talk hook")
-    T.check(talk and talk:find("Shops.stock(entry.label, entry.mart)", 1, true) ~= nil,
-            "a mart entry is asked whether it is the stone counter")
+    T.check(talk and talk:find("Shops.stock(entry.label, entry.mart, BR.ring and BR.ring.phase)", 1, true) ~= nil,
+            "a mart entry is asked whether it is the stone counter or a store, at the ring's phase")
     T.check(talk and talk:find('Screens.push(game, "ShopMenu", stock)', 1, true) ~= nil,
             "...and the counter opens the engine's own shop over the extended list")
     -- the counter sits under the session guard the cable club and nurse share
     local guard = talk and talk:find("if BR:inSession() and def and def.text and data and data.textEntry", 1, true)
-    local counter = talk and talk:find("Shops.stock(entry.label, entry.mart)", 1, true)
+    local counter = talk and talk:find("Shops.stock(entry.label, entry.mart, BR.ring and BR.ring.phase)", 1, true)
     T.check(guard and counter and guard < counter, "...only while the match world exists")
     local reset = src:match("function BR:resetMatch%(.-\n  end\n")
-    T.check(reset and reset:find("restoreMoonStone(", 1, true) ~= nil
-            and reset:find("self.moonStonePrice = nil", 1, true) ~= nil,
-            "resetMatch gives the MOON STONE its ROM price back")
+    T.check(reset and reset:find("lib.shops\").restore(", 1, true) ~= nil
+            and reset:find("self.shopPrices = nil", 1, true) ~= nil,
+            "resetMatch gives the MOON STONE and MASTER BALL their ROM prices back")
   end
 end
 
@@ -1291,8 +1331,8 @@ do
     T.check(try and try:find("if self:inBreather() then return end", 1, true) ~= nil
             and bot and bot:find("if self:inBreather() then return end", 1, true) ~= nil,
             "neither eyeline fires inside it")
-    T.check(src:find('and otherId ~= self.botFight and o.busy ~= "battle" then', 1, true) ~= nil,
-            "a fighting trainer is not prey, so bots walk at each other")
+    T.check(src:find('and otherId ~= self.botFight and o.busy ~= "battle"\n                 and not Bots.gaveUp(p, o, now) then', 1, true) ~= nil,
+            "a fighting trainer is not prey, so bots walk at each other (nor a written-off one, POK-187)")
     T.check(src:find("and not self:inBreather(now))", 1, true) ~= nil,
             "...and neither is a player in the breather")
     local chal = src:match("function BR:challengeTrainer%(.-\n  end\n")

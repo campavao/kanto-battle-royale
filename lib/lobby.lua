@@ -78,7 +78,9 @@ function Lobby.seats(BR)
     }
   end
   for _, f in ipairs((BR.flaggedAbsent and BR:flaggedAbsent()) or {}) do
-    out[#out + 1] = { name = tostring(f.name or "?"), absent = true, flag = true }
+    -- opens like any seat (the id), to say who they were and be dismissed
+    out[#out + 1] = { id = f.id, name = tostring(f.name or "?"),
+                      absent = true, flag = true, build = f.build }
   end
   -- MAX minus the humans here: bots when FILL is on and the seed is
   -- known, open seats otherwise (the user's call: a MAX of thirty with
@@ -287,9 +289,9 @@ function Lobby.seatItems(BR, seat)
   if seat.next then row("PLAYS NEXT") end
   if seat.wins then row("WINS: " .. tostring(seat.wins)) end
   if seat.flag then
-    row("CANNOT BATTLE")
+    row(seat.absent and "LEFT: CANNOT BATTLE" or "CANNOT BATTLE")
     local p = BR.players and BR.players[seat.id]
-    local theirs = p and p.build
+    local theirs = (p and p.build) or seat.build
     if theirs then
       if theirs.mod then row("ROYALE v" .. tostring(theirs.mod)) end
       if theirs.engine then row("GAME v" .. tostring(theirs.engine)) end
@@ -300,6 +302,14 @@ function Lobby.seatItems(BR, seat)
     items[#items + 1] = {
       label = "REMOVE",
       onSelect = function() if BR.kick then BR:kick(seat.id) end end,
+    }
+  end
+  -- a turned-away trainer is already gone; what is left is the note, and
+  -- the note can be waved off without waiting for its clock
+  if seat.absent and seat.id then
+    items[#items + 1] = {
+      label = "DISMISS",
+      onSelect = function() if BR.dismissFlag then BR:dismissFlag(seat.id) end end,
     }
   end
   -- the box pops itself on any row that does not keep it open (Menu's

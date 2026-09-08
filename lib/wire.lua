@@ -27,6 +27,9 @@
 -- is honoured (see main.lua), so a guest cannot puppet anyone.
 --   {t="start", seed=, spawns={{id=,map=,x=,y=}}, host: the match begins
 --             safari=, fog=, ts=, an=}          (ts/an: the host's pace)
+--   {t="late", ...a start with st= per spawn,   host -> ONE watcher who
+--             safari=0, ring={ring fields}}     arrived mid-match: the
+--                                                 match as it stands
 --   {t="challenge", n=}                           I am facing you: fight
 --   {t="accept", n=} / {t="decline", n=, why=}    the reply
 --   {t="bt", m={...}}                             one link-battle message
@@ -209,6 +212,21 @@ function Wire.start(seed, spawns, safari, fog, pace)
            fog = fog,
            ts = pace and pace.textSpeed or nil,
            an = pace and pace.animations }
+end
+
+-- The match in progress, sent by the host to one watcher who arrived after
+-- the start (relay `to`, never broadcast).  The start's own shape -- the
+-- seed deals the bots and the zone on the reader's side -- with each
+-- trainer's current cell and `st = "out"` for the fallen, no Safari (the
+-- watcher lands straight in the match), and the ring the host is on,
+-- clock included, so the FOG box and the map read true at once.
+function Wire.late(seed, spawns, fog, pace, ring)
+  return { t = "late", seed = seed, spawns = spawns, safari = 0,
+           fog = fog,
+           ts = pace and pace.textSpeed or nil,
+           an = pace and pace.animations,
+           ring = ring and { phase = ring.phase, cx = ring.cx, cy = ring.cy,
+                             r = ring.r, place = ring.place, e = ring.e } or nil }
 end
 
 function Wire.challenge(nonce) return { t = "challenge", n = nonce } end
@@ -417,7 +435,10 @@ decoders.start = function(m)
        or not (isCell(s.x) and isCell(s.y)) then
       return nil, "bad spawn"
     end
-    spawns[#spawns + 1] = { id = s.id, map = s.map, x = s.x, y = s.y }
+    spawns[#spawns + 1] = { id = s.id, map = s.map, x = s.x, y = s.y,
+                            -- the fallen, on a `late` (nothing sets it on
+                            -- a start, and a reader ignores it there)
+                            st = s.st == "out" and "out" or nil }
   end
   if #spawns == 0 then return nil, "no spawns" end
   -- the Safari opening's length in seconds; absent or 0 is the plain drop
@@ -612,6 +633,20 @@ decoders.ring = function(m)
   return { t = "ring", phase = math.floor(m.phase), cx = m.cx, cy = m.cy,
            r = m.r, elapsed = elapsed,
            place = type(m.place) == "string" and m.place:sub(1, MAX_ID) or nil }
+end
+
+-- a start with statuses and a ring: validated as one, then the other
+decoders.late = function(m)
+  local base, why = decoders.start(m)
+  if not base then return nil, why end
+  base.t, base.late = "late", true
+  if m.ring ~= nil then
+    if type(m.ring) ~= "table" then return nil, "bad ring" end
+    local ring, rwhy = decoders.ring(m.ring)
+    if not ring then return nil, rwhy end
+    base.ring = ring
+  end
+  return base
 end
 
 decoders.safari = function(m)

@@ -342,6 +342,65 @@ function Spawn.escapableSets(maps, tilesets, ledges)
   return sets
 end
 
+-- The cell a hop from (x, y) in `dir` lands on, or nil (POK-191).  The
+-- engine's checkLedgeHop rule (data/tilesets/ledge_tiles.asm): standing
+-- tile + ledge tile in front + matching input direction -> two cells on.
+-- Off the map DEFINITION like walkable, so the host can ask it of a map
+-- nobody is standing on.  A landing off the map (Route 4's plaza onto
+-- Route 3) is not modelled -- nil, the same conservative answer
+-- escapableSets gives.  One-way by construction: the rows only face
+-- downhill, so a hop UP a ledge has no row and no landing.
+function Spawn.hopLanding(maps, tilesets, ledges, mapId, x, y, dir)
+  local v = LEDGE_VEC[dir]
+  local def = maps and maps[mapId]
+  local ts = def and tilesets and tilesets[def.tileset]
+  if not (v and def and ts and ledges and x and y) then return nil end
+  local w, h = def.width * 2, def.height * 2
+  local fx, fy = x + v[1], y + v[2]
+  local lx, ly = x + 2 * v[1], y + 2 * v[2]
+  if x < 0 or y < 0 or x >= w or y >= h
+     or lx < 0 or ly < 0 or lx >= w or ly >= h then return nil end
+  local standing = Map.defCellTile(def, ts, x, y)
+  local front = Map.defCellTile(def, ts, fx, fy)
+  for _, ledge in ipairs(ledges) do
+    if ledge.facing == dir and ledge.input == dir
+       and (ledge.tileset or "OVERWORLD") == def.tileset
+       and ledge.standingTile == standing and ledge.ledgeTile == front then
+      return lx, ly
+    end
+  end
+  return nil
+end
+
+-- A match seed that two clients launched in the same second do not share
+-- (POK-157).  BR.rollSeed used to draw from LOVE's process-global
+-- generator, which nobody seeds -- so it is seeded from os.time(), one
+-- second of granularity, and two processes started together drew the
+-- same number.  Only the host rolls and the seed rides the wire, so no
+-- player ever saw it; what it weakened was the two-client harness, which
+-- could pass on agreement it never tested (both sides computing the same
+-- spawn from the same seed rather than one carrying it to the other).
+--
+-- Mixed from what is already different per install and per instant: the
+-- stats install id (sixteen hex characters), the wall clock, a fraction
+-- of a second from a high-resolution timer, and one draw from the shared
+-- generator -- read, never reseeded: that generator is the engine's and
+-- every other mod's, and setRandomSeed from here would perturb draws BR
+-- does not own.  Pure and deterministic over its inputs, so br_test can
+-- pin that any one of them moving moves the seed.  Returns 1 .. 2^30.
+local SEED_SPAN = 2 ^ 30
+function Spawn.seedFrom(id, secs, frac, draw)
+  local h = 7
+  for i = 1, #(id or "") do
+    h = (h * 31 + (id:byte(i) or 0)) % 2147483647
+  end
+  local s = math.floor(tonumber(secs) or 0) % 2147483647
+  local f = math.floor(((tonumber(frac) or 0) % 1) * 1000003)
+  local d = math.floor(tonumber(draw) or 0) % 2147483647
+  local mixed = (h * 2654435 + s * 40503 + f * 7919 + d) % (SEED_SPAN - 1)
+  return math.floor(mixed) + 1
+end
+
 -- Every cell a player could be dropped on for one map, in row-major order
 -- -- walkable, unoccupied, and with a way off the map (POK-23).  With the
 -- world's `maps`/`tilesets` in hand an OUTDOOR map's "way off" is answered

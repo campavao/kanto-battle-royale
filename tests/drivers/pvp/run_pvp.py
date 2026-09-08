@@ -55,6 +55,10 @@ SCENARIOS = {
     # duel, watches the guest, and the guest's next fight must open on the
     # host's screen as a replica and end the way the real one did.
     "spectate": ("host_spectate.lua", "guest_spectate.lua"),
+    # 2026-09-07: a quick-player who finds a match under way takes WATCH,
+    # PLAY NEXT and must land INSIDE that match as a camera -- and must
+    # never be counted among the living while there.
+    "late": ("host_late.lua", "guest_late.lua"),
 }
 
 
