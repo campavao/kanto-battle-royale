@@ -1,41 +1,41 @@
 {
-  "readAt": "2026-09-08T17:32:07.439Z",
+  "readAt": "2026-09-08T20:16:55.079Z",
   "list": [
     {
       "tag": "v0.49.0",
       "name": "the POKé DOLL is the way out, and the FIGHT menu has a clock",
       "at": "2026-09-08T13:01:21Z",
-      "dl": 7
+      "dl": 13
     },
     {
       "tag": "v0.48.0",
       "name": "the Marts climb with the fog, and bots that hop ledges",
       "at": "2026-09-08T03:28:20Z",
-      "dl": 27
+      "dl": 29
     },
     {
       "tag": "v0.47.0",
       "name": "the host sets the pace",
       "at": "2026-09-06T01:48:30Z",
-      "dl": 83
+      "dl": 84
     },
     {
       "tag": "v0.46.1",
       "name": "USE returns to the bag, bots click their attacks",
       "at": "2026-09-06T00:25:09Z",
-      "dl": 3
+      "dl": 4
     },
     {
       "tag": "v0.46.0",
       "name": "bots move like players",
       "at": "2026-09-06T00:12:02Z",
-      "dl": 2
+      "dl": 3
     },
     {
       "tag": "v0.45.0",
       "name": "the lobby is a room",
       "at": "2026-09-05T14:57:59Z",
-      "dl": 15
+      "dl": 16
     },
     {
       "tag": "v0.44.0",
@@ -65,7 +65,7 @@
       "tag": "v0.40.0",
       "name": "the bots can win",
       "at": "2026-08-28T12:43:41Z",
-      "dl": 246
+      "dl": 247
     },
     {
       "tag": "v0.39.0",
