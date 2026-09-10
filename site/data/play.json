@@ -1,12 +1,12 @@
 {
- "readAt": "2026-09-10T17:29:39.586Z",
+ "readAt": "2026-09-10T19:58:45.885Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
   {
    "code": "WTERH5",
    "at": "2026-09-10T17:17:32.066Z",
-   "end": null,
-   "secs": null,
+   "end": "2026-09-10T17:51:06.044Z",
+   "secs": 2014,
    "door": "open",
    "mode": "host",
    "humans": 1,
@@ -26,10 +26,9 @@
      "mode": "host",
      "trainers": 1,
      "watching": 0,
-     "secs": null
+     "secs": 1943
     }
    ],
-   "live": true,
    "exact": true
   },
   {
@@ -166,7 +165,7 @@
    "secs": null,
    "door": "open",
    "mode": "quick",
-   "humans": 3,
+   "humans": 4,
    "together": 2,
    "spectators": 0,
    "matches": 1,
@@ -178,6 +177,10 @@
     {
      "t": "2026-09-10T17:08:12.235Z",
      "how": "quick"
+    },
+    {
+     "t": "2026-09-10T19:43:18.460Z",
+     "how": "quick"
     }
    ],
    "versions": [
@@ -185,7 +188,8 @@
    ],
    "installs": [
     "199d624c",
-    "eadb7a25"
+    "eadb7a25",
+    "ab99aad7"
    ],
    "played": [
     {
@@ -9202,6 +9206,18 @@
    ],
    "solo": 1,
    "checkins": 8,
+   "v": "0.49.0"
+  },
+  {
+   "id": "ab99aad7",
+   "first": "2026-09-10T19:43:18.601Z",
+   "last": "2026-09-10T19:43:18.601Z",
+   "since": "2026-09-10",
+   "versions": [
+    "0.49.0"
+   ],
+   "solo": 0,
+   "checkins": 1,
    "v": "0.49.0"
   }
  ],
