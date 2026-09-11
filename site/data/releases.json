@@ -1,11 +1,11 @@
 {
-  "readAt": "2026-09-11T00:18:27.195Z",
+  "readAt": "2026-09-11T04:56:17.378Z",
   "list": [
     {
       "tag": "v0.49.0",
       "name": "the POKé DOLL is the way out, and the FIGHT menu has a clock",
       "at": "2026-09-08T13:01:21Z",
-      "dl": 67
+      "dl": 70
     },
     {
       "tag": "v0.48.0",
@@ -17,7 +17,7 @@
       "tag": "v0.47.0",
       "name": "the host sets the pace",
       "at": "2026-09-06T01:48:30Z",
-      "dl": 84
+      "dl": 86
     },
     {
       "tag": "v0.46.1",
@@ -35,7 +35,7 @@
       "tag": "v0.45.0",
       "name": "the lobby is a room",
       "at": "2026-09-05T14:57:59Z",
-      "dl": 17
+      "dl": 18
     },
     {
       "tag": "v0.44.0",
@@ -65,7 +65,7 @@
       "tag": "v0.40.0",
       "name": "the bots can win",
       "at": "2026-08-28T12:43:41Z",
-      "dl": 274
+      "dl": 278
     },
     {
       "tag": "v0.39.0",
