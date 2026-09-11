@@ -15,6 +15,10 @@ return function(game)
   if not E then return C.fail("no battle_royale exports") end
   E.setRelay(os.getenv("BR_PVP_RELAY") or "127.0.0.1:7790")
   E.setName("HOSTA")
+  -- our own battle text (lib/lines.lua, 2026-09-10): the guest reads it
+  E.setLine("intro", "Host says hi")
+  E.setLine("win", "Host won.")
+  E.setLine("lose", "Host lost.")
   E.setBots(0)
   E.setSafari(0)
   E.setFog(600)
@@ -114,6 +118,18 @@ return function(game)
     return C.fail("the duel never started on the host side")
   end
   U.log("PVP host: lockstep battle open")
+  -- status says "battle" from beginBattle; the LinkBattle itself (and
+  -- its dressing) arrives once the lockstep handshake lands, so wait
+  local bt = {}
+  for _ = 1, 600 do
+    bt = E.battleText() or {}
+    if bt.intro then break end
+    U.wait(1)
+  end
+  if bt.intro ~= "Guest says hi" then
+    return C.fail("the intro should be the guest's line, got " .. tostring(bt.intro))
+  end
+  U.log("PVP host: the fight opened on the guest's own intro")
 
   -- and a trainer in a fight is marked as one (POK-113)
   if not awaitBusy("battle", 400, true) then
@@ -126,6 +142,12 @@ return function(game)
     return C.fail("the host never went out (it should have lost)")
   end
   U.log("PVP host: eliminated as planned")
+  bt = E.battleText() or {}
+  local wantOutro = "HOSTA is out of\nPOK\195\169MON!\fGuest won.\fHost lost."
+  if bt.outro ~= wantOutro then
+    return C.fail("the outro should be their win line then our lose line, got " .. tostring(bt.outro and bt.outro:gsub("\f", " / "):gsub("\n", " ")))
+  end
+  U.log("PVP host: the outro read the guest's win line, then our lose line")
 
   if not L.mashUntil(C, function() return E.phase() == "over" end, 600) then
     return C.fail("the match never ended after the elimination")

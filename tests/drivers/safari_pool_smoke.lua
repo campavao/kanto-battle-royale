@@ -37,6 +37,17 @@ return function(game)
   if not L.mashUntil(C, function() return E.phase() == "safari" end, 400) then
     return C.fail("never reached the Safari (phase " .. tostring(E.phase()) .. ")")
   end
+  -- the opening line is a bottom box from the HUD (2026-09-11): a shot of
+  -- it with the bare clock top-left, once the landing has settled
+  local SHOTS = os.getenv("BR_SHOTS")
+  if SHOTS then
+    for _ = 1, 120 do
+      if game.stack:top() == C.ow() then break end
+      U.tap(game, "a") U.wait(5)
+    end
+    U.wait(30)
+    U.shot(game, SHOTS .. "/safari_notice.png")
+  end
 
   local zone, theme = E.safariPool()
   if not zone then return C.fail("no zone") end

@@ -140,29 +140,25 @@ return function(game)
       return C.fail(("turning walked us off the ball to %d,%d"):format(C.x(), C.y()))
     end
     local before = #game.save.party
-    U.tap(game, "a") U.wait(12)      -- "Do you want it?"
-    U.tap(game, "a") U.wait(12)      -- YES
-    for _ = 1, 10 do
-      if #game.save.party > before then break end
-      U.tap(game, "a") U.wait(10)
+    -- the ticker names the ball before the press (2026-09-10)
+    local held = (E.news() or {}).held
+    if held ~= "KADABRA" then
+      return C.fail(("facing the %s ball the ticker holds %s, not KADABRA"):format(label, tostring(held)))
     end
+    U.tap(game, "a") U.wait(12)      -- A takes it: no question, no YES
     if #game.save.party ~= before + 1 then
-      return C.fail("the " .. label .. " ball did not join the party")
+      return C.fail("the " .. label .. " ball did not join the party on one press")
     end
-    -- the joined line, then -- for a trade -- the movie: A through it all
-    -- (a trade evolution does not honour B, so A is what a player does)
+    -- no movie, no box: the change (if any) is applied on the spot and
+    -- the ticker says so
     if not settle() then
       return C.fail("the screen never settled after the " .. label .. " pickup (top "
         .. tostring(game.stack:top()) .. ")")
     end
     -- the bag that came with the debug spill: take it off the ground so
-    -- the next spill's ball has a clean cell
+    -- the next spill's ball has a clean cell (A on a bag takes it all)
     for _, p in ipairs(E.spills() or {}) do
-      if p.bag then E.openSpill(p.key) U.wait(10)
-        U.tap(game, "a") U.wait(10) U.tap(game, "down") U.wait(6) U.tap(game, "a") U.wait(12)
-        U.tap(game, "a") U.wait(10) U.tap(game, "a") U.wait(12)
-        settle()
-      end
+      if p.bag then E.openSpill(p.key) U.wait(10) settle() end
     end
     return game.save.party[#game.save.party].species
   end
@@ -172,7 +168,12 @@ return function(game)
   if got ~= "ALAKAZAM" then
     return C.fail("a stranger's KADABRA came up as " .. tostring(got) .. ", not ALAKAZAM")
   end
-  U.log("TRADE: a stranger's KADABRA evolved into ALAKAZAM on pickup")
+  local said = false
+  for _, line in ipairs((E.news() or {}).log or {}) do
+    if line == "KADABRA evolved\ninto ALAKAZAM!" then said = true end
+  end
+  if not said then return C.fail("the ticker never said KADABRA evolved into ALAKAZAM") end
+  U.log("TRADE: a stranger's KADABRA evolved into ALAKAZAM on pickup, said on the ticker")
 
   local mine = pickUp("me", tostring(E.myId and E.myId() or 1) .. ":", "own")
   if not mine then return end

@@ -229,8 +229,18 @@ function Wire.late(seed, spawns, fog, pace, ring)
                              r = ring.r, place = ring.place, e = ring.e } or nil }
 end
 
-function Wire.challenge(nonce) return { t = "challenge", n = nonce } end
-function Wire.accept(nonce) return { t = "accept", n = nonce } end
+-- The challenger's own battle text rides the challenge and the answer's
+-- the accept (lib/lines.lua, 2026-09-10): each side holds the other's
+-- before the lockstep opens.  `L` is absent when nothing is set, and a
+-- client that predates it reads a plain challenge.
+function Wire.challenge(nonce, lines)
+  local Lines = require("mods.battle_royale.lib.lines")
+  return { t = "challenge", n = nonce, L = Lines.pack(lines) }
+end
+function Wire.accept(nonce, lines)
+  local Lines = require("mods.battle_royale.lib.lines")
+  return { t = "accept", n = nonce, L = Lines.pack(lines) }
+end
 function Wire.decline(nonce, why) return { t = "decline", n = nonce, why = why } end
 function Wire.battle(inner) return { t = "bt", m = inner } end
 function Wire.out() return { t = "out" } end
@@ -472,13 +482,15 @@ end
 decoders.challenge = function(m)
   local n = nonce(m)
   if not n then return nil, "bad nonce" end
-  return { t = "challenge", nonce = n }
+  local Lines = require("mods.battle_royale.lib.lines")
+  return { t = "challenge", nonce = n, lines = Lines.unpack(m.L) }
 end
 
 decoders.accept = function(m)
   local n = nonce(m)
   if not n then return nil, "bad nonce" end
-  return { t = "accept", nonce = n }
+  local Lines = require("mods.battle_royale.lib.lines")
+  return { t = "accept", nonce = n, lines = Lines.unpack(m.L) }
 end
 
 decoders.decline = function(m)

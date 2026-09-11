@@ -77,6 +77,17 @@ return function(game)
   end
   U.log(("SPEC: out on %s; %s still up, watching %s"):format(
     tostring(C.map()), tostring(E.aliveCount()), tostring(E.watching())))
+  -- the watching count (2026-09-11): us, out, and no bot ever
+  if E.watchingCount() ~= 1 then
+    return C.fail("the watching count should be 1 (us), got " .. tostring(E.watchingCount()))
+  end
+  -- the HUD (the count, the eye) draws over the bare map: press through
+  -- the elimination text first
+  for _ = 1, 200 do
+    if game.stack:top() == C.ow() then break end
+    U.tap(game, "b") U.wait(8)
+  end
+  U.wait(30)
   shot("spectating")
 
   -- ONE BOT PER TOWN, deliberately.  The first attempt herded them all

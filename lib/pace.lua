@@ -46,6 +46,12 @@ Pace.SPEEDS = { { 1, "FAST" }, { 3, "MEDIUM" }, { 5, "SLOW" } }
 -- the mod's core settings: what the game itself ships with
 Pace.DEFAULT = { textSpeed = 3, animations = true }
 
+-- ...and what a match nobody hosts runs at (QUICK PLAY, the DAILY GAME):
+-- FAST text and no battle animations, the user's call after a night of
+-- both (2026-09-11) -- the animations are loved and the match is faster
+-- without them, and a room with no host has nobody to choose.
+Pace.QUICK = { textSpeed = 1, animations = false }
+
 local function speedIndex(v)
   for i, s in ipairs(Pace.SPEEDS) do
     if s[1] == v then return i end

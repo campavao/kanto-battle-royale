@@ -15,6 +15,10 @@ return function(game)
   if not E then return C.fail("no battle_royale exports") end
   E.setRelay(os.getenv("BR_PVP_RELAY") or "127.0.0.1:7790")
   E.setName("GUESTB")
+  -- our own battle text (lib/lines.lua, 2026-09-10): the host reads it
+  E.setLine("intro", "Guest says hi")
+  E.setLine("win", "Guest won.")
+  E.setLine("lose", "Guest lost.")
 
   local code = L.waitFor(DIR, "code.txt", 3600)
   if not code then return C.fail("no room code ever appeared") end
@@ -126,11 +130,39 @@ return function(game)
   end
   if not fought then return C.fail("the duel never started on the guest side") end
   U.log("PVP guest: lockstep battle open")
+  -- status says "battle" from beginBattle; the LinkBattle itself (and
+  -- its dressing) arrives once the lockstep handshake lands, so wait
+  local bt = {}
+  for _ = 1, 600 do
+    bt = E.battleText() or {}
+    if bt.intro then break end
+    U.wait(1)
+  end
+  if bt.intro ~= "Host says hi" then
+    return C.fail("the intro should be the host's line, got " .. tostring(bt.intro))
+  end
+  U.log("PVP guest: the fight opened on the host's own intro")
+  local SHOTS = os.getenv("BR_SHOTS")
+  if SHOTS then
+    -- the slide-in first, then the intro page: shoot once the box has text
+    for _ = 1, 400 do
+      local lb = C.E().busy and game.stack:top()
+      if lb and lb.phase == "messages" and (lb.msgWaiting or lb.msgPrompt) then break end
+      U.wait(2)
+    end
+    U.shot(game, SHOTS .. "/lines_intro.png")
+  end
 
   if not L.mashUntil(C, function() return E.phase() == "over" end, 4800) then
     return C.fail("the match never ended (the guest should have won)")
   end
   U.log("PVP guest: match over; checking the ground")
+  bt = E.battleText() or {}
+  local wantOutro = "HOSTA is out of\nPOK\195\169MON!\fGuest won.\fHost lost."
+  if bt.outro ~= wantOutro then
+    return C.fail("the outro should be our win line then their lose line, got " .. tostring(bt.outro and bt.outro:gsub("\f", " / "):gsub("\n", " ")))
+  end
+  U.log("PVP guest: the outro read our win line, then the host's lose line")
   local sp = E.spills() or {}
   U.log("PVP guest: spills visible after the win: " .. tostring(#sp))
   if #sp < 1 then return C.fail("the loser spilled nothing") end

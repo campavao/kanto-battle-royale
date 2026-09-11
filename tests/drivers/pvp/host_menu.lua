@@ -1,16 +1,11 @@
--- POK-162 scenario "held", host side: the challenger.
+-- POK-199 scenario "menu", host side: the challenger.
 --
--- The guest stands three cells down the row from this post, reading the
--- GYM sign.  A challenge that LANDS while they are reading is queued on
--- their side and answered the moment the dialog closes -- the lockstep
--- opens on both screens, instead of half-opening under their dialog and
--- wedging both clients for the rest of the match.  (A MENU is popped for
--- a challenge since POK-199 -- the "menu" scenario; a running script is
--- not, and this is the script case.)
---
--- The challenge is sent through debugChallenge, off the eyeline's clock.
--- Then this side loses the duel on purpose and rides the funnel back to
--- the lobby, which proves the match still resolves.
+-- The guest stands three cells down the row from this post, in the START
+-- menu.  Facing straight at them must FIRE the eyeline -- a trainer in a
+-- menu is a target now, not a shielded one -- and the lockstep must open
+-- on both screens: theirs pops the menu for it.  Then this side loses
+-- the duel on purpose and rides the funnel back to the lobby, which
+-- proves the match still resolves.
 local U = require("tests.drivers.util")
 local L = require("mods.battle_royale.tests.drivers.pvp.pvplib")
 
@@ -67,10 +62,9 @@ return function(game)
   if not L.flyTo(C, "PEWTER_CITY") then
     return C.fail("FLY did not land in Pewter; at " .. tostring(C.map()))
   end
-  -- The post: (14,18), three cells east of where the guest reads the GYM
-  -- sign at (11,18).  Faced UP first -- (14,17) is a wall, so the eyeline
-  -- is blocked on its first cell and nothing can fire while the guest
-  -- walks in; every turn toward them below is deliberate.
+  -- The post: (14,18), three cells east of the guest's (11,18).  Faced UP
+  -- first -- (14,17) is a wall, so the eyeline is blocked on its first
+  -- cell and nothing can fire while the guest walks in.
   if not L.goTo(C, "PEWTER_CITY", 14, 18, 300) then
     return C.fail(("never reached the post; at %s,%s"):format(
       tostring(C.x()), tostring(C.y())))
@@ -92,39 +86,28 @@ return function(game)
     return false
   end
 
-  -- (the menu leg moved to the "menu" scenario, 2026-09-10 -- POK-199)
+  -- ------- the eyeline fires at a trainer in a menu
   if not L.waitFor(DIR, "menu.txt", 3600) then
-    return C.fail("the guest never reached the sign")
+    return C.fail("the guest never opened its menu at the sign")
   end
-
-  -- ------- 2. a challenge that lands mid-dialog is queued, then answered
-  if not L.waitFor(DIR, "reading.txt", 3600) then
-    return C.fail("the guest never started reading the sign")
-  end
-  if not awaitBusy("menu", 120) then
-    return C.fail("a trainer reading a sign should be marked busy, got "
+  if not awaitBusy("menu", 300) then
+    return C.fail("the guest's menu never reached this screen, got "
                   .. tostring(guest() and guest().busy))
   end
-  U.log("PVP host: the guest is marked busy while reading a sign")
-  local g = guest()
-  if not (g and g.id) then return C.fail("no guest to challenge") end
-  if not E.debugChallenge(g.id) then
-    return C.fail("debugChallenge refused (status " .. tostring(E.status())
-                  .. ", pending " .. tostring(E.pending() and E.pending().to) .. ")")
+  U.hold(game, "left", 6)   -- straight at them, three cells away
+  local fired = false
+  for _ = 1, 300 do
+    if E.status() == "battle" or E.pending() then fired = true break end
+    U.wait(1)
   end
-  local pend = E.pending()
-  if not (pend and pend.to == g.id) then
-    return C.fail("the challenge left no pending on this side")
+  if not fired then
+    return C.fail("the eyeline did not fire at a trainer in a menu (status "
+                  .. tostring(E.status()) .. ")")
   end
-  L.put(DIR, "challenged.txt", "1")
-  U.log("PVP host: challenged the reader (nonce " .. tostring(pend.nonce) .. ")")
-
-  -- No mashing while we wait: an A here could open something of our own,
-  -- and this side's screen is meant to be quiet so the accept opens the
-  -- battle directly.  Ten seconds is generous -- the dialog closes on
-  -- its own inside five, and the flash is under one.
+  U.log("PVP host: the eyeline fired at a trainer in a menu")
+  -- their menu comes down for it, and the lockstep opens here too
   local opened = false
-  for _ = 1, 600 do
+  for _ = 1, 900 do
     if E.status() == "battle" then
       opened = true
       break
@@ -132,11 +115,11 @@ return function(game)
     U.wait(1)
   end
   if not opened then
-    return C.fail("the queued challenge never opened a battle here (status "
+    return C.fail("the challenge never opened a battle here (status "
                   .. tostring(E.status()) .. ", pending "
                   .. tostring(E.pending() and E.pending().to) .. ")")
   end
-  U.log("PVP host: lockstep battle open, from a challenge that landed mid-dialog")
+  U.log("PVP host: lockstep battle open against a trainer who was in a menu (POK-199)")
 
   -- ...and the match still resolves: lose it, watch the funnel
   if not L.mashUntil(C, function() return E.status() == "out" end, 4800) then
@@ -149,7 +132,7 @@ return function(game)
   if not L.mashUntil(C, function() return E.phase() == "lobby" end, 1200) then
     return C.fail("the finished match never returned this side to the lobby")
   end
-  U.log("PVP OK host: queued a mid-dialog challenge, fought, lobby again")
+  U.log("PVP OK host: challenged a trainer in a menu, fought, lobby again")
   love.event.quit(0)
   U.wait(10)
 end

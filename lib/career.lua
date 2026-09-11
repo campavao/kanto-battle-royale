@@ -23,6 +23,7 @@
 -- tables, so tests/br_test.lua can check the format without an engine.
 
 local KeyFile = require("mods.battle_royale.lib.keyfile")
+local Lines = require("mods.battle_royale.lib.lines")
 
 local Career = {}
 
@@ -39,6 +40,11 @@ function Career.encode(career)
     { "name", KeyFile.str(career.name) },
     { "skin", KeyFile.str(career.skin) },
     { "wins", tostring(Career.cleanWins(career.wins)) },
+    -- the trainer's own battle text (lib/lines.lua, 2026-09-10): one row
+    -- each, "|" for the break, and no row at all when unset
+    { "intro", Lines.toFile(career.intro) },
+    { "win", Lines.toFile(career.win) },
+    { "lose", Lines.toFile(career.lose) },
   })
 end
 
@@ -49,6 +55,9 @@ function Career.decode(str)
   -- absent and unparseable both mean "no win count in this file", which the
   -- caller reads as zero -- never as a reset of one it already had
   if tonumber(field.wins) then out.wins = Career.cleanWins(field.wins) end
+  out.intro = Lines.fromFile(field.intro)
+  out.win = Lines.fromFile(field.win)
+  out.lose = Lines.fromFile(field.lose)
   return out
 end
 

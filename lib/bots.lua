@@ -233,6 +233,42 @@ function Bots.fightAI(seed, id)
   return rng(1, 2) == 1 and "OPP_COOLTRAINER_M" or "OPP_COOLTRAINER_F"
 end
 
+-- A bot's own battle text (2026-09-10), the way a trainer sets theirs
+-- (lib/lines.lua): the line the player reads when the bot walks up, the
+-- line they read when the bot beats them, the line they read when they
+-- beat the bot.  Dealt from three short pools on the bot's own stream, so
+-- every client -- and a watcher's replica -- agrees, and a bot keeps its
+-- voice for the match.  Each row is eighteen or fewer, the battle box's
+-- width, and every line passes Lines.clean unchanged (br_test says so).
+Bots.LINES = {
+  intro = {
+    "Let's go!", "You're in my way.", "Fresh meat!", "Don't cry, OK?",
+    "Time to shine!", "One more for\nthe collection.",
+    "I've been\nwaiting for this.", "Hope you\nbrought POTIONs.",
+    "Nothing personal.", "This ends here.", "Show me\nwhat you've got!",
+    "Run while\nyou can.",
+  },
+  win = {
+    "Too easy.", "Better luck\nnext time!", "As expected.",
+    "That's how\nit's done!", "Thanks for\nthe warm-up.",
+    "The fog can\nhave you.", "Told you so.", "See you in\nthe lobby!",
+    "Was that\nyour best?", "GG. Kind of.",
+  },
+  lose = {
+    "Rats!", "Noooo!", "You got lucky.", "Rematch. Later.",
+    "My POKeMON\nhate me.", "Ugh. Fine.", "Not like this...",
+    "I want a\nrefund.", "Ouch.", "Take it. Just\ntake it.",
+  },
+}
+
+function Bots.lines(seed, id)
+  local rng = Bots.rng((tonumber(seed) or 1) + 262147, id)
+  local P = Bots.LINES
+  return { intro = P.intro[rng(1, #P.intro)],
+           win = P.win[rng(1, #P.win)],
+           lose = P.lose[rng(1, #P.lose)] }
+end
+
 -- The move an ai-tier bot actually clicks (POK-160 item 3, all mod-side).
 -- The engine's move choice dispatches battle.enemyAIMods through the
 -- MERGED ai_classes registry -- the vanilla three passes are just its

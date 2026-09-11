@@ -285,12 +285,18 @@ return function(game)
   if shown ~= victim.name then
     return C.fail(("the battle calls it %s, not %s"):format(shown, tostring(victim.name)))
   end
-  -- the intro line is BAKED by newTrainer before the mod can overlay the
+  -- The intro line is BAKED by newTrainer before the mod can overlay the
   -- name -- this is the one that used to say YOUNGSTER all the way to the
-  -- defeat text
+  -- defeat text (POK-89).  Since 2026-09-10 the bot opens in its OWN
+  -- words instead (Bots.lines, dealt on its stream, like a trainer's own
+  -- intro replaces "X wants to fight!"): the page is its dealt line, and
+  -- neither the class nor the name fronts it -- the name is the trainer
+  -- record's (checked above) and the defeat line's.
   local intro = tostring(battle.introText or "")
-  if not intro:find(victim.name, 1, true) then
-    return C.fail(("the intro reads %q, without %s"):format(intro, tostring(victim.name)))
+  local Bots = require("mods.battle_royale.lib.bots")
+  local want = Bots.lines(E.matchSeed(), victim.id).intro
+  if intro ~= want then
+    return C.fail(("the intro reads %q, not the bot's own %q"):format(intro, tostring(want)))
   end
   local classWord = tostring(victim.class or ""):gsub("^OPP_", "")
   if classWord ~= "" and intro:find(classWord, 1, true) then

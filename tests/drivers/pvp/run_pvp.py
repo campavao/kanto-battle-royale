@@ -47,10 +47,14 @@ SCENARIOS = {
     # birth, a quick-play during a running match is offered the watcher's
     # seat and plays the next one, and a removed guest stays removed.
     "coldstart": ("host_coldstart.lua", "guest_coldstart.lua"),
-    # POK-162: the guest is in a menu, then reading a sign, in the host's
-    # eyeline.  The eyeline must hold off the menu; a challenge that lands
-    # mid-dialog must queue and open the lockstep once the dialog closes.
+    # POK-162: the guest is reading a sign in the host's eyeline.  A
+    # challenge that lands mid-dialog must queue and open the lockstep
+    # once the dialog closes.
     "held": ("host_held.lua", "guest_held.lua"),
+    # POK-199: the guest is in the START menu in the host's eyeline.  The
+    # eyeline must fire, the guest's menu must come down for it, and the
+    # lockstep must open on both screens.
+    "menu": ("host_menu.lua", "guest_menu.lua"),
     # The fight a spectator is shown (lib/mirror.lua): the host loses the
     # duel, watches the guest, and the guest's next fight must open on the
     # host's screen as a replica and end the way the real one did.

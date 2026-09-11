@@ -1,9 +1,11 @@
 -- POK-162 scenario "held", guest side: the trainer who is busy.
 --
 -- Stand at (11,18) in Pewter, under the GYM sign, three cells down the
--- row from the host's post.  Open the START menu while the host stares
--- (nothing may fire); then read the sign, and while the text is up the
--- host's challenge lands.  It has to be QUEUED here, not answered under
+-- row from the host's post.  Put a script's text up (debugSay: the
+-- runner's own box, the one a challenge may NOT pop), and while it is up
+-- the host's challenge lands.  (A MENU is popped for a challenge since
+-- POK-199 -- see the "menu" scenario; a running script is not, and this
+-- is the script case.)  It has to be QUEUED here, not answered under
 -- the dialog -- and the moment the dialog closes it has to be answered,
 -- with the lockstep opening on this screen too.  Then win the duel and
 -- ride the funnel back to the lobby.
@@ -92,39 +94,29 @@ return function(game)
     return ow and ow.runner and ow.runner.isRunning and ow.runner:isRunning()
   end
 
-  -- ------- 1. in the START menu, in their eyeline
-  U.tap(game, "start")
-  U.wait(60)
-  if E.busy() ~= "menu" then
-    return C.fail("the START menu should read as a menu, got " .. tostring(E.busy()))
-  end
+  -- (the START-menu leg moved to the "menu" scenario, 2026-09-10: a
+  -- menu is no longer held off, it is popped -- POK-199)
   L.put(DIR, "menu.txt", "1")
-  if not L.waitFor(DIR, "facedaway.txt", 3600) then
-    return C.fail("the host never finished staring")
-  end
-  if E.status() == "battle" or E.queued() > 0 then
-    return C.fail("something reached this side while the menu was up (status "
-                  .. tostring(E.status()) .. ", queued " .. tostring(E.queued()) .. ")")
-  end
-  if not backOnTheMap(200) then
-    return C.fail("the START menu would not close")
-  end
-  U.wait(120)
-  U.log("PVP guest: menu held, nothing fired, menu closed")
 
-  -- ------- 2. reading the sign when the challenge lands
-  U.tap(game, "a")
-  U.wait(20)
-  if not (runnerBusy() or C.busy()) then
-    return C.fail("A on the sign opened nothing (top is the map, runner idle)")
+  -- ------- 2. reading a SCRIPT's text when the challenge lands
+  -- Not the sign: a sign is a bare TextBox, which POK-199 pops for a
+  -- challenge (and did, 2026-09-10).  The runner's own box is the case
+  -- that must still queue -- popping it would strand the script -- so
+  -- the text is put up through the runner (debugSay), two pages long.
+  E.debugSay("Reading a\nsign here.\fStill reading\nit.")
+  local up = false
+  for _ = 1, 120 do
+    if runnerBusy() then up = true break end
+    U.wait(1)
   end
+  if not up then return C.fail("the runner never took the say") end
   if E.busy() ~= "menu" then
-    return C.fail("reading a sign should read as a menu, got " .. tostring(E.busy()))
+    return C.fail("a script's text should read as a menu, got " .. tostring(E.busy()))
   end
   L.put(DIR, "reading.txt", "1")
-  -- the host answers within a tick or two of seeing the file; the dialog
-  -- lives at least five seconds (tickAutoResolve's patience), so the
-  -- challenge lands while it is up
+  -- the host answers within a tick or two of seeing the file; each page
+  -- lives three seconds (tickAutoResolve's patience), so the challenge
+  -- lands while the text is up
   if not L.waitFor(DIR, "challenged.txt", 300) then
     return C.fail("the host never sent the challenge")
   end
@@ -138,8 +130,8 @@ return function(game)
     U.wait(1)
   end
   if not queued then
-    if not (runnerBusy() or C.busy()) then
-      return C.fail("staging: the dialog closed before the challenge landed")
+    if not runnerBusy() then
+      return C.fail("staging: the script closed before the challenge landed")
     end
     return C.fail("the challenge was not queued behind the dialog (status "
                   .. tostring(E.status()) .. ", queued " .. tostring(E.queued()) .. ")")
@@ -147,7 +139,7 @@ return function(game)
   if E.status() == "battle" then
     return C.fail("the battle opened UNDER the dialog -- the very wedge")
   end
-  U.log("PVP guest: challenge queued behind the sign text")
+  U.log("PVP guest: challenge queued behind the script's text")
 
   -- close the text ourselves (B advances it like A and chooses nothing),
   -- and the queue has to answer: the flash, the accept, the lockstep
@@ -160,7 +152,7 @@ return function(game)
     U.tap(game, "b")
     U.wait(10)
   end
-  if not closedAt then return C.fail("the sign text would not close") end
+  if not closedAt then return C.fail("the script's text would not close") end
   local opened = false
   for _ = 1, 600 do
     if E.status() == "battle" then
@@ -183,7 +175,7 @@ return function(game)
   if not L.mashUntil(C, function() return E.phase() == "lobby" end, 1200) then
     return C.fail("the finished match never returned the guest to the lobby")
   end
-  U.log("PVP OK guest: menu held off, mid-dialog challenge queued and answered, won, lobby again")
+  U.log("PVP OK guest: mid-dialog challenge queued and answered, won, lobby again")
   love.event.quit(0)
   U.wait(10)
 end

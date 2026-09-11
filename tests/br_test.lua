@@ -3588,6 +3588,9 @@ do
         skinId = function() return "RED" end,
         skinWalk = function() return "SPRITE_HIKER" end,
         winCount = function() return 4 end,
+        myLines = function(self)
+          return require("mods.battle_royale.lib.lines").cleanSet(self.lines)
+        end,
         setSkin = function() end,
         relayAddress = function() return "127.0.0.1:7790" end,
         fogSeconds = function() return 120 end,
@@ -3824,7 +3827,7 @@ do
     local BR = fakeBR()
     local items, view = BRMenu.items({ version = "9.9.9" }, BR, {})
     eq(view, "menu", "no room is the first face")
-    eq(labels(items), "QUICK PLAY|DAILY GAME|SOLO VS BOTS|HOST GAME|JOIN BY CODE|NAME: RED|SKIN: RED",
+    eq(labels(items), "QUICK PLAY|DAILY GAME|SOLO VS BOTS|HOST GAME|JOIN BY CODE|TRAINER: RED",
        "the first face, in order -- no SERVER row, no version row (POK-161)")
     local allOpen = true
     for _, it in ipairs(items) do if not it.keepOpen then allOpen = false end end
@@ -4102,7 +4105,7 @@ do
     items, view = BRMenu.items({ version = "0.36.10" }, BR, {})
     eq(view, "menu", "no room left is the first face")
     eq(labels(items),
-       "MATCH OVER|QUICK PLAY|DAILY GAME|SOLO VS BOTS|HOST GAME|JOIN BY CODE|NAME: RED|SKIN: RED",
+       "MATCH OVER|QUICK PLAY|DAILY GAME|SOLO VS BOTS|HOST GAME|JOIN BY CODE|TRAINER: RED",
        "the result leads the first face on its own row")
     ok(#items <= BRMenu.maxRows(2),
        ("the first face still fits with a result on it (%d/%d)")
@@ -4111,7 +4114,30 @@ do
     items = BRMenu.items({ version = "0.36.10" }, BR, {})
     ok(labels(items):find("YOU WIN!", 1, true),
        "a win reads as a win")
-    eq(#items, BRMenu.maxRows(2), "...still eight rows, not nine")
+    -- seven since 2026-09-10: NAME and SKIN folded into TRAINER with the
+    -- battle text, which kept the face inside maxRows(2) with a row spare
+    ok(#items <= BRMenu.maxRows(2), "...still within the eight rows")
+    eq(#items, 7, "...seven of them")
+
+    -- the TRAINER screen: name, skin, the three lines, clear, back
+    local rows = {}
+    for _, it in ipairs(BRMenu.trainerItems({}, BR, {})) do rows[#rows + 1] = it.label end
+    eq(table.concat(rows, "|"), "NAME: RED|SKIN: RED|INTRO: ---|ON A WIN: ---|ON A LOSS: ---|CLEAR TEXT|BACK",
+       "the TRAINER screen lists the name, the skin and the three lines")
+    BR.lines = { intro = "Bring it!" }
+    rows = {}
+    for _, it in ipairs(BRMenu.trainerItems({}, BR, {})) do rows[#rows + 1] = it.label end
+    ok(table.concat(rows, "|"):find("INTRO: Bring it!|ON A WIN: ---", 1, true) ~= nil,
+       "...and shows the line that is set")
+    BR.lines = { win = "A very long first row" }
+    rows = {}
+    for _, it in ipairs(BRMenu.trainerItems({}, BR, {})) do rows[#rows + 1] = it.label end
+    ok(table.concat(rows, "|"):find("ON A WIN: A very ", 1, true) ~= nil,
+       "...cut to what fits beside the label")
+    for _, it in ipairs(BRMenu.trainerItems({}, BR, {})) do
+      ok(#it.label <= BRMenu.MAX_LABEL, "...never wider than the box: " .. it.label)
+    end
+    BR.lines = nil
     for _, it in ipairs(items) do
       ok(#it.label <= 17,
          ("first-face row fits the box (%d): %s"):format(#it.label, it.label))
@@ -6194,6 +6220,248 @@ do
   eq(tagged.as, 1007, "a frame tagged as a bot's keeps the tag")
   eq(Wire.decode(Wire.mirror("m3", { n = 1, k = "run" })).as, nil, "an untagged frame is the sender's own")
   eq(Wire.decode(Wire.mirror("m3", { n = 1, k = "run" }, "x")).as, nil, "a tag that is not an id is dropped")
+end
+
+-- ------- a trainer's own battle text (2026-09-10): lib/lines.lua
+
+do
+  local Lines = require("mods.battle_royale.lib.lines")
+  local Career = require("mods.battle_royale.lib.career")
+  -- the clip
+  eq(Lines.clean("Prepare to lose!"), "Prepare to lose!", "one row stays")
+  eq(Lines.clean("Prepare to lose!\nSeriously."), "Prepare to lose!\nSeriously.", "two rows stay")
+  eq(Lines.clean("one\ntwo\nthree"), "one\ntwo", "a third row is cut")
+  eq(Lines.clean("ABCDEFGHIJKLMNOPQRSTUVWXYZ"), "ABCDEFGHIJKLMNOPQR", "a row is clipped to eighteen")
+  eq(Lines.clean("POKéMON POKéMON!!!!!"), "POKéMON POKéMON!!!", "...by characters, not bytes")
+  eq(Lines.clean("  padded  \n\n"), "padded", "padding and blank rows go")
+  eq(Lines.clean("ctrl\7chars\1"), "ctrlchars", "control characters go")
+  eq(Lines.clean(""), nil, "empty is unset")
+  eq(Lines.clean(42), nil, "...and so is a non-string")
+  -- the set
+  local set = Lines.cleanSet({ intro = "Hi!", win = "", lose = "Ow.", extra = "x" })
+  eq(set.intro, "Hi!", "a set keeps its intro")
+  eq(set.win, nil, "...drops an empty line")
+  eq(set.lose, "Ow.", "...keeps its lose line")
+  eq(set.extra, nil, "...and knows only its three kinds")
+  eq(Lines.cleanSet({}), nil, "an empty set is nil")
+  eq(Lines.cleanSet(nil), nil, "...and so is none")
+  -- the wire
+  local packed = Lines.pack({ intro = "Hi!\nthere", lose = "Ow." })
+  eq(packed.i, "Hi!\nthere", "the intro packs short")
+  eq(packed.w, nil, "an unset line is absent")
+  eq(packed.l, "Ow.", "the lose line packs short")
+  eq(Lines.pack({}), nil, "nothing set packs to nothing")
+  local un = Lines.unpack({ i = "  Hi!  ", l = "a\nb\nc" })
+  eq(un.intro, "Hi!", "unpack cleans")
+  eq(un.lose, "a\nb", "...and clips")
+  eq(Lines.unpack("junk"), nil, "junk off the wire is nothing")
+  local m = Wire.decode(Wire.challenge(7, { intro = "Bring it!" }))
+  eq(m.nonce, 7, "a challenge with lines keeps its nonce")
+  eq(m.lines.intro, "Bring it!", "...and carries the intro")
+  eq(Wire.decode(Wire.challenge(8)).lines, nil, "a challenge without lines carries none")
+  eq(Wire.decode(Wire.challenge(8)).L, nil, "...and puts no key on the wire")
+  eq(Wire.decode(Wire.accept(9, { win = "GG" })).lines.win, "GG", "an accept carries them too")
+  eq(Wire.decode({ t = "challenge", n = 3 }).lines, nil, "an old client's challenge reads as plain")
+  -- the file
+  eq(Lines.toFile("Hi!\nthere"), "Hi!|there", "the break is a bar in the file")
+  eq(Lines.fromFile("Hi!|there"), "Hi!\nthere", "...and a bar is a break")
+  eq(Lines.toFile(nil), nil, "unset writes no row")
+  local c = Career.decode(Career.encode({ name = "ASH", intro = "Hi!\nthere", lose = "Ow." }))
+  eq(c.intro, "Hi!\nthere", "the career keeps the intro")
+  eq(c.win, nil, "...no win line")
+  eq(c.lose, "Ow.", "...and the lose line")
+  eq(Career.decode(Career.encode({ name = "ASH" })).intro, nil, "a career without lines has none")
+  eq(#Lines.rows("a\nb"), 2, "rows for the entry screen")
+  eq(#Lines.rows(nil), 0, "...none when unset")
+  -- the pages
+  local vanilla = "GARY is out of\nPOKéMON!\fASH wins!"
+  ok(Lines.isOutro(vanilla), "the vanilla outro is recognised")
+  ok(not Lines.isOutro("ASH used TACKLE!"), "...and a move line is not")
+  eq(Lines.outro(vanilla, true, { win = "Too easy." }, { lose = "Rats." }),
+     "GARY is out of\nPOKéMON!\fToo easy.\fRats.", "my win: my win line, then their lose line")
+  eq(Lines.outro(vanilla, false, { lose = "Ugh." }, { win = "Ha!" }),
+     "GARY is out of\nPOKéMON!\fHa!\fUgh.", "their win: their win line, then my lose line")
+  eq(Lines.outro(vanilla, true, nil, nil), vanilla, "no lines: the vanilla pages")
+  eq(Lines.outro(vanilla, true, nil, { lose = "Rats." }),
+     "GARY is out of\nPOKéMON!\fASH wins!\fRats.", "no win line: the vanilla wins! page, then theirs")
+  eq(Lines.outro(vanilla, true, { win = "Too easy." }, nil),
+     "GARY is out of\nPOKéMON!\fToo easy.", "no lose line: nothing after")
+  eq(Lines.outro("no pages", true, { win = "x" }, nil), "no pages", "a one-page text is left alone")
+  eq(Lines.intro({ intro = "Bring it!" }), "Bring it!", "the intro is theirs")
+  eq(Lines.intro(nil), nil, "...or nothing")
+
+  -- the corpus (2026-09-11): Kanto's own lines on four shelves, every one
+  -- a line the clip leaves alone, deduplicated, sorted -- against the
+  -- generated data when it is there
+  local okT, romText = pcall(dofile, "data/generated/text.lua")
+  local okP, romPtrs = pcall(dofile, "data/generated/text_pointers.lua")
+  local okH, romHeads = pcall(dofile, "data/generated/trainer_headers.lua")
+  if okT and okP and okH then
+    local data = { text = romText, text_pointers = romPtrs, trainer_headers = romHeads }
+    local shelves = Lines.corpus(data)
+    eq(#shelves, 4, "four shelves")
+    eq(shelves[1].label, "TRAINER INTROS", "trainer intros first")
+    ok(#shelves[1].lines > 100 and #shelves[2].lines > 100 and #shelves[4].lines > 100,
+       ("...each well stocked (%d/%d/%d/%d)"):format(#shelves[1].lines, #shelves[2].lines,
+                                                    #shelves[3].lines, #shelves[4].lines))
+    local dup, bad, unsorted = 0, 0, 0
+    local all = {}
+    for _, shelf in ipairs(shelves) do
+      for i, line in ipairs(shelf.lines) do
+        if all[line] then dup = dup + 1 end
+        all[line] = true
+        if Lines.clean(line) ~= line or line:find("{", 1, true) then bad = bad + 1 end
+        if i > 1 and shelf.lines[i - 1] > line then unsorted = unsorted + 1 end
+      end
+    end
+    eq(dup, 0, "no line sits on two shelves")
+    eq(bad, 0, "every line fits the box as it stands")
+    eq(unsorted, 0, "each shelf is sorted")
+    ok(Lines.corpus(data) == shelves, "built once per data table")
+    local si, li = Lines.locate(shelves, shelves[2].lines[3])
+    eq(si .. ":" .. li, "2:3", "a line is found where it sits")
+    eq(select(1, Lines.locate(shelves, "not a line")), 1, "an unknown line starts at the top")
+    ok(all["I lost!"] or all["Ouch!"] or #shelves[2].lines > 0, "the beaten trainers speak")
+
+    -- the picker's logic, with a fake game: LEFT/RIGHT step and wrap,
+    -- UP/DOWN change shelf, SELECT deals, A takes and pops, B pops
+    local pressed, state, popped, picked = {}, {}, 0, nil
+    local fakeGame = {
+      data = data,
+      input = { wasPressed = function(_, b) return pressed[b] == true end, state = state },
+      stack = { pop = function() popped = popped + 1 end },
+    }
+    local pk = Lines.Picker.new(fakeGame, { title = "INTRO", current = shelves[2].lines[2],
+                                            onPick = function(l) picked = l end })
+    eq(pk.si .. ":" .. pk.li, "2:2", "the picker opens on the current line")
+    local function press(b) pressed = { [b] = true } pk:update(0) pressed = {} end
+    press("right") eq(pk.li, 3, "RIGHT steps on")
+    press("left") press("left") eq(pk.li, 1, "LEFT steps back")
+    press("left") eq(pk.li, #shelves[2].lines, "...and wraps")
+    press("down") eq(pk.si .. ":" .. pk.li, "3:1", "DOWN is the next shelf, from its top")
+    press("up") press("up") eq(pk.si, 1, "UP is the shelf before")
+    press("select") ok(pk.li >= 1 and pk.li <= #shelves[1].lines, "SELECT deals a line on the shelf")
+    -- a held direction runs after a beat
+    pk.li = 1
+    state.right = true
+    press("right")
+    for _ = 1, Lines.Picker.REPEAT_AFTER + Lines.Picker.REPEAT_EVERY * 2 do pk:update(0) end
+    ok(pk.li >= 4, "a held RIGHT runs (" .. pk.li .. ")")
+    state.right = nil
+    press("a")
+    eq(picked, pk:line(), "A takes the line on show")
+    eq(popped, 1, "...and pops the picker")
+    press("b") eq(popped, 2, "B pops it too")
+  else
+    io.write("  (skipping the corpus pins: data/generated not found)\n")
+  end
+
+  -- a bot's own lines (Bots.lines): dealt on its stream, from the pools,
+  -- every one a line the clip would leave alone
+  local Bots = require("mods.battle_royale.lib.bots")
+  for _, kind in ipairs({ "intro", "win", "lose" }) do
+    for i, line in ipairs(Bots.LINES[kind]) do
+      eq(Lines.clean(line), line, ("bot %s line %d fits the box as written"):format(kind, i))
+    end
+  end
+  local a = Bots.lines(4242, Bots.idFor(1))
+  local b = Bots.lines(4242, Bots.idFor(1))
+  eq(a.intro, b.intro, "a bot's intro is the same on every client")
+  eq(a.win, b.win, "...and its win line")
+  eq(a.lose, b.lose, "...and its lose line")
+  local function inPool(kind, line)
+    for _, l in ipairs(Bots.LINES[kind]) do if l == line then return true end end
+    return false
+  end
+  ok(inPool("intro", a.intro) and inPool("win", a.win) and inPool("lose", a.lose),
+     "...all three from the pools")
+  local seen = {}
+  for i = 1, 12 do seen[Bots.lines(4242, Bots.idFor(i)).intro] = true end
+  local distinct = 0
+  for _ in pairs(seen) do distinct = distinct + 1 end
+  ok(distinct >= 4, "a dozen bots do not all say the same thing (" .. distinct .. " intros)")
+  ok(Bots.lines(4242, Bots.idFor(1)).intro ~= Bots.lines(4243, Bots.idFor(1)).intro
+     or Bots.lines(4242, Bots.idFor(1)).win ~= Bots.lines(4243, Bots.idFor(1)).win
+     or Bots.lines(4242, Bots.idFor(1)).lose ~= Bots.lines(4243, Bots.idFor(1)).lose,
+     "...and a bot's voice changes with the match")
+end
+
+-- ------- the ticker (2026-09-10): news that does not stop the game
+
+do
+  local Ticker = require("mods.battle_royale.lib.ticker")
+  -- the wrap
+  eq(table.concat(Ticker.fit("The fog spreads!"), "|"), "The fog spreads!", "a short line is one row")
+  eq(table.concat(Ticker.fit("GRAVELER evolved\ninto GOLEM!"), "|"), "GRAVELER evolved|into GOLEM!",
+     "an explicit break is a row break")
+  eq(table.concat(Ticker.fit("LT.SURGE has fallen!"), "|"), "LT.SURGE has|fallen!",
+     "a long line breaks at its last space")
+  eq(table.concat(Ticker.fit("The fog closes on\nCINNABAR ISLAND."), "|"),
+     "The fog closes on|CINNABAR ISLAND.", "the longest town fits its own row")
+  eq(#Ticker.fit("one two three four five six seven eight nine ten eleven"), 2,
+     "a third row is cut, not shown")
+  eq(Ticker.fit("ABCDEFGHIJKLMNOPQRSTUVWXYZ")[1], "ABCDEFGHIJKLMNOPQR", "a word too long is cut")
+  eq(Ticker.fit(""), nil, "nothing to show is nil")
+  eq(Ticker.fit("   "), nil, "...and so is blank")
+  eq(Ticker.fit(nil), nil, "...and so is no text")
+  eq(table.concat(Ticker.fit("  padded  "), "|"), "padded", "padding is trimmed")
+
+  -- the queue
+  local t = Ticker.new()
+  eq(Ticker.tick(t, 0), nil, "an empty ticker shows nothing")
+  ok(Ticker.push(t, "The fog spreads!"), "a line is queued")
+  ok(not Ticker.push(t, "The fog spreads!"), "the same line twice is one item")
+  ok(Ticker.push(t, "SAM has fallen!"), "a different line follows it")
+  eq(Ticker.pending(t), 2, "two waiting")
+  eq(Ticker.tick(t, 10).text, "The fog spreads!", "the first goes up on the first tick")
+  eq(Ticker.pending(t), 1, "...and leaves the queue")
+  eq(Ticker.tick(t, 10 + Ticker.SECONDS - 0.1).text, "The fog spreads!", "it stays for its beat")
+  eq(Ticker.tick(t, 10 + Ticker.SECONDS).text, "SAM has fallen!", "then the next goes up")
+  eq(Ticker.tick(t, 20 + Ticker.SECONDS), nil, "and the box comes down after the last")
+  ok(not Ticker.push(t, ""), "nothing is not queued")
+  for i = 1, Ticker.MAX_QUEUE + 3 do Ticker.push(t, "line " .. i) end
+  eq(Ticker.pending(t), Ticker.MAX_QUEUE, "the queue is capped")
+  eq(t.q[1].text, "line 4", "...dropping the oldest")
+  Ticker.clear(t)
+  eq(Ticker.pending(t), 0, "clear empties the queue")
+  eq(Ticker.tick(t, 30), nil, "...and the box")
+
+  -- the standing line
+  Ticker.hold(t, "PIKACHU", "PIKACHU")
+  eq(Ticker.tick(t, 40).text, "PIKACHU", "a held line shows with nothing queued")
+  eq(Ticker.showing(t).icon, "PIKACHU", "...with its icon")
+  Ticker.push(t, "SAM has fallen!")
+  eq(Ticker.tick(t, 41).text, "PIKACHU", "the held line outranks the news")
+  eq(Ticker.tick(t, 41 + Ticker.SECONDS * 4).text, "PIKACHU", "...for as long as it is held")
+  eq(Ticker.pending(t), 1, "...and the news waits in the queue")
+  local held = t.held
+  Ticker.hold(t, "PIKACHU", "PIKACHU")
+  ok(t.held == held, "re-holding the same line keeps the item")
+  Ticker.hold(t, nil)
+  eq(Ticker.tick(t, 50).text, "SAM has fallen!", "looking away lets the news through")
+  eq(Ticker.tick(t, 50 + Ticker.SECONDS - 0.1).text, "SAM has fallen!", "...for its own beat")
+  -- a beat interrupted by a look starts over when the look ends
+  Ticker.push(t, "The fog spreads!")
+  Ticker.tick(t, 50 + Ticker.SECONDS)
+  eq(Ticker.showing(t).text, "The fog spreads!", "the next line is up")
+  Ticker.hold(t, "SAM's BAG")
+  eq(Ticker.tick(t, 52 + Ticker.SECONDS).text, "SAM's BAG", "a bag holds without an icon")
+  Ticker.hold(t, nil)
+  eq(Ticker.tick(t, 60).text, "The fog spreads!", "the interrupted line comes back")
+  eq(Ticker.tick(t, 60 + Ticker.SECONDS - 0.1).text, "The fog spreads!", "...with a fresh beat")
+  eq(Ticker.tick(t, 60 + Ticker.SECONDS), nil, "...and then goes")
+
+  -- the box
+  local w, h = Ticker.boxOf({ rows = { "The fog spreads!" } })
+  eq(w, 18, "a plain row is its text plus the border")
+  eq(h, 3, "...one row tall inside")
+  w, h = Ticker.boxOf({ rows = { "GRAVELER evolved", "into GOLEM!" } })
+  eq(w, 18, "two rows take the wider")
+  eq(h, 4, "...two rows tall inside")
+  w, h = Ticker.boxOf({ rows = { "PIKACHU" }, icon = "PIKACHU" })
+  eq(w, 12, "an icon adds its two tiles and a gap")
+  eq(h, 4, "...and is always two rows tall")
+  eq(Ticker.WIDTH + 2, 20, "the widest plain box is the screen")
 end
 
 io.write(("\nbattle royale: %d passed, %d failed\n"):format(passed, failed))
