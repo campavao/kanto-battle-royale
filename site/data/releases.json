@@ -1,11 +1,17 @@
 {
-  "readAt": "2026-09-11T21:57:16.929Z",
+  "readAt": "2026-09-11T23:51:56.202Z",
   "list": [
+    {
+      "tag": "v0.50.1",
+      "name": "a flight cannot be interrupted",
+      "at": "2026-09-11T22:35:35Z",
+      "dl": 7
+    },
     {
       "tag": "v0.50.0",
       "name": "the match stops stopping you",
       "at": "2026-09-11T14:04:39Z",
-      "dl": 29
+      "dl": 30
     },
     {
       "tag": "v0.49.0",
