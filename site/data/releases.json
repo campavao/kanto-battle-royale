@@ -1,11 +1,17 @@
 {
-  "readAt": "2026-09-11T09:19:08.727Z",
+  "readAt": "2026-09-11T17:14:07.116Z",
   "list": [
+    {
+      "tag": "v0.50.0",
+      "name": "the match stops stopping you",
+      "at": "2026-09-11T14:04:39Z",
+      "dl": 11
+    },
     {
       "tag": "v0.49.0",
       "name": "the POKé DOLL is the way out, and the FIGHT menu has a clock",
       "at": "2026-09-08T13:01:21Z",
-      "dl": 71
+      "dl": 74
     },
     {
       "tag": "v0.48.0",
@@ -41,7 +47,7 @@
       "tag": "v0.44.0",
       "name": "loot you can walk through",
       "at": "2026-09-04T15:04:41Z",
-      "dl": 16
+      "dl": 17
     },
     {
       "tag": "v0.43.0",
@@ -65,7 +71,7 @@
       "tag": "v0.40.0",
       "name": "the bots can win",
       "at": "2026-08-28T12:43:41Z",
-      "dl": 278
+      "dl": 282
     },
     {
       "tag": "v0.39.0",
