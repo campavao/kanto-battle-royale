@@ -655,6 +655,8 @@ return function(mod)
       return "menu"
     end
     if ow.healAnim then return "menu" end
+    -- ...and mid-air (v0.50.1): a flier is not there to be challenged
+    if BR.midAir(ow) then return "menu" end
     return nil
   end
 
@@ -5077,7 +5079,20 @@ return function(mod)
     -- the heal machine runs INSIDE the overworld state (BR:nurseHeal),
     -- and it is the one moment at the counter a fight may not open
     if ow.healAnim then return false end
+    -- ...and so does a flight (v0.50.1): the bird's lead-in, the warp,
+    -- the swoop down.  A challenge answered mid-air opened a battle over a
+    -- player who was between two maps, and left them in neither.
+    if BR.midAir(ow) then return false end
     return self:liveLocalBattle() == nil
+  end
+
+  -- Between two maps: FLY's departure (ow.flyAnim), the warp, the arrival
+  -- swoop (ow.flyArrive), a TELEPORT out, or the heal-point spin.  All run
+  -- inside the overworld state with nothing on top, so `top == ow` alone
+  -- read every one of them as a quiet screen.
+  function BR.midAir(ow)
+    return ow ~= nil and (ow.flyAnim or ow.flyArrive or ow.transitioning
+                          or ow.teleportOut or (ow.player and ow.player.spinning)) and true or false
   end
 
   -- Pop the player's own screens off the overworld so a fight can open
@@ -5101,7 +5116,7 @@ return function(mod)
     local ow = mod.world:overworld()
     if not (game and ow and game.stack and game.stack.states) then return false end
     if ow.runner and ow.runner.isRunning and ow.runner:isRunning() then return false end
-    if ow.healAnim or ow.transitioning or self:liveLocalBattle() then return false end
+    if ow.healAnim or BR.midAir(ow) or self:liveLocalBattle() then return false end
     local states = game.stack.states
     local base
     for i, s in ipairs(states) do if s == ow then base = i end end

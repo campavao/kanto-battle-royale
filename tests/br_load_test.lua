@@ -1013,12 +1013,19 @@ do
     local quiet = body("screenIsQuiet")
     T.check(quiet and quiet:find("if ow.healAnim then return false end", 1, true) ~= nil,
             "the heal machine is not a quiet screen")
-    -- what the yank refuses: a script, the machine, a transition, a battle
+    -- v0.50.1: neither is a flight, from the bird's lead-in to the swoop down
+    T.check(quiet and quiet:find("if BR.midAir(ow) then return false end", 1, true) ~= nil,
+            "...nor a flight")
+    T.check(src:find("return ow ~= nil and (ow.flyAnim or ow.flyArrive or ow.transitioning\n                          or ow.teleportOut or (ow.player and ow.player.spinning)) and true or false", 1, true) ~= nil,
+            "mid-air is the departure, the warp, the arrival, a teleport and the heal-point spin")
+    T.check(busy and busy:find('if BR.midAir(ow) then return "menu" end', 1, true) ~= nil,
+            "...and a flier is broadcast as busy")
+    -- what the yank refuses: a script, the machine, a flight, a battle
     local yank = body("yankScreen")
     T.check(yank ~= nil, "found BR:yankScreen")
     T.check(yank and yank:find("ow.runner:isRunning() then return false end", 1, true) ~= nil
-            and yank:find("if ow.healAnim or ow.transitioning or self:liveLocalBattle() then return false end", 1, true) ~= nil,
-            "a running script, the heal machine, a transition and a battle are never yanked")
+            and yank:find("if ow.healAnim or BR.midAir(ow) or self:liveLocalBattle() then return false end", 1, true) ~= nil,
+            "a running script, the heal machine, a flight and a battle are never yanked")
     T.check(yank and yank:find("if not views[getmetatable(states[i])] then return false end", 1, true) ~= nil,
             "...and every screen above the overworld must be a view")
     T.check(yank and yank:find('"src.ui.BagMenu"', 1, true) ~= nil
