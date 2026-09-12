@@ -1,11 +1,11 @@
 {
-  "readAt": "2026-09-12T02:19:08.338Z",
+  "readAt": "2026-09-12T07:15:23.711Z",
   "list": [
     {
       "tag": "v0.50.1",
       "name": "a flight cannot be interrupted",
       "at": "2026-09-11T22:35:35Z",
-      "dl": 19
+      "dl": 25
     },
     {
       "tag": "v0.50.0",
