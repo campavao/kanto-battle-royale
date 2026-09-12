@@ -1,7 +1,100 @@
 {
- "readAt": "2026-09-12T07:15:23.876Z",
+ "readAt": "2026-09-12T14:21:54.685Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "VZNN7C",
+   "at": "2026-09-12T13:39:41.919Z",
+   "end": null,
+   "secs": null,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 1,
+   "matches": 2,
+   "joins": [
+    {
+     "t": "2026-09-12T13:45:05.269Z",
+     "how": "spectate"
+    }
+   ],
+   "versions": [
+    "0.50.1",
+    "0.50.0"
+   ],
+   "installs": [
+    "2b4f58b6",
+    "fb1d0b62"
+   ],
+   "played": [
+    {
+     "t": "2026-09-12T13:40:42.081Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": 1348
+    },
+    {
+     "t": "2026-09-12T14:04:11.517Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "live": true,
+   "exact": true
+  },
+  {
+   "code": "95YAHD",
+   "at": "2026-09-12T13:27:47.255Z",
+   "end": "2026-09-12T13:27:53.310Z",
+   "secs": 6,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.50.0"
+   ],
+   "installs": [
+    "fb1d0b62"
+   ],
+   "played": []
+  },
+  {
+   "code": "RWF9X5",
+   "at": "2026-09-12T13:15:20.226Z",
+   "end": "2026-09-12T13:39:26.188Z",
+   "secs": 1446,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "2b4f58b6"
+   ],
+   "played": [
+    {
+     "t": "2026-09-12T13:16:20.453Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": 1373
+    }
+   ],
+   "exact": true
+  },
   {
    "code": "8UXFWQ",
    "at": "2026-09-12T06:09:24.403Z",
@@ -10645,7 +10738,7 @@
   {
    "id": "2b4f58b6",
    "first": "2026-09-08T05:58:22.584Z",
-   "last": "2026-09-12T06:09:24.538Z",
+   "last": "2026-09-12T13:39:42.040Z",
    "since": "2026-09-08",
    "versions": [
     "0.48.0",
@@ -10653,7 +10746,7 @@
     "0.50.1"
    ],
    "solo": 10,
-   "checkins": 130,
+   "checkins": 132,
    "v": "0.50.1"
   },
   {
@@ -11012,13 +11105,13 @@
   {
    "id": "fb1d0b62",
    "first": "2026-09-11T17:13:15.961Z",
-   "last": "2026-09-11T17:13:27.229Z",
+   "last": "2026-09-12T13:45:05.387Z",
    "since": "2026-09-11",
    "versions": [
     "0.50.0"
    ],
-   "solo": 3,
-   "checkins": 2,
+   "solo": 4,
+   "checkins": 4,
    "v": "0.50.0"
   },
   {
@@ -11143,6 +11236,12 @@
   }
  ],
  "solo": [
+  {
+   "t": "2026-09-12T13:45:05.387Z",
+   "install": "fb1d0b62",
+   "n": 1,
+   "v": "0.50.0"
+  },
   {
    "t": "2026-09-12T03:13:39.471Z",
    "install": "914b53ff",
@@ -11433,6 +11532,21 @@
   }
  ],
  "bounces": [
+  {
+   "t": "2026-09-12T13:49:06.183Z",
+   "tried": "quick",
+   "secs": 1
+  },
+  {
+   "t": "2026-09-12T13:48:43.369Z",
+   "tried": "quick",
+   "secs": 2
+  },
+  {
+   "t": "2026-09-12T13:27:44.681Z",
+   "tried": "quick",
+   "secs": 5
+  },
   {
    "t": "2026-09-12T06:02:33.104Z",
    "tried": "code",
