@@ -1,17 +1,17 @@
 {
-  "readAt": "2026-09-11T23:51:56.202Z",
+  "readAt": "2026-09-12T02:19:08.338Z",
   "list": [
     {
       "tag": "v0.50.1",
       "name": "a flight cannot be interrupted",
       "at": "2026-09-11T22:35:35Z",
-      "dl": 7
+      "dl": 19
     },
     {
       "tag": "v0.50.0",
       "name": "the match stops stopping you",
       "at": "2026-09-11T14:04:39Z",
-      "dl": 30
+      "dl": 34
     },
     {
       "tag": "v0.49.0",
@@ -77,7 +77,7 @@
       "tag": "v0.40.0",
       "name": "the bots can win",
       "at": "2026-08-28T12:43:41Z",
-      "dl": 286
+      "dl": 289
     },
     {
       "tag": "v0.39.0",
