@@ -25,8 +25,15 @@ Entry.CODE = { charset = CodeEntry.CHARSET, length = CodeEntry.LENGTH }
 -- what the Gen 1 glyphs have and DNS does not care, so the value is lowered
 -- on the way out.
 Entry.ADDRESS = { charset = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:", length = 40 }
+-- A room's passcode (2026-09-13): four of the room code's own characters,
+-- which is enough to keep strangers out of a game with friends and short
+-- enough to read out once.  The same widget as the code, so nobody
+-- learns a second way to type.
+Entry.PASS = { charset = CodeEntry.CHARSET, length = 4 }
 
--- opts: { title=, shape=Entry.CODE|Entry.ADDRESS, default=, onDone= }
+-- opts: { title=, shape=Entry.CODE|Entry.ADDRESS|Entry.PASS, default=,
+--         onDone=, onCancel= }  (onCancel: B, for a caller holding a
+--         connection open on the answer)
 function Entry.new(game, opts)
   opts = opts or {}
   local shape = opts.shape or Entry.CODE
@@ -35,6 +42,7 @@ function Entry.new(game, opts)
   self.title = opts.title or "ENTER CODE"
   self.shape = shape
   self.onDone = opts.onDone
+  self.onCancel = opts.onCancel
   -- the grid has the Gen 1 glyphs, which are uppercase; a stored address is
   -- lowercase, and fromText blanks any character its charset does not hold,
   -- so an address has to be raised before it can be shown at all
@@ -51,6 +59,7 @@ function Entry:update()
   local input = self.game.input
   if input:wasPressed("b") then
     self.game.stack:pop()
+    if self.onCancel then self.onCancel() end
   elseif input:wasPressed("up") then
     CodeEntry.up(self.state)
   elseif input:wasPressed("down") then
