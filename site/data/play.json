@@ -1,7 +1,371 @@
 {
- "readAt": "2026-09-13T22:58:55.663Z",
+ "readAt": "2026-09-14T00:48:24.642Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "TN8XVS",
+   "at": "2026-09-14T00:38:19.664Z",
+   "end": "2026-09-14T00:38:27.590Z",
+   "secs": 8,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "de3792ca"
+   ],
+   "played": []
+  },
+  {
+   "code": "WA59HR",
+   "at": "2026-09-14T00:34:29.802Z",
+   "end": null,
+   "secs": null,
+   "door": "open",
+   "mode": "quick",
+   "humans": 4,
+   "together": 4,
+   "spectators": 1,
+   "matches": 1,
+   "joins": [
+    {
+     "t": "2026-09-14T00:34:49.319Z",
+     "how": "quick"
+    },
+    {
+     "t": "2026-09-14T00:34:55.687Z",
+     "how": "quick"
+    },
+    {
+     "t": "2026-09-14T00:34:57.735Z",
+     "how": "quick"
+    },
+    {
+     "t": "2026-09-14T00:37:51.842Z",
+     "how": "spectate"
+    }
+   ],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "680f9898",
+    "c021698a",
+    "2b5c4b47",
+    "a76f46c4",
+    "de3792ca"
+   ],
+   "played": [
+    {
+     "t": "2026-09-14T00:35:30.147Z",
+     "mode": "quick",
+     "trainers": 4,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "live": true,
+   "exact": true
+  },
+  {
+   "code": "PQPQ6R",
+   "at": "2026-09-13T23:52:06.513Z",
+   "end": "2026-09-13T23:52:18.682Z",
+   "secs": 12,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "2b5c4b47"
+   ],
+   "played": []
+  },
+  {
+   "code": "UEY9WR",
+   "at": "2026-09-13T23:52:04.615Z",
+   "end": "2026-09-14T00:34:56.065Z",
+   "secs": 2571,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 4,
+   "together": 4,
+   "spectators": 1,
+   "matches": 1,
+   "joins": [
+    {
+     "t": "2026-09-13T23:52:22.256Z",
+     "how": "daily"
+    },
+    {
+     "t": "2026-09-13T23:52:56.110Z",
+     "how": "daily"
+    },
+    {
+     "t": "2026-09-13T23:57:45.169Z",
+     "how": "daily"
+    },
+    {
+     "t": "2026-09-14T00:33:37.934Z",
+     "how": "spectate"
+    }
+   ],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "a76f46c4",
+    "2b5c4b47",
+    "c021698a",
+    "680f9898"
+   ],
+   "played": [
+    {
+     "t": "2026-09-14T00:00:00.994Z",
+     "mode": "daily",
+     "trainers": 4,
+     "watching": 0,
+     "secs": 2038
+    }
+   ],
+   "exact": true
+  },
+  {
+   "code": "KUYTW7",
+   "at": "2026-09-13T23:51:15.720Z",
+   "end": "2026-09-13T23:52:00.541Z",
+   "secs": 45,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "2b5c4b47"
+   ],
+   "played": []
+  },
+  {
+   "code": "SMYDRD",
+   "at": "2026-09-13T23:44:57.444Z",
+   "end": "2026-09-13T23:44:58.667Z",
+   "secs": 1,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "680f9898"
+   ],
+   "played": []
+  },
+  {
+   "code": "8UXKWJ",
+   "at": "2026-09-13T23:44:52.662Z",
+   "end": "2026-09-13T23:44:53.497Z",
+   "secs": 1,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "680f9898"
+   ],
+   "played": []
+  },
+  {
+   "code": "8FG4HB",
+   "at": "2026-09-13T23:44:49.411Z",
+   "end": "2026-09-13T23:44:51.317Z",
+   "secs": 2,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "680f9898"
+   ],
+   "played": []
+  },
+  {
+   "code": "8T24CR",
+   "at": "2026-09-13T23:44:45.600Z",
+   "end": "2026-09-13T23:44:47.740Z",
+   "secs": 2,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "680f9898"
+   ],
+   "played": []
+  },
+  {
+   "code": "24TUEA",
+   "at": "2026-09-13T23:41:46.469Z",
+   "end": "2026-09-13T23:44:43.390Z",
+   "secs": 177,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "680f9898"
+   ],
+   "played": []
+  },
+  {
+   "code": "DE89B5",
+   "at": "2026-09-13T23:19:55.142Z",
+   "end": "2026-09-13T23:19:57.803Z",
+   "secs": 3,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "c9a22783"
+   ],
+   "played": []
+  },
+  {
+   "code": "RGVDFV",
+   "at": "2026-09-13T23:08:19.923Z",
+   "end": "2026-09-13T23:42:17.144Z",
+   "secs": 2037,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 1,
+   "matches": 1,
+   "joins": [
+    {
+     "t": "2026-09-13T23:20:42.280Z",
+     "how": "spectate"
+    }
+   ],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "680f9898",
+    "c9a22783"
+   ],
+   "played": [
+    {
+     "t": "2026-09-13T23:09:20.268Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": 1613
+    }
+   ],
+   "exact": true
+  },
+  {
+   "code": "ZP9U4J",
+   "at": "2026-09-13T23:07:10.612Z",
+   "end": "2026-09-13T23:07:12.498Z",
+   "secs": 2,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "680f9898"
+   ],
+   "played": []
+  },
+  {
+   "code": "F8JPAP",
+   "at": "2026-09-13T23:03:16.418Z",
+   "end": "2026-09-13T23:07:09.347Z",
+   "secs": 233,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "680f9898"
+   ],
+   "played": [
+    {
+     "t": "2026-09-13T23:04:16.739Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "exact": true
+  },
   {
    "code": "6KR5AY",
    "at": "2026-09-13T22:04:34.641Z",
@@ -15621,17 +15985,18 @@
   {
    "id": "a76f46c4",
    "first": "2026-09-02T17:34:57.607Z",
-   "last": "2026-09-08T00:59:55.249Z",
+   "last": "2026-09-14T00:34:57.846Z",
    "since": "2026-08-27",
    "versions": [
     "0.43.0",
     "0.44.0",
     "0.45.0",
-    "0.47.0"
+    "0.47.0",
+    "0.50.1"
    ],
-   "solo": 149,
-   "checkins": 23,
-   "v": "0.47.0"
+   "solo": 156,
+   "checkins": 25,
+   "v": "0.50.1"
   },
   {
    "id": "1fde7048",
@@ -16270,7 +16635,7 @@
   {
    "id": "680f9898",
    "first": "2026-09-11T03:04:32.479Z",
-   "last": "2026-09-13T22:04:34.818Z",
+   "last": "2026-09-14T00:34:29.982Z",
    "since": "2026-09-10",
    "versions": [
     "0.49.0",
@@ -16278,7 +16643,7 @@
     "0.50.1"
    ],
    "solo": 2,
-   "checkins": 97,
+   "checkins": 108,
    "v": "0.50.1"
   },
   {
@@ -16551,13 +16916,13 @@
   {
    "id": "de3792ca",
    "first": "2026-09-13T08:48:33.337Z",
-   "last": "2026-09-13T08:54:48.751Z",
+   "last": "2026-09-14T00:38:19.782Z",
    "since": "2026-09-13",
    "versions": [
     "0.50.1"
    ],
-   "solo": 8,
-   "checkins": 3,
+   "solo": 14,
+   "checkins": 5,
    "v": "0.50.1"
   },
   {
@@ -16611,41 +16976,53 @@
   {
    "id": "c021698a",
    "first": "2026-09-13T18:23:38.007Z",
-   "last": "2026-09-13T21:15:16.980Z",
+   "last": "2026-09-14T00:34:49.498Z",
    "since": "2026-09-13",
    "versions": [
     "0.50.1"
    ],
    "solo": 0,
-   "checkins": 9,
+   "checkins": 11,
    "v": "0.50.1"
   },
   {
    "id": "2b5c4b47",
    "first": "2026-09-13T18:24:45.093Z",
-   "last": "2026-09-13T20:03:57.441Z",
+   "last": "2026-09-14T00:34:55.820Z",
    "since": "2026-09-13",
    "versions": [
     "0.50.1"
    ],
    "solo": 0,
-   "checkins": 8,
+   "checkins": 12,
    "v": "0.50.1"
   },
   {
    "id": "c9a22783",
    "first": "2026-09-13T19:55:27.842Z",
-   "last": "2026-09-13T19:55:52.961Z",
+   "last": "2026-09-13T23:20:42.426Z",
    "since": "2026-09-13",
    "versions": [
     "0.50.1"
    ],
    "solo": 2,
-   "checkins": 2,
+   "checkins": 4,
    "v": "0.50.1"
   }
  ],
  "solo": [
+  {
+   "t": "2026-09-14T00:37:51.976Z",
+   "install": "de3792ca",
+   "n": 6,
+   "v": "0.50.1"
+  },
+  {
+   "t": "2026-09-13T23:52:04.725Z",
+   "install": "a76f46c4",
+   "n": 7,
+   "v": "0.50.1"
+  },
   {
    "t": "2026-09-13T19:55:27.842Z",
    "install": "c9a22783",
