@@ -7,6 +7,8 @@ name: relay stats
 #
 # Commits only when the numbers actually move, so an idle relay produces no
 # history noise and no Pages rebuild.
+# 2026-09-14: the schedule went quiet after GitHub hid the account for a
+# night; a change to this file is what re-registers the cron.
 on:
   schedule:
     - cron: '*/15 * * * *'
