@@ -3827,8 +3827,8 @@ do
     local BR = fakeBR()
     local items, view = BRMenu.items({ version = "9.9.9" }, BR, {})
     eq(view, "menu", "no room is the first face")
-    eq(labels(items), "QUICK PLAY|DAILY GAME|SOLO VS BOTS|HOST GAME|JOIN BY CODE|TRAINER: RED",
-       "the first face, in order -- no SERVER row, no version row (POK-161)")
+    eq(labels(items), "QUICK PLAY|DAILY GAME|LOBBIES|SOLO VS BOTS|HOST GAME|JOIN BY CODE|TRAINER: RED",
+       "the first face, in order -- no SERVER row, no version row (POK-161), LOBBIES third")
     local allOpen = true
     for _, it in ipairs(items) do if not it.keepOpen then allOpen = false end end
     ok(allOpen, "and every row keeps the screen open")
@@ -4105,7 +4105,7 @@ do
     items, view = BRMenu.items({ version = "0.36.10" }, BR, {})
     eq(view, "menu", "no room left is the first face")
     eq(labels(items),
-       "MATCH OVER|QUICK PLAY|DAILY GAME|SOLO VS BOTS|HOST GAME|JOIN BY CODE|TRAINER: RED",
+       "MATCH OVER|QUICK PLAY|DAILY GAME|LOBBIES|SOLO VS BOTS|HOST GAME|JOIN BY CODE|TRAINER: RED",
        "the result leads the first face on its own row")
     ok(#items <= BRMenu.maxRows(2),
        ("the first face still fits with a result on it (%d/%d)")
@@ -4116,8 +4116,88 @@ do
        "a win reads as a win")
     -- seven since 2026-09-10: NAME and SKIN folded into TRAINER with the
     -- battle text, which kept the face inside maxRows(2) with a row spare
+    -- -- and eight since 2026-09-13, when LOBBIES took that spare row: the
+    -- face is exactly the cap with a result on it, and nothing scrolls
     ok(#items <= BRMenu.maxRows(2), "...still within the eight rows")
-    eq(#items, 7, "...seven of them")
+    eq(#items, 8, "...all eight of them")
+
+    -- ------- the lobby list (lib/browse.lua, 2026-09-13)
+    do
+      local Browse = require("mods.battle_royale.lib.browse")
+      local lb = fakeBR()
+      eq(#Browse.rows(lb), 0, "no relay, no rows")
+      eq(Browse.status(lb), nil, "and nothing to say")
+      lb.relay = { status = "connecting", isBrowsing = function() return false end,
+                   isOpen = function() return false end }
+      eq(BRMenu.view(lb), "connecting", "a browser mid-handshake is the connecting face")
+      eq(Browse.status(lb), "CONNECTING...", "which the list would also say")
+      lb.relay = { status = "browsing", isBrowsing = function() return true end,
+                   isOpen = function() return false end, rooms = {} }
+      eq(BRMenu.view(lb), "browse", "a browsing relay is the list face")
+      eq(Browse.status(lb), "NO OPEN GAMES", "an empty list says so")
+      lb.relay.rooms = {
+        { code = "AAAAAA", host = "RED", skin = "SPRITE_HIKER", players = 3, seats = 30, pass = false },
+        { code = "BBBBBB", host = "MAYBELLE", players = 1, seats = 8, pass = true },
+      }
+      eq(Browse.status(lb), nil, "a list with rooms has no status line")
+      eq(Browse.count(lb.relay.rooms[1]), "3/30", "trainers over seats")
+      eq(Browse.count(lb.relay.rooms[2]), "1/8", "...at the host's MAX")
+      -- the DAILY GAME's row counts down instead
+      eq(Browse.count({ daily = true, secs = 1620 }), "IN 27M", "the daily row counts down")
+      eq(Browse.count({ daily = true, secs = 61 }), "IN 2M", "...rounded up")
+      eq(Browse.count({ daily = true, secs = 0 }), "NOW", "...to the hour")
+      lb.relay.joining = "BBBBBB"
+      eq(Browse.status(lb), "JOINING...", "a knock in flight")
+      lb.relay.joining = nil
+      lb.relay.joinReason = "passcode"
+      eq(Browse.status(lb), "WRONG PASSCODE", "a refusal, in one line")
+      lb.relay.joinReason = "full"
+      eq(Browse.status(lb), "THAT GAME IS FULL", "each reason has its line")
+      lb.relay.joinReason = "whatever"
+      eq(Browse.status(lb), "COULDN'T JOIN", "and an unknown one still fits")
+      for reason, line in pairs(Browse.REFUSALS) do
+        ok(#line <= 17, "refusal fits the box (" .. reason .. ")")
+      end
+      -- the cursor: rows then the button, wrapping both ways
+      eq(Browse.move(0, 2, "down"), 1, "down off the button is the first row")
+      eq(Browse.move(2, 2, "down"), 0, "down off the last row is the button")
+      eq(Browse.move(0, 2, "up"), 2, "up off the button is the last row")
+      eq(Browse.move(1, 2, "up"), 0, "up off the first row is the button")
+      eq(Browse.move(0, 0, "down"), 0, "an empty list has only the button")
+      eq(Browse.scrollFor(0, 7, 9), 2, "the seventh row scrolls the page to it")
+      eq(Browse.scrollFor(2, 1, 9), 0, "and the first scrolls it back")
+    end
+
+    -- ------- the OPEN row's three states (2026-09-13)
+    do
+      local ob = fakeBR()
+      ob.openState, ob.pass = true, nil
+      ob.isOpen = function(self) return self.openState end
+      ob.setOpen = function(self, on) self.openState = on and true or false end
+      ob.passcode = function(self) return self.pass end
+      ob.setPass = function(self, p) self.pass = p end
+      ob.relay = room(true)
+      local pushed = nil
+      local fakeGame = { stack = { push = function(_, screen) pushed = screen end } }
+      local function openRow()
+        return find(BRMenu.items({}, ob, fakeGame), "OPEN:")
+      end
+      eq(openRow().label, "OPEN: YES", "an open room")
+      openRow().onSelect()
+      eq(openRow().label, "OPEN: NO", "one press closes the door")
+      ok(pushed == nil, "without asking anything")
+      openRow().onSelect()
+      ok(pushed ~= nil and pushed.onDone ~= nil, "the next press asks for a passcode")
+      eq(openRow().label, "OPEN: NO", "and the room stays shut until one is given")
+      pushed.onDone("")
+      eq(openRow().label, "OPEN: NO", "a blank passcode changes nothing")
+      pushed.onDone("AB12")
+      eq(openRow().label, "OPEN: PASS AB12", "a passcode opens the door with a lock")
+      ok(#openRow().label <= BRMenu.MAX_LABEL, "and the row fits the box")
+      openRow().onSelect()
+      eq(openRow().label, "OPEN: YES", "the next press takes the lock off")
+      eq(ob.pass, nil, "the passcode is gone")
+    end
 
     -- the TRAINER screen: name, skin, the three lines, clear, back
     local rows = {}
@@ -4703,6 +4783,140 @@ do
   b:update()
   eq(got and got.from, a.id, "the new host's word carries the new host's id")
   eq(got and Wire.decode(got.m).elapsed, 240, "clock and all")
+end
+
+-- ------------------------------------------------------------------
+-- the DAILY GAME on the list (2026-09-13): a row inside the half hour,
+-- picked through the daily's own door
+-- ------------------------------------------------------------------
+do
+  local hub = Hub.new({ dailySecs = 1200 })
+  local b = Relay.new({ transport = hub:connect() })
+  local rooms, joined = nil, false
+  b:on("rooms", function(_, list) rooms = list end)
+  b:on("joined", function() joined = true end)
+  ok(b:browse(), "browse opens a connection")
+  b:update()
+  eq(rooms and #rooms, 1, "the daily is the only row")
+  eq(rooms[1].host, "DAILY", "named for what it is")
+  eq(rooms[1].daily, true, "and flagged")
+  eq(rooms[1].secs, 1200, "with the countdown")
+  eq(rooms[1].code, "", "no room yet")
+  eq(rooms[1].players, 0, "and nobody in it")
+  ok(b:joinDaily("BLUE"), "the row is knocked on")
+  eq(b.joining, "DAILY", "knocking")
+  b:update()
+  ok(joined, "the daily's door opens")
+  eq(b.status, "lobby", "and the browser is its room")
+  ok(b:isHost(), "first in hosts it")
+
+  -- the next browser sees the room and its one trainer, and joins it
+  local c = Relay.new({ transport = hub:connect() })
+  local crooms, cjoined = nil, false
+  c:on("rooms", function(_, list) crooms = list end)
+  c:on("joined", function() cjoined = true end)
+  c:browse(); c:update()
+  eq(crooms[1].code, b.code, "the row names the room now")
+  eq(crooms[1].players, 1, "and counts who is in it")
+  c:joinDaily("GREEN"); c:update(); b:update()
+  ok(cjoined and c.code == b.code, "seated in the same room")
+  eq(#b.members, 2, "the host sees two")
+
+  -- hours ahead there is no row
+  local far = Hub.new({ dailySecs = 7200 })
+  local d = Relay.new({ transport = far:connect() })
+  local drooms
+  d:on("rooms", function(_, list) drooms = list end)
+  d:browse(); d:update()
+  eq(drooms and #drooms, 0, "hours ahead, no row")
+end
+
+-- the lobby list (2026-09-13): browse, read, knock -- over the hub
+-- ------------------------------------------------------------------
+do
+  local hub = Hub.new()
+  local host = Relay.new({ transport = hub:connect() })
+  host:host("RED", { open = true, max = 30, skin = "SPRITE_HIKER" })
+  host:update()
+  eq(host.open, true, "the roster says the room is open")
+  eq(host.pass, false, "and that no passcode is set")
+  local priv = Relay.new({ transport = hub:connect() })
+  priv:host("PRIV")
+  priv:update()
+
+  local b = Relay.new({ transport = hub:connect() })
+  local rooms, refused, joined = nil, nil, false
+  b:on("rooms", function(_, list) rooms = list end)
+  b:on("refused", function(_, reason) refused = reason end)
+  b:on("joined", function() joined = true end)
+  ok(b:browse(), "browse opens a connection")
+  eq(b.status, "connecting", "connecting until the list lands")
+  b:update()
+  eq(b.status, "browsing", "then browsing")
+  ok(b:isBrowsing() and not b:isOpen(), "a browser is not in a room")
+  eq(rooms and #rooms, 1, "the open room is listed and the private one is not")
+  eq(rooms[1].host, "RED", "the host's name")
+  eq(rooms[1].skin, "SPRITE_HIKER", "the host's skin, for the sprite")
+  eq(rooms[1].players, 1, "one trainer in it")
+  eq(rooms[1].seats, 30, "over the host's MAX")
+  eq(rooms[1].pass, false, "no lock")
+
+  -- the host puts a passcode on the door; the next look shows the lock
+  host:setPass("ab12")
+  host:update()
+  eq(host.pass, true, "the host's roster says a passcode is set")
+  b.lastList = -1e9
+  b:update()   -- asks
+  b:update()   -- reads
+  eq(rooms[1].pass, true, "the list shows the lock")
+
+  -- a wrong knock is a status line, not the end of the list
+  b:joinListed(rooms[1].code, "BLUE", { pass = "zz99" })
+  eq(b.joining, rooms[1].code, "knocking")
+  b:update()
+  eq(refused, "passcode", "refused, with the reason")
+  eq(b.status, "browsing", "and still browsing")
+  eq(b.joinReason, "passcode", "the reason is kept for the status line")
+  eq(b.joining, nil, "the knock is over")
+  ok(not joined, "nobody was seated")
+
+  -- the right one seats us, case-blind
+  b:joinListed(rooms[1].code, "BLUE", { pass = "AB12" })
+  b:update(); host:update()
+  ok(joined, "joined with the passcode")
+  eq(b.status, "lobby", "the browser became a room")
+  eq(#host.members, 2, "the host sees two")
+  eq(b.pass, true, "the guest's roster says the door has a passcode")
+
+  -- JOIN BY CODE onto a passcoded door: the connection is kept and the
+  -- caller is asked, then knocks again on it
+  local c = Relay.new({ transport = hub:connect() })
+  local need, cjoined, cclosed = nil, false, nil
+  c:on("needpass", function(_, code) need = code end)
+  c:on("joined", function() cjoined = true end)
+  c:on("closed", function(r) cclosed = r end)
+  c:join(host.code, "GREEN")
+  c:update()
+  eq(need, host.code, "needpass fires with the code that was tried")
+  eq(c.status, "connecting", "and the connection stays")
+  ok(c:retryWithPass("GREEN", "ab12"), "the retry goes out")
+  c:update()
+  ok(cjoined, "and seats us")
+  ok(cclosed == nil, "without ever closing")
+
+  -- a caller with no way to ask is refused the old way: closed, with the text
+  local d = Relay.new({ transport = hub:connect() })
+  local dclosed = nil
+  d:on("closed", function(r) dclosed = r end)
+  d:join(host.code, "PINK")
+  d:update()
+  ok(dclosed and dclosed:find("passcode", 1, true) ~= nil,
+     "an old-style join is closed with the passcode message")
+
+  host:setPass(nil)
+  host:update()
+  eq(host.pass, false, "the passcode comes off")
+  host:leave()
 end
 
 -- ------------------------------------------------------------------

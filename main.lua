@@ -723,7 +723,11 @@ return function(mod)
     self.skin = entry.id
     self:saveCareer()
     if self.matchWorld then self:applySkinWalk() end
-    if self.relay and self.relay:isOpen() then broadcastPlace() end
+    if self.relay and self.relay:isOpen() then
+      broadcastPlace()
+      -- the lobby list draws the host as the relay was told (lib/browse.lua)
+      if self.relay.setSkin then self.relay:setSkin(mySprite()) end
+    end
     return entry.id
   end
 
@@ -935,6 +939,10 @@ return function(mod)
         BR:armDaily(info.daily.secs)
       end
     end)
+    -- a knock from the lobby list that was refused: the list stays up,
+    -- and whatever the knock had already assumed about the room (the
+    -- daily's fill and clock) is taken back
+    relay:on("refused", function() BR.dailyLobby = nil end)
     relay:on("closed", function(reason)
       -- A room that closes under us is an exit like any other, and it has
       -- to leave the throwaway world the same way a deliberate LEAVE does.
@@ -966,7 +974,8 @@ return function(mod)
     -- is the opt-out for a private game with friends, and POK-130's
     -- REMOVE row is the way out if the open door lets somebody in you
     -- did not want.
-    local ok, err = relay:host(myName(), { open = true, max = self:fillMax() })
+    local ok, err = relay:host(myName(), { open = true, max = self:fillMax(),
+                                           skin = mySprite() })
     if not ok then return false, err end
     self.relay = relay
     return true
@@ -1085,7 +1094,9 @@ return function(mod)
     local relay = Relay.new({ address = self:relayAddress(), log = mod.log })
     wireRelay(relay)
     relay:on("noopen", function()
-      relay:host(myName(), { open = true })
+      -- max: what the room fills to, so the lobby list reads it as
+      -- 1/30 and not as the relay's human ceiling
+      relay:host(myName(), { open = true, max = QUICK_FILL, skin = mySprite() })
     end)
     -- quick_join's third answer (POK-133): nothing joinable, but a match
     -- is RUNNING.  Held as an offer rather than acted on -- the player
@@ -1255,6 +1266,67 @@ return function(mod)
 
   function BR:isOpen() return self.relay and self.relay.open == true end
 
+  -- The passcode on the door (2026-09-13), or nil: the host's own copy
+  -- of what it typed, for the OPTIONS row to show and the host to read
+  -- out.  The relay keeps the code and tells the room only THAT one is
+  -- set (relay.pass); a guest never holds it.
+  function BR:passcode()
+    local relay = self.relay
+    if not (relay and relay:isHost()) then return nil end
+    return self.roomPass
+  end
+
+  function BR:setPass(pass)
+    local relay = self.relay
+    if not (relay and relay:isHost()) then return false end
+    if type(pass) == "string" then
+      pass = pass:upper():gsub("[^A-Z0-9]", "")
+      if pass == "" then pass = nil end
+    else
+      pass = nil
+    end
+    self.roomPass = pass
+    relay:setPass(pass)
+    log:say("room %s: passcode %s", tostring(relay.code), pass and "set" or "cleared")
+    return true
+  end
+
+  -- LOBBIES (2026-09-13): connect and look, join from the list.  The
+  -- connection is a browser's -- no room -- until joinListed turns it
+  -- into one; the relay keeps re-listing while the screen is up
+  -- (lib/relay.lua), and the screen is lib/browse.lua.
+  function BR:browse()
+    self:reset()
+    local relay = Relay.new({ address = self:relayAddress(), log = mod.log })
+    wireRelay(relay)
+    local ok, err = relay:browse()
+    if not ok then return false, err end
+    self.relay = relay
+    return true
+  end
+
+  -- Knock on a listed room, with the passcode if its row had a lock.
+  -- The answer is the "joined" event (the screen becomes the room) or a
+  -- refusal the list shows on its own status line and stays up for.
+  function BR:joinListed(code, pass)
+    local relay = self.relay
+    if not (relay and relay.isBrowsing and relay:isBrowsing()) then return false end
+    return relay:joinListed(code, myName(), { pass = pass, skin = mySprite() })
+  end
+
+  -- The DAILY GAME's row on the list (2026-09-13): the daily's own door,
+  -- knocked on from the browsing connection.  The room is the daily
+  -- lobby from the first frame, as dailyPlay's is -- the fill and the
+  -- clock are the official ones -- and a refusal takes that back
+  -- (wireRelay's "refused").
+  function BR:joinDaily()
+    local relay = self.relay
+    if not (relay and relay.isBrowsing and relay:isBrowsing()) then return false end
+    self.dailyLobby = true
+    self:setFill(DAILY_FILL)
+    return relay:joinDaily(myName())
+  end
+
   -- READY UP (POK-167): after a match, a quick room does not count down on
   -- its own -- the host arms the next one.  Quick Play's promise is a game
   -- NOW, and the first lobby keeps it; the second match is the one nobody
@@ -1284,7 +1356,25 @@ return function(mod)
     self:reset()
     local relay = Relay.new({ address = self:relayAddress(), log = mod.log })
     wireRelay(relay)
-    local ok, err = relay:join(code, myName())
+    -- A code that opens onto a passcoded door (2026-09-13): the relay
+    -- keeps the connection and says so, and the passcode is asked for
+    -- on the same widget the code was typed on.  Cancelling leaves --
+    -- there is nothing else this connection could become.
+    relay:on("needpass", function()
+      local game = BR.game
+      if not (game and game.stack) then relay:leave() return end
+      local Entry = require("mods.battle_royale.lib.entry")
+      game.stack:push(Entry.new(game, {
+        title = "PASSCODE",
+        shape = Entry.PASS,
+        onDone = function(pass)
+          if not pass or pass == "" then BR:teardown() return end
+          relay:retryWithPass(myName(), pass)
+        end,
+        onCancel = function() BR:teardown() end,
+      }))
+    end)
+    local ok, err = relay:join(code, myName(), { skin = mySprite() })
     if not ok then return false, err end
     self.relay = relay
     return true
@@ -1585,6 +1675,7 @@ return function(mod)
     self.runningMatch = nil   -- the POK-133 offer dies with the connection
     self.armKick = nil
     self.lobbySeed = nil
+    self.roomPass = nil
     self.dailyLobby = nil
     self.linesOf = {}
   end
@@ -9764,6 +9855,15 @@ return function(mod)
   mod.exports.readyUp = function() return BR:readyUp() end
   mod.exports.isQuick = function() return BR.quick == true end
   mod.exports.join = function(code) return BR:join(code) end
+  -- the lobby list (lib/browse.lua): look, read, knock
+  mod.exports.browse = function() return BR:browse() end
+  mod.exports.rooms = function()
+    return require("mods.battle_royale.lib.browse").rows(BR)
+  end
+  mod.exports.joinListed = function(code, pass) return BR:joinListed(code, pass) end
+  mod.exports.joinDaily = function() return BR:joinDaily() end
+  mod.exports.setPass = function(pass) return BR:setPass(pass) end
+  mod.exports.passcode = function() return BR:passcode() end
   mod.exports.start = function() return BR:startMatch() end
   mod.exports.leave = function() return BR:teardown() end
   -- PLAY AGAIN over the wire, exactly as a guest receives it (POK-144): the

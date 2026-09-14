@@ -28,7 +28,7 @@ local SILENT_FOR = 25.0
 local CONTROL = {
   room_hosted = true, room_joined = true, room_error = true, roster = true,
   recv = true, room_closed = true, pong = true, no_open_rooms = true,
-  match_in_progress = true, info = true,
+  match_in_progress = true, info = true, rooms = true,
 }
 
 -- how often a connected client re-asks for the server's info line
@@ -37,6 +37,13 @@ local CONTROL = {
 -- lobby where it matters
 local INFO_EVERY = 15.0
 
+-- how often a browsing client re-asks for the lobby list: the list is
+-- what the player is looking at, and a room that filled or locked five
+-- seconds ago should not still be offered.  Also the browser's keepalive
+-- on the relay side, which drops an unbound connection that has not
+-- asked for a while.
+local LIST_EVERY = 5.0
+
 local ERRORS = {
   not_found = "That code wasn't\nfound.",
   full = "That game is\nfull.",
@@ -44,6 +51,8 @@ local ERRORS = {
   already_in_room = "Already in a\ngame.",
   -- the host showed you out (POK-130); the room will not take you back
   removed = "The host removed\nyou from that\ngame.",
+  -- the door wants a passcode this join did not carry, or carried wrong
+  passcode = "That passcode\nisn't right.",
   -- the relay is at its room ceiling: not the player's fault, and
   -- SOLO VS BOTS still works, so say something that points at the way out
   server_full = "That server is\nbusy. Try SOLO\nor try again\nlater.",
@@ -65,12 +74,17 @@ function Relay.new(opts)
     address = opts.address,
     net = opts.transport,
     log = opts.log,
-    status = "idle",      -- idle | connecting | lobby | closed
+    status = "idle",      -- idle | connecting | browsing | lobby | closed
     id = nil,             -- our member id in the room
     code = nil,           -- the room code
     hostId = nil,
     open = false,         -- is the relay listing this room for quick_join?
+    pass = false,         -- does the door want a passcode? (never the code)
     members = {},         -- ordered { id=, name= }, as the relay last said
+    rooms = nil,          -- the lobby list, once browsing: { code=, host=,
+                          --   skin=, players=, seats=, pass= } fullest first
+    joining = nil,        -- the code a browser is knocking on, until answered
+    joinError = nil,      -- what the door said the last time it stayed shut
     error = nil,
     handlers = {},
     lastHeard = 0,
@@ -128,10 +142,63 @@ end
 -- being findable by strangers is something a host opts into.
 -- max = the room's size; the relay refuses joins past it (and clamps it
 -- to its own member ceiling).  Absent means the ceiling.
+-- skin = the walk sheet the lobby list draws this host as.
+-- pass = a passcode the door will ask every joiner for.
 function Relay:host(name, opts)
   return self:_open({ type = "host_room", name = name,
                       open = (opts and opts.open) == true,
-                      max = opts and tonumber(opts.max) or nil })
+                      max = opts and tonumber(opts.max) or nil,
+                      skin = opts and opts.skin or nil,
+                      pass = opts and opts.pass or nil })
+end
+
+-- The lobby list (2026-09-13): connect and ask for every room a stranger
+-- may walk into.  Answered with `rooms`, after which the connection sits
+-- in "browsing" -- re-asking every LIST_EVERY seconds -- until joinListed
+-- turns it into a room or leave() closes it.
+function Relay:browse()
+  self.browsing = true
+  return self:_open({ type = "list_rooms" })
+end
+
+function Relay:isBrowsing() return self.status == "browsing" end
+
+-- Knock on a listed door, on the connection the list came over.  A room
+-- with a lock wants opts.pass; the answer is room_joined (the "joined"
+-- event) or a room_error that, while browsing, does NOT close the
+-- connection: it lands in joinError for the list to show, and the list
+-- stays up.
+function Relay:joinListed(code, name, opts)
+  if not self:isBrowsing() then return false end
+  self.joining = code
+  self.joinError, self.joinReason = nil, nil
+  return self:_raw({ type = "join_room", code = code, name = name,
+                     pass = opts and opts.pass or nil,
+                     skin = opts and opts.skin or nil })
+end
+
+-- The DAILY GAME's row (2026-09-13): the same knock, on the daily's own
+-- door -- the relay creates the room or seats us in the one that exists.
+function Relay:joinDaily(name)
+  if not self:isBrowsing() then return false end
+  self.joining = "DAILY"
+  self.joinError, self.joinReason = nil, nil
+  return self:_raw({ type = "daily_join", name = name })
+end
+
+-- The passcode on the door, or nil for none.  Host only; the relay
+-- enforces that too.  What is kept here is only whether one is set --
+-- the caller holds the code it typed.
+function Relay:setPass(pass)
+  if type(pass) == "string" and pass == "" then pass = nil end
+  self.pass = pass ~= nil
+  return self:_raw({ type = "set_pass", pass = pass })
+end
+
+-- What this trainer looks like on the lobby list, after the room is up
+-- (the skin picker in a lobby, and the host the room may fall to).
+function Relay:setSkin(walk)
+  return self:_raw({ type = "set_skin", skin = walk })
 end
 
 -- the host's MAX, after the room is up (the lobby's MAX row)
@@ -153,8 +220,21 @@ function Relay:setOpen(open)
   return self:_raw({ type = "set_open", open = self.open })
 end
 
-function Relay:join(code, name)
-  return self:_open({ type = "join_room", code = code, name = name })
+-- opts.pass = the passcode, for a room whose host set one; opts.skin =
+-- the walk sheet the list draws us as, should the room fall to us
+function Relay:join(code, name, opts)
+  self.joining = code
+  return self:_open({ type = "join_room", code = code, name = name,
+                      pass = opts and opts.pass or nil,
+                      skin = opts and opts.skin or nil })
+end
+
+-- Knock again with a passcode, on the connection the first knock was
+-- refused on (the "needpass" event): the room, the name, the code.
+function Relay:retryWithPass(name, pass)
+  if self.status ~= "connecting" or not self.joining then return false end
+  return self:_raw({ type = "join_room", code = self.joining, name = name,
+                     pass = pass })
 end
 
 -- The one shared DAILY GAME room (POK-161): join it, or become its host.
@@ -298,6 +378,11 @@ function Relay:update()
     self.lastInfo = t
     self:_raw({ type = "info" })
   end
+  -- and so does the lobby list, while it is what is on screen
+  if self.status == "browsing" and t - (self.lastList or 0) >= LIST_EVERY then
+    self.lastList = t
+    self:_raw({ type = "list_rooms" })
+  end
   if t - self.lastHeard >= SILENT_FOR then
     self:_close("Lost the relay.")
   end
@@ -317,21 +402,79 @@ local function cleanMembers(list)
   return out
 end
 
+-- One row of the lobby list, trusted for nothing: a name is clipped to
+-- what a seat shows, a skin is a string or nothing, the counts are whole
+-- numbers or the row is dropped.
+local function cleanRooms(list)
+  local out = {}
+  for _, r in ipairs(type(list) == "table" and list or {}) do
+    if type(r) == "table" and type(r.code) == "string"
+       and tonumber(r.players) and tonumber(r.seats) then
+      out[#out + 1] = {
+        code = r.code,
+        host = type(r.host) == "string" and r.host or "PLAYER",
+        skin = type(r.skin) == "string" and r.skin or nil,
+        players = math.max(0, math.floor(tonumber(r.players))),
+        seats = math.max(0, math.floor(tonumber(r.seats))),
+        pass = r.pass == true,
+        -- the DAILY GAME's row: a countdown to its hour, not a headcount
+        daily = r.daily == true,
+        secs = tonumber(r.secs),
+      }
+    end
+  end
+  return out
+end
+
 function Relay:_receive(msg)
   local t = msg.type
   if t == "room_hosted" then
     self.id, self.code, self.hostId = msg.id, msg.code, msg.id
     self.status = "lobby"
+    self.browsing, self.joining = nil, nil
     self:_fire("joined", self)
   elseif t == "room_joined" then
     self.id, self.code, self.hostId = msg.id, msg.code, msg.host
     self.status = "lobby"
+    self.browsing, self.joining = nil, nil
     self:_fire("joined", self)
+  elseif t == "rooms" then
+    -- the lobby list.  The first answer is what turns a connecting
+    -- browser into a browsing one; every later one refreshes the list.
+    self.rooms = cleanRooms(msg.rooms)
+    if self.status == "connecting" and self.browsing then
+      self.status = "browsing"
+      self.lastList = now()
+    end
+    self:_fire("rooms", self, self.rooms)
   elseif t == "room_error" then
-    self:_close(ERRORS[msg.reason] or ("Couldn't join:\n" .. tostring(msg.reason)))
+    local text = ERRORS[msg.reason] or ("Couldn't join:\n" .. tostring(msg.reason))
+    if self.status == "browsing" then
+      -- a door on the list stayed shut: the list is still the screen,
+      -- and this is its status line, not the end of the connection
+      self.joining = nil
+      self.joinError = text
+      self.joinReason = tostring(msg.reason)
+      self:_fire("refused", self, msg.reason, text)
+    elseif msg.reason == "passcode" and self.status == "connecting"
+           and self.joining and self.handlers.needpass then
+      -- a join by code hit a passcoded door: whoever has a way to ask for
+      -- the code gets to, and retryWithPass knocks again on this same
+      -- connection -- so cancelling is leave(), and nothing else changes
+      self:_fire("needpass", self, self.joining)
+    else
+      self:_close(text)
+    end
   elseif t == "no_open_rooms" then
     -- not an error: nobody is hosting yet, so the caller gets to be first
     self:_fire("noopen", self)
+  elseif t == "match_in_progress" and self.status == "browsing" then
+    -- the daily's row was picked as its match began: a shut door on the
+    -- list, like any other
+    self.joining = nil
+    self.joinError = ERRORS.locked
+    self.joinReason = "locked"
+    self:_fire("refused", self, "locked", ERRORS.locked)
   elseif t == "match_in_progress" then
     -- quick_join's third answer (POK-133): nothing joinable, but a match
     -- is live -- the caller may enter it as a spectator and play the next
@@ -340,6 +483,7 @@ function Relay:_receive(msg)
   elseif t == "roster" then
     if type(msg.host) == "number" then self.hostId = msg.host end
     if type(msg.open) == "boolean" then self.open = msg.open end
+    if type(msg.pass) == "boolean" then self.pass = msg.pass end
     if type(msg.max) == "number" then self.max = msg.max end
     self.members = cleanMembers(msg.members)
     self:_fire("roster", self.members)

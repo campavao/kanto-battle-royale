@@ -857,3 +857,221 @@ test("daily_join shares one room, and quick_join never seats there", async () =>
     await relay.close();
   }
 });
+
+// ------- the lobby list and the passcode (2026-09-13)
+
+test("list_rooms shows every joinable lobby: host, skin, trainers over seats, the lock", async () => {
+  await withRelay(async (port) => {
+    // an open room of thirty with two trainers in it
+    const anna = await connect(port);
+    anna.send({ type: "host_room", name: "ANNA", open: true, max: 30, skin: "SPRITE_HIKER" });
+    const annaCode = (await anna.until("room_hosted")).code;
+    const mate = await connect(port);
+    mate.send({ type: "join_room", code: annaCode, name: "MATE" });
+    await mate.until("room_joined");
+
+    // a passcoded room of four, listed with its lock and no code
+    const ben = await connect(port);
+    ben.send({ type: "host_room", name: "BEN", open: true, max: 4, pass: "ab12" });
+    const benCode = (await ben.until("room_hosted")).code;
+
+    // ...and the ones a stranger may not walk into: private, mid-match, daily
+    const priv = await connect(port);
+    priv.send({ type: "host_room", name: "PRIV" });
+    await priv.until("room_hosted");
+    const live = await connect(port);
+    live.send({ type: "host_room", name: "LIVE", open: true });
+    await live.until("room_hosted");
+    live.send({ type: "lock_room", locked: true });
+    await live.settled();
+    const daily = await connect(port);
+    daily.send({ type: "daily_join", name: "DAILY" });
+    await daily.until("room_hosted");
+
+    const seeker = await connect(port);
+    seeker.send({ type: "list_rooms" });
+    const answer = await seeker.until("rooms");
+    assert.deepEqual(answer.rooms, [
+      { code: annaCode, host: "ANNA", skin: "SPRITE_HIKER", players: 2, seats: 30, pass: false },
+      // (no skin sent, no skin key: JSON has no undefined)
+      { code: benCode, host: "BEN", players: 1, seats: 4, pass: true },
+    ]);
+    // the seat count is the host's MAX as asked, not the human ceiling
+    assert.equal(answer.rooms[0].seats, 30);
+    // and the room's own roster only ever says THAT a passcode is set
+    ben.send({ type: "set_max", max: 6 });
+    const roster = await ben.until("roster");
+    assert.equal(roster.pass, true);
+    assert.equal(roster.max, 4, "the roster's max is the human ceiling");
+    assert.equal("passcode" in roster, false);
+    seeker.send({ type: "list_rooms" });
+    assert.equal((await seeker.until("rooms")).rooms.find((r) => r.host === "BEN").seats, 6,
+                 "the list's seats are the host's MAX as asked");
+
+    // a garbage skin is dropped rather than echoed to every browser
+    const odd = await connect(port);
+    odd.send({ type: "host_room", name: "ODD", open: true, skin: "<img src=x>" });
+    await odd.until("room_hosted");
+    seeker.send({ type: "list_rooms" });
+    const again = await seeker.until("rooms");
+    assert.equal(again.rooms.find((r) => r.host === "ODD").skin, undefined);
+
+    for (const c of [anna, mate, ben, priv, live, daily, seeker, odd]) c.end();
+  }, { members: 4 });   // a human ceiling under the thirty seats ANNA asked for
+});
+
+// a BR_DAILY string for a wall-clock time `minutes` from now, in UTC
+function dailyIn(minutes) {
+  const at = new Date(Date.now() + minutes * 60 * 1000);
+  const hh = String(at.getUTCHours()).padStart(2, "0");
+  const mm = String(at.getUTCMinutes()).padStart(2, "0");
+  return `${hh}:${mm}|UTC|TEST`;
+}
+
+test("the DAILY GAME leads the list inside its half hour, and its row is the daily's door", async () => {
+  const relay = createRelay({ daily: dailyIn(20) });
+  const addr = await relay.listen(0, "127.0.0.1");
+  try {
+    // nobody has pressed the row: the relay promises the room anyway
+    const seeker = await connect(addr.port);
+    seeker.send({ type: "list_rooms" });
+    let rooms = (await seeker.until("rooms")).rooms;
+    assert.equal(rooms.length, 1);
+    assert.equal(rooms[0].host, "DAILY");
+    assert.equal(rooms[0].daily, true);
+    assert.equal(rooms[0].code, "", "no room yet, no code");
+    assert.equal(rooms[0].players, 0);
+    assert.equal(rooms[0].seats, 30);
+    assert.equal(rooms[0].pass, false);
+    assert.ok(rooms[0].secs > 18 * 60 && rooms[0].secs <= 20 * 60,
+              "the countdown: " + rooms[0].secs);
+
+    // somebody presses DAILY GAME: the row names the room and counts them,
+    // and it stays ahead of a fuller open room
+    const early = await connect(addr.port);
+    early.send({ type: "daily_join", name: "EARLY" });
+    const hosted = await early.until("room_hosted");
+    const anna = await connect(addr.port);
+    anna.send({ type: "host_room", name: "ANNA", open: true, max: 30 });
+    const annaCode = (await anna.until("room_hosted")).code;
+    const mate = await connect(addr.port);
+    mate.send({ type: "join_room", code: annaCode, name: "MATE" });
+    await mate.until("room_joined");
+    seeker.send({ type: "list_rooms" });
+    rooms = (await seeker.until("rooms")).rooms;
+    assert.equal(rooms[0].host, "DAILY", "the daily leads");
+    assert.equal(rooms[0].code, hosted.code);
+    assert.equal(rooms[0].players, 1);
+    assert.equal(rooms[1].host, "ANNA");
+
+    // picking the row is daily_join on the browsing connection
+    seeker.send({ type: "daily_join", name: "SEEKER" });
+    assert.equal((await seeker.until("room_joined")).code, hosted.code);
+
+    // once the daily is running, no row
+    early.send({ type: "lock_room", locked: true });
+    await early.settled();
+    const late = await connect(addr.port);
+    late.send({ type: "list_rooms" });
+    rooms = (await late.until("rooms")).rooms;
+    assert.equal(rooms.find((r) => r.daily), undefined, "a running daily is not listed");
+    for (const c of [seeker, early, anna, mate, late]) c.end();
+  } finally {
+    await relay.close();
+  }
+});
+
+test("hours ahead of its time the DAILY GAME is not on the list", async () => {
+  const relay = createRelay({ daily: dailyIn(5 * 60) });
+  const addr = await relay.listen(0, "127.0.0.1");
+  try {
+    const seeker = await connect(addr.port);
+    seeker.send({ type: "list_rooms" });
+    assert.deepEqual((await seeker.until("rooms")).rooms, []);
+    seeker.end();
+  } finally {
+    await relay.close();
+  }
+});
+
+test("a passcode gates the door: wrong is refused, right is seated, quick play walks past", async () => {
+  await withRelay(async (port) => {
+    const host = await connect(port);
+    host.send({ type: "host_room", name: "HOST", open: true });
+    const code = (await host.until("room_hosted")).code;
+    await host.until("roster");
+
+    // a guest cannot set one
+    const early = await connect(port);
+    early.send({ type: "join_room", code, name: "EARLY" });
+    await early.until("room_joined");
+    await early.until("roster");
+    early.send({ type: "set_pass", pass: "NOPE" });
+    await early.settled();
+    const walkin = await connect(port);
+    walkin.send({ type: "join_room", code, name: "WALK" });
+    assert.equal((await walkin.next()).type, "room_joined");
+    walkin.send({ type: "leave_room" });
+    await host.until("roster");
+
+    // the host can, and the room hears only that it is set
+    host.send({ type: "set_pass", pass: "ab12" });
+    await rosterWhere(early, (r) => r.pass === true);
+
+    const wrong = await connect(port);
+    wrong.send({ type: "join_room", code, name: "WRONG", pass: "zz99" });
+    assert.equal((await wrong.next()).reason, "passcode");
+    const none = await connect(port);
+    none.send({ type: "join_room", code, name: "NONE" });
+    assert.equal((await none.next()).reason, "passcode");
+    // a watcher is held to it too
+    const peek = await connect(port);
+    peek.send({ type: "join_room", code, name: "PEEK", spectate: true });
+    assert.equal((await peek.next()).reason, "passcode");
+    // quick play never lands a stranger behind a passcode
+    const seeker = await connect(port);
+    seeker.send({ type: "quick_join", name: "SEEK" });
+    assert.equal((await seeker.next()).type, "no_open_rooms");
+
+    // the code is case-blind, like the room code itself
+    const right = await connect(port);
+    right.send({ type: "join_room", code, name: "RIGHT", pass: "AB12" });
+    assert.equal((await right.next()).type, "room_joined");
+
+    // taking it off reopens the door, and the roster says so
+    host.send({ type: "set_pass" });
+    await rosterWhere(early, (r) => r.pass === false);
+    const late = await connect(port);
+    late.send({ type: "join_room", code, name: "LATE" });
+    assert.equal((await late.next()).type, "room_joined");
+
+    // a passcode may be hosted with, and junk is no passcode at all
+    const locked = await connect(port);
+    locked.send({ type: "host_room", name: "LOCKED", open: true, pass: "k9" });
+    await locked.until("room_hosted");
+    assert.equal((await locked.until("roster")).pass, true);
+    const junk = await connect(port);
+    junk.send({ type: "host_room", name: "JUNK", open: true, pass: "way too long!!" });
+    await junk.until("room_hosted");
+    assert.equal((await junk.until("roster")).pass, false);
+
+    for (const c of [host, early, walkin, wrong, none, peek, seeker, right, late, locked, junk]) c.end();
+  });
+});
+
+test("a browser that keeps asking outlives the unbound sweep, and one that stops does not", async () => {
+  await withRelay(async (port) => {
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const browser = await connect(port);
+    // eight looks over ~800ms, against a 300ms unbound cut
+    for (let i = 0; i < 8; i++) {
+      browser.send({ type: "list_rooms" });
+      await browser.until("rooms");
+      await wait(100);
+    }
+    assert.equal(browser.closed, false, "still connected while looking");
+    // ...then it stops looking, and the sweep takes it like any other
+    await wait(700);
+    assert.equal(browser.closed, true, "dropped once it stopped");
+  }, { unboundMs: 300, sweepMs: 50 });
+});

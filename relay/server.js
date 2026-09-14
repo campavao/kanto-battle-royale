@@ -11,16 +11,39 @@
 // port is a deployment.
 //
 // Client -> server
-//   {type:"host_room", name, open?, max?} -> room_hosted {code, id}, then a roster
-//                                         (max: the room's size; joins past it
+//   {type:"host_room", name, open?, max?, -> room_hosted {code, id}, then a roster
+//         skin?, pass?}                   (max: the room's size; joins past it
 //                                         are refused "full"; clamped to the
-//                                         member ceiling)
+//                                         member ceiling.  skin: the walk
+//                                         sheet the lobby list draws the host
+//                                         as.  pass: a passcode every join
+//                                         must carry)
 //   {type:"set_max", max}              -> host only: the room's size, live
+//   {type:"set_pass", pass}            -> host only: the passcode, live; "" or
+//                                         absent clears it.  A passcoded room
+//                                         is listed with a lock, skipped by
+//                                         quick_join, and joined only with
+//                                         the matching `pass`
+//   {type:"set_skin", skin}               what this member looks like, live
+//   {type:"list_rooms"}                -> rooms {rooms:[{code, host, skin,
+//                                         players, seats, pass}]}: every
+//                                         lobby a stranger may walk into --
+//                                         open, not mid-match, not the daily.
+//                                         `players` counts trainers, never
+//                                         watchers; `seats` is the host's MAX
+//                                         as they set it; `pass` says a
+//                                         passcode is needed.  A browser that
+//                                         keeps asking is kept alive past the
+//                                         unbound sweep.  Inside the half hour
+//                                         before the DAILY GAME its row leads
+//                                         the list: {host:"DAILY", daily:true,
+//                                         secs, code: the room's or ""}
 //   {type:"join_room", code, name,     -> room_joined {code, id, host}, or
-//         spectate?}                      room_error {reason}; spectate:true
+//         spectate?, pass?, skin?}        room_error {reason}; spectate:true
 //                                        enters a LOCKED room as a watcher
 //                                        who is seated when it unlocks
-//                                        (POK-133)
+//                                        (POK-133); a passcoded room refuses
+//                                        "passcode" unless pass matches
 //   {type:"stat", id, v, solo, since}   how much play there has been: a random
 //                                      install id, the mod version, solo matches
 //                                      since the last one, and a first-seen date.
@@ -51,7 +74,10 @@
 //                                      match runs.  quick_join never seats
 //                                      anyone in a daily room.
 // Server -> client
-//   {type:"roster", code, host, members:[{id,name,spectate?}]}  on every change
+//   {type:"roster", code, host, open, max, pass, members:[{id,name,spectate?}]}
+//                                      on every change (pass: whether a
+//                                      passcode is set, never the code)
+//   {type:"rooms", rooms:[...]}        the lobby list, see list_rooms
 //   {type:"recv", from, m}
 //   {type:"room_closed", reason}       the host left and nobody could take
 //                                      the room over -- or, reason
@@ -86,6 +112,15 @@ export const DEFAULT_LIMITS = Object.freeze({
   burstLines: 1200,     // bucket depth: one fog sweep, with room over it
   badLines: 20,         // unparsable lines before we give up on a socket
   members: 16,
+  // The widest room the lobby list may claim: the host's MAX as the mod
+  // offers it (thirty, bots filling what humans do not), which is what a
+  // browser is told as "1/30".  `members` above is how many HUMANS the
+  // relay seats; `seats` is only ever a number on a list.
+  seats: 30,
+  // How long before the DAILY GAME's hour it takes a row on the lobby
+  // list: a room the relay promises, whether or not anybody pressed the
+  // row yet (the relay owns the clock)
+  dailyListSecs: 30 * 60,
   // Ceilings, not targets.  A relay is billed by what it moves, and what
   // moves bytes is a live room: the host of a 30-bot match broadcasts ~40
   // small messages a second to everyone in it, so concurrent ROOMS -- not
@@ -100,6 +135,23 @@ export const DEFAULT_LIMITS = Object.freeze({
 });
 
 const NAME_MAX = 10;
+// A passcode: the code-entry alphabet, one to eight of them, uppercased so
+// the one the host set and the one a guest scrubbed in always compare.
+const PASS_RE = /^[A-Z0-9]{1,8}$/;
+// A skin is a walk-sheet id ("SPRITE_HIKER"): letters, digits, underscores,
+// bounded, and never interpreted here -- the client that draws the list
+// falls back to an outline for a sheet it does not have.
+const SKIN_RE = /^[A-Z0-9_]{1,24}$/;
+
+export function cleanPass(pass) {
+  if (typeof pass !== "string") return null;
+  const up = pass.trim().toUpperCase();
+  return PASS_RE.test(up) ? up : null;
+}
+
+function cleanSkin(skin) {
+  return typeof skin === "string" && SKIN_RE.test(skin) ? skin : undefined;
+}
 
 // Bytes actually written, so "what is this costing" has an answer that is not
 // a guess.  Egress is the line item that scales with players.
@@ -199,6 +251,14 @@ class Room {
     // how many may be in it: the host's MAX (the lobby's row), never more
     // than the relay's own member ceiling.  `full` past it.
     this.max = max;
+    // the size the host ASKED for, for the lobby list's "n/30": max above
+    // is clamped to the human ceiling, and a room of thirty with fourteen
+    // bot seats still reads as a room of thirty to somebody choosing one
+    this.seats = max;
+    // A passcode (string) or null.  Not `locked`: that is a match in
+    // progress.  A passcoded room stays on the lobby list, with a lock,
+    // and takes the code at the door; quick_join walks past it.
+    this.pass = null;
     // How the room came to be, for the match line: "quick" when its
     // opener arrived by quick_join and found nothing, "daily" for the
     // shared daily room, "host" for the lobby's HOST row.  Fixed at
@@ -233,7 +293,24 @@ class Room {
                      spectate: m.spectator || undefined });
     }
     return { type: "roster", code: this.code, host: this.host.id,
-             open: this.open, max: this.max, members };
+             open: this.open, max: this.max, pass: this.pass !== null,
+             members };
+  }
+
+  // trainers seated, never watchers: a list that said 3/30 for a lobby
+  // with two people and a camera would be lying about the match
+  trainerCount() {
+    let n = 0;
+    for (const m of this.members.values()) if (!m.spectator) n += 1;
+    return n;
+  }
+
+  // The row the lobby list shows for this room.  The host's name and
+  // skin, never their id or IP; the passcode's existence, never the code.
+  listing() {
+    return { code: this.code, host: this.host.name, skin: this.host.skin,
+             players: this.trainerCount(), seats: this.seats,
+             pass: this.pass !== null };
   }
 
   broadcast(msg, except) {
@@ -252,8 +329,12 @@ class Conn {
     this.id = null;
     this.room = null;
     this.name = "PLAYER";
+    this.skin = undefined;
     this.lastSeen = Date.now();
     this.openedAt = this.lastSeen;
+    // when this connection last asked for the lobby list: a browser is
+    // unbound by definition, and the sweep must not take it mid-look
+    this.browsedAt = 0;
     this.tokens = relay.limits.burstLines;
     this.tokenAt = this.lastSeen;
     this.minTokens = this.tokens;   // how close real play came to the wall
@@ -322,6 +403,11 @@ export function createRelay(options = {}) {
   // else (an older client sends nothing) is the ceiling
   const cleanMax = (n) => Number.isInteger(n)
     ? Math.max(2, Math.min(limits.members, n)) : limits.members;
+  // the same number for the list, clamped to the seat ceiling instead of
+  // the human one -- an older client sends nothing, and reads as the
+  // human ceiling it is actually held to
+  const cleanSeats = (n) => Number.isInteger(n)
+    ? Math.max(2, Math.min(limits.seats, n)) : limits.members;
   const log = options.log || (() => {});
   const motd = cleanMotd(options.motd ?? process.env.BR_MOTD);
   const daily = parseDaily(options.daily ?? process.env.BR_DAILY);
@@ -395,6 +481,46 @@ export function createRelay(options = {}) {
                                      label: daily.label } : undefined });
         return;
 
+      // The lobby list: every room a stranger could walk into right now,
+      // fullest first, so the browser's top row is where the people are.
+      // The same door quick_join uses -- open, not mid-match, not the
+      // daily, not a room this IP was removed from -- with the passcoded
+      // rooms kept IN, marked, because "I know the host" is exactly what a
+      // list is for.  A full room is listed too: its count says why the
+      // door will not open, which beats it vanishing.
+      case "list_rooms": {
+        conn.browsedAt = Date.now();
+        const list = [];
+        for (const room of rooms.values()) {
+          if (!room.open || room.locked || room.daily
+              || room.banned.has(conn.ip)) continue;
+          list.push(room.listing());
+        }
+        list.sort((a, b) => b.players - a.players || (a.code < b.code ? -1 : 1));
+        // The DAILY GAME (2026-09-13): inside the last half hour before
+        // its hour, one row at the top -- whether or not anybody has
+        // pressed the row yet, since the relay owns the clock and can
+        // promise the room.  `secs` is the countdown; picking it is
+        // daily_join, which creates the room or seats you in it.  A
+        // daily match already running is a locked room: no row.
+        if (daily) {
+          const secs = dailySecondsUntil(daily);
+          let waiting = null, running = false;
+          for (const room of rooms.values()) {
+            if (!room.daily) continue;
+            if (room.locked) running = true; else waiting = waiting || room;
+          }
+          if (secs <= limits.dailyListSecs && !running) {
+            list.unshift({ code: waiting ? waiting.code : "", host: "DAILY",
+                           daily: true, secs,
+                           players: waiting ? waiting.trainerCount() : 0,
+                           seats: limits.seats, pass: false });
+          }
+        }
+        conn.send({ type: "rooms", rooms: list });
+        return;
+      }
+
       // The DAILY GAME's one door (POK-161 v2): everyone who presses the
       // row lands in the SAME room.  First in becomes its host; a locked
       // daily room is the official match running, which is the POK-133
@@ -451,8 +577,11 @@ export function createRelay(options = {}) {
           return;
         }
         conn.name = cleanName(msg.name);
+        conn.skin = cleanSkin(msg.skin);
         const room = new Room(makeCode(rooms), conn, cleanMax(msg.max));
+        room.seats = cleanSeats(msg.max);
         room.open = msg.open === true;
+        room.pass = cleanPass(msg.pass);
         if (conn.seen.get("quick_join")) room.mode = "quick";
         rooms.set(room.code, room);
         room.add(conn);
@@ -461,7 +590,7 @@ export function createRelay(options = {}) {
         conn.send({ type: "room_hosted", code: room.code, id: conn.id });
         conn.send(room.roster());
         log(`room ${room.code} hosted by ${conn.name}#${conn.id}` +
-            (room.open ? " (open)" : ""));
+            (room.open ? " (open)" : "") + (room.pass ? " (passcode)" : ""));
         return;
       }
 
@@ -471,6 +600,14 @@ export function createRelay(options = {}) {
         const room = rooms.get(code);
         if (!room) { conn.send({ type: "room_error", reason: "not_found" }); return; }
         if (room.banned.has(conn.ip)) { conn.send({ type: "room_error", reason: "removed" }); return; }
+        // The passcode is checked before the door's state is told: a
+        // stranger without it learns nothing about the room past "not
+        // yours".  Watchers need it too -- a passcoded room is a room
+        // with friends in it, and the match is theirs to show.
+        if (room.pass !== null && cleanPass(msg.pass) !== room.pass) {
+          conn.send({ type: "room_error", reason: "passcode" });
+          return;
+        }
         // A spectator's door opens where a player's is barred (POK-133):
         // lock_room exists to stop competitors joining a running match,
         // and somebody who asks to WATCH is not one.  The flag rides the
@@ -480,6 +617,7 @@ export function createRelay(options = {}) {
         if (room.locked && !spectate) { conn.send({ type: "room_error", reason: "locked" }); return; }
         if (room.members.size >= room.max) { conn.send({ type: "room_error", reason: "full" }); return; }
         conn.name = cleanName(msg.name);
+        conn.skin = cleanSkin(msg.skin);
         conn.spectator = spectate || undefined;
         room.add(conn);
         conn.send({ type: "room_joined", code: room.code, id: conn.id, host: room.host.id });
@@ -496,8 +634,9 @@ export function createRelay(options = {}) {
         if (conn.room) { conn.send({ type: "room_error", reason: "already_in_room" }); return; }
         let best = null;
         for (const room of rooms.values()) {
-          // a daily room waits for its hour; quick play wants a game NOW
-          if (!room.open || room.locked || room.daily
+          // a daily room waits for its hour; quick play wants a game NOW,
+          // and a passcoded room wants somebody who knows the host
+          if (!room.open || room.locked || room.daily || room.pass !== null
               || room.banned.has(conn.ip)) continue;
           if (room.members.size >= room.max) continue;
           if (!best || room.members.size > best.members.size) best = room;
@@ -511,7 +650,8 @@ export function createRelay(options = {}) {
           // join it as a spectator and be seated in the next match.
           let running = null;
           for (const room of rooms.values()) {
-            if (!room.open || !room.locked || room.banned.has(conn.ip)) continue;
+            if (!room.open || !room.locked || room.pass !== null
+                || room.banned.has(conn.ip)) continue;
             if (room.members.size >= limits.members) continue;
             if (!running || room.members.size > running.members.size) running = room;
           }
@@ -524,6 +664,7 @@ export function createRelay(options = {}) {
           return;
         }
         conn.name = cleanName(msg.name);
+        conn.skin = cleanSkin(msg.skin);
         best.add(conn);
         conn.send({ type: "room_joined", code: best.code, id: conn.id, host: best.host.id });
         best.broadcast(best.roster());
@@ -544,10 +685,33 @@ export function createRelay(options = {}) {
         const room = conn.room;
         if (!room || room.host !== conn) return;
         room.max = cleanMax(msg.max);
+        room.seats = cleanSeats(msg.max);
         room.broadcast(room.roster());
         log(`room ${room.code} seats ${room.max}`);
         return;
       }
+
+      // The host puts a passcode on the door, or takes it off.  The
+      // roster carries only THAT it is set, so a guest's client can show
+      // the lock without ever holding the code.
+      case "set_pass": {
+        const room = conn.room;
+        if (!room || room.host !== conn) return;
+        const was = room.pass;
+        room.pass = cleanPass(msg.pass);
+        if ((was !== null) !== (room.pass !== null)) {
+          room.broadcast(room.roster());
+        }
+        log(`room ${room.code} ${room.pass ? "now needs a passcode" : "needs no passcode"}`);
+        return;
+      }
+
+      // What this member looks like, for the lobby list -- the host's is
+      // the one drawn, but the room can change hands (POK-116), so every
+      // member keeps theirs current.
+      case "set_skin":
+        conn.skin = cleanSkin(msg.skin);
+        return;
 
       case "lock_room": {
         const room = conn.room;
@@ -766,7 +930,11 @@ export function createRelay(options = {}) {
     const now = Date.now();
     for (const conn of [...conns]) {
       if (now - conn.lastSeen > limits.idleMs) conn.destroy("idle");
-      else if (!conn.room && now - conn.openedAt > limits.unboundMs) conn.destroy("unbound");
+      // a browser is unbound on purpose: its clock is its last look at
+      // the list, so it lives while it keeps looking
+      else if (!conn.room && now - Math.max(conn.openedAt, conn.browsedAt) > limits.unboundMs) {
+        conn.destroy("unbound");
+      }
     }
   }, limits.sweepMs);
   sweeper.unref();

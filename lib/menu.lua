@@ -45,8 +45,42 @@ function Menu.view(BR)
   -- shadows a lobby.
   if BR.runningMatch then return "running" end
   if relay and relay:isOpen() then return "lobby" end
+  -- the lobby list (lib/browse.lua): a connection with no room, looking
+  if relay and relay.isBrowsing and relay:isBrowsing() then return "browse" end
   if relay and relay.status == "connecting" then return "connecting" end
   return "menu"
+end
+
+-- The OPEN row's three states (2026-09-13), one press apart:
+--   OPEN: YES        listed for everyone, QUICK PLAY lands strangers here
+--   OPEN: NO         invisible; only the code gets anyone in
+--   OPEN: PASS 1234  listed with a lock; the code AND the passcode get in
+-- YES -> NO -> PASS -> YES, so closing the door is one press and locking
+-- it is two and a passcode.  Backing out of the passcode entry leaves
+-- the room where it was.
+function Menu.openLabel(BR)
+  if not BR:isOpen() then return "OPEN: NO" end
+  local pass = BR.passcode and BR:passcode()
+  if pass then return "OPEN: PASS " .. tostring(pass) end
+  return "OPEN: YES"
+end
+
+function Menu.cycleOpen(mod, BR, game)
+  if not BR:isOpen() then
+    game.stack:push(Entry.new(game, {
+      title = "PASSCODE",
+      shape = Entry.PASS,
+      onDone = function(pass)
+        if not pass or pass == "" then return end
+        if BR.setPass then BR:setPass(pass) end
+        BR:setOpen(true)
+      end,
+    }))
+  elseif BR.passcode and BR:passcode() then
+    if BR.setPass then BR:setPass(nil) end
+  else
+    BR:setOpen(false)
+  end
 end
 
 -- The rows for the current face.  Pure in the sense that matters: nothing
@@ -159,10 +193,10 @@ function Menu.items(mod, BR, game)
                 function() BR:cycleFillMax() end)
       end
       if not BR.solo then
-        -- an open room is one strangers can QUICK PLAY into without ever
-        -- being told the code
-        setting("OPEN: " .. (BR:isOpen() and "YES" or "NO"),
-                function() BR:setOpen(not BR:isOpen()) end)
+        -- an open room is one strangers can QUICK PLAY into, or find on
+        -- the lobby list, without ever being told the code; a passcoded
+        -- one is on the list with a lock (Menu.openLabel)
+        setting(Menu.openLabel(BR), function() Menu.cycleOpen(mod, BR, game) end)
       end
       -- the match's two clocks, right here in the lobby (POK-44)
       setting("FOG: " .. tostring(BR:fogSeconds()) .. "s",
@@ -280,6 +314,12 @@ function Menu.items(mod, BR, game)
       local ok, err = BR:dailyPlay()
       if not ok then say(mod, err or "Couldn't reach\nthe relay.") end
     end)
+    -- every open room, with who is hosting it and how full it is
+    -- (lib/browse.lua): pick one instead of being told a code
+    setting("LOBBIES", function()
+      local ok, err = BR:browse()
+      if not ok then say(mod, err or "Couldn't reach\nthe relay.") end
+    end)
     setting("SOLO VS BOTS", function()
       local ok, err = BR:hostSolo()
       if not ok then say(mod, err or "Couldn't start.") end
@@ -309,10 +349,12 @@ function Menu.items(mod, BR, game)
     -- No SERVER... row and no version row any more (POK-161): the first
     -- face was eight rows against maxRows(2) == 8, DAILY GAME earns a
     -- seat more than either, and the user's call was that the menu had
-    -- bloated.  The relay address is still a mod option (edit it in the
-    -- launcher's mod options); the version still shows in the launcher's
-    -- MODS tab, and the lobby door still names both builds when a
-    -- mismatch actually matters (POK-142).
+    -- bloated.  LOBBIES (2026-09-13) took the row that was spare: the
+    -- face is exactly maxRows(2) with a result on it, and never more.
+    -- The relay address is still a mod option (edit it in the launcher's
+    -- mod options); the version still shows in the launcher's MODS tab,
+    -- and the lobby door still names both builds when a mismatch
+    -- actually matters (POK-142).
   end
 
   return items, view
@@ -519,37 +561,46 @@ function Menu.openTrainer(mod, BR, game)
   end))
 end
 
--- The ROYALE screen: one stack state with two faces.  The text faces
+-- The ROYALE screen: one stack state with three faces.  The text faces
 -- (the first menu, connecting, the offer, a refusal, the match report)
--- are the live Menu above; the lobby is the drawn room (lib/lobby.lua).
--- Which one is up is re-read from BR every frame, and a change of face
--- is what resets the cursor.  The state answers for the text menu's
--- fields (items, index, th...) so a driver that reads the rows off the
--- top of the stack still can.
+-- are the live Menu above; the lobby is the drawn room (lib/lobby.lua);
+-- the lobby list is the drawn list (lib/browse.lua).  Which one is up is
+-- re-read from BR every frame, and a change of face is what resets the
+-- cursor.  The state answers for the text menu's fields (items, index,
+-- th...) so a driver that reads the rows off the top of the stack still
+-- can.
 function Menu.build(mod, BR)
   return {
     new = function(game)
       local Lobby = require("mods.battle_royale.lib.lobby")
+      local Browse = require("mods.battle_royale.lib.browse")
       local state = {}
       local text = Menu.live(mod, game, function()
         return (Menu.items(mod, BR, game))
       end)
       local room = Lobby.Screen.new(game, mod, BR, state)
+      local list = Browse.Screen.new(game, mod, BR, state)
       state.room = room
+      state.list = list
       state.view = Menu.view(BR)
-      state.isOpaque = state.view == "lobby"
+      state.isOpaque = state.view == "lobby" or state.view == "browse"
       function state:update(dt)
         local now = Menu.view(BR)
         if now ~= self.view then
           self.view = now
           text.index = 1
           room.cur, room.scroll = 0, 0
+          list.cur, list.scroll = 0, 0
         end
-        self.isOpaque = now == "lobby"
-        if now == "lobby" then room:update(dt) else text:update(dt) end
+        self.isOpaque = now == "lobby" or now == "browse"
+        if now == "lobby" then room:update(dt)
+        elseif now == "browse" then list:update(dt)
+        else text:update(dt) end
       end
       function state:draw()
-        if self.view == "lobby" then room:draw() else text:draw() end
+        if self.view == "lobby" then room:draw()
+        elseif self.view == "browse" then list:draw()
+        else text:draw() end
       end
       return setmetatable(state, { __index = text })
     end,

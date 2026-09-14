@@ -14,8 +14,11 @@
 local Hub = {}
 Hub.__index = Hub
 
-function Hub.new()
-  return setmetatable({ rooms = {}, codeSeq = 0 }, Hub)
+-- opts.dailySecs: seconds until the DAILY GAME's hour, for its row on
+-- the lobby list (server.js lists it inside the last half hour)
+function Hub.new(opts)
+  return setmetatable({ rooms = {}, codeSeq = 0,
+                        dailySecs = opts and opts.dailySecs }, Hub)
 end
 
 local function makeCode(hub)
@@ -25,6 +28,14 @@ end
 
 local Transport = {}
 Transport.__index = Transport
+
+-- server.js's cleanPass: the code alphabet, uppercased, or nothing
+local function cleanPass(pass)
+  if type(pass) ~= "string" then return nil end
+  local up = pass:upper()
+  if up == "" or up:find("[^A-Z0-9]") or #up > 8 then return nil end
+  return up
+end
 
 local room_roster  -- forward declaration; defined below
 
@@ -45,11 +56,15 @@ function Transport:send(msg)
   local t = type(msg) == "table" and msg.type
   if t == "host_room" then
     local code = makeCode(hub)
-    local room = { code = code, host = self, members = {}, order = {}, nextId = 1, locked = false }
+    local room = { code = code, host = self, members = {}, order = {}, nextId = 1, locked = false,
+                   -- the lobby list's fields (2026-09-13), as server.js keeps them
+                   open = msg.open == true, pass = cleanPass(msg.pass),
+                   seats = tonumber(msg.max) or 16 }
     hub.rooms[code] = room
     self.id = room.nextId; room.nextId = room.nextId + 1
     self.room = room
     self.name = msg.name or "PLAYER"
+    self.skin = type(msg.skin) == "string" and msg.skin or nil
     room.members[self.id] = self
     room.order[#room.order + 1] = self.id
     self:_deliver({ type = "room_hosted", code = code, id = self.id })
@@ -57,14 +72,68 @@ function Transport:send(msg)
   elseif t == "join_room" then
     local room = hub.rooms[msg.code]
     if not room then self:_deliver({ type = "room_error", reason = "not_found" }); return end
+    if room.pass and cleanPass(msg.pass) ~= room.pass then
+      self:_deliver({ type = "room_error", reason = "passcode" }); return
+    end
     if room.locked then self:_deliver({ type = "room_error", reason = "locked" }); return end
     self.id = room.nextId; room.nextId = room.nextId + 1
     self.room = room
     self.name = msg.name or "PLAYER"
+    self.skin = type(msg.skin) == "string" and msg.skin or nil
     room.members[self.id] = self
     room.order[#room.order + 1] = self.id
     self:_deliver({ type = "room_joined", code = room.code, id = self.id, host = room.host.id })
     room_roster(room)
+  elseif t == "list_rooms" then
+    -- every open room that is not mid-match, fullest first (server.js's
+    -- list_rooms); a passcode is reported as a lock, never as the code
+    local list = {}
+    for _, room in pairs(hub.rooms) do
+      if room.open and not room.locked then
+        list[#list + 1] = { code = room.code, host = room.host.name,
+                            skin = room.host.skin, players = #room.order,
+                            seats = room.seats, pass = room.pass ~= nil }
+      end
+    end
+    table.sort(list, function(a, b)
+      if a.players ~= b.players then return a.players > b.players end
+      return a.code < b.code
+    end)
+    if hub.dailySecs and hub.dailySecs <= 30 * 60 then
+      local waiting
+      for _, room in pairs(hub.rooms) do
+        if room.daily and not room.locked then waiting = room end
+      end
+      table.insert(list, 1, { code = waiting and waiting.code or "", host = "DAILY",
+                              daily = true, secs = hub.dailySecs,
+                              players = waiting and #waiting.order or 0,
+                              seats = 30, pass = false })
+    end
+    self:_deliver({ type = "rooms", rooms = list })
+  elseif t == "daily_join" then
+    -- the one shared daily room: first in makes it, the rest join it
+    local waiting
+    for _, room in pairs(hub.rooms) do
+      if room.daily and not room.locked then waiting = room end
+    end
+    if waiting then
+      self:send({ type = "join_room", code = waiting.code, name = msg.name })
+    else
+      self:send({ type = "host_room", name = msg.name, open = true, max = 30 })
+      self.room.daily = true
+    end
+  elseif t == "set_open" then
+    if self.room and self.room.host == self then
+      self.room.open = msg.open == true
+      room_roster(self.room)
+    end
+  elseif t == "set_pass" then
+    if self.room and self.room.host == self then
+      self.room.pass = cleanPass(msg.pass)
+      room_roster(self.room)
+    end
+  elseif t == "set_skin" then
+    self.skin = type(msg.skin) == "string" and msg.skin or nil
   elseif t == "leave_room" then
     self:_leave("left")
   elseif t == "lock_room" then
@@ -95,7 +164,8 @@ room_roster = function(room)
     local m = room.members[id]
     if m then members[#members + 1] = { id = id, name = m.name } end
   end
-  local msg = { type = "roster", code = room.code, host = room.host.id, members = members }
+  local msg = { type = "roster", code = room.code, host = room.host.id,
+                open = room.open, pass = room.pass ~= nil, members = members }
   for _, id in ipairs(room.order) do
     local m = room.members[id]
     if m then m:_deliver(msg) end

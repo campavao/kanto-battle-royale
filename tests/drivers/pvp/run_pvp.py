@@ -63,6 +63,11 @@ SCENARIOS = {
     # PLAY NEXT and must land INSIDE that match as a camera -- and must
     # never be counted among the living while there.
     "late": ("host_late.lua", "guest_late.lua"),
+    # 2026-09-13: the LOBBIES list.  The host's open room must be a row
+    # the guest can read, a passcode must grow it a lock, the wrong
+    # passcode must be refused on the list (not the connection), and the
+    # right one must seat the guest.
+    "lobbies": ("host_lobbies.lua", "guest_lobbies.lua"),
 }
 
 
@@ -99,7 +104,7 @@ def main():
                  "guestdone.txt", "inplace.txt", "host.plog", "guest.plog",
                  "guestready.txt", "guestm1.txt", "guestcard.txt",
                  "m2.txt", "m2go.txt", "menu.txt", "facedaway.txt",
-                 "reading.txt", "challenged.txt"):
+                 "reading.txt", "challenged.txt", "listed.txt", "passed.txt"):
         p = os.path.join(workdir, name)
         if os.path.exists(p):
             os.remove(p)

@@ -56,18 +56,25 @@ Here are the available options:
     - Everyone who presses it lands in the same room, and it starts on the clock whether or not anyone presses anything
     - Fills to 30 trainers with bots and runs on the stock Fog and Safari clocks, so it's the same game for everyone
     - Press it while the day's match is running and you can watch it and play the next one
-3. **Solo VS Bots**
+3. **Lobbies**
+    - Every open game on the server, as a list: the host's sprite and name, how many trainers are in it out of the room's size (`3/30` is three people, bots fill the rest), and a padlock if the host put a passcode on it
+    - Pick one and you're in; a padlocked room asks for its passcode first
+    - The list refreshes itself while you look at it
+    - In the half hour before the Daily Game, its row leads the list with the countdown (`IN 27M`); picking it is the same door as the Daily Game row
+4. **Solo VS Bots**
     - Solo game which fills the game with bots, up to 30
-4. **Host Game**
+5. **Host Game**
     - Creates a game with a code that you can invite others to
-    - If you enable the option "OPEN" to "YES" then players will be able to join via Quick Play
-5. **Join By Code**
+    - With the option "OPEN" at "YES" (the default) players can find it in Lobbies and land in it from Quick Play
+    - "OPEN: PASS ..." keeps it in Lobbies with a padlock, and only people with the passcode get in
+6. **Join By Code**
     - Allows you to join a game if you know the code
-6. **Name**
+    - If the host set a passcode, you're asked for it next
+7. **Name**
     - This is your name! It's what shows up in game
-7. **Skin**
+8. **Skin**
     - This is your Sprite. Default is RED. You can unlock more as you keep winning.
-8. **Server...**
+9. **Server...**
     - I have a dedicated host right now, but you can load up your own server and direct your client via updating this setting.
 
 Info on each game settings can be seen down in the Game lobby options section down below.
@@ -142,8 +149,10 @@ The lobby is the room itself: everyone in it as their Sprite with their name, an
   - In Solo VS Bots it's how many bots you fight
   - The relay seats 16 humans at most; the rest of the seats are bots
 - Open
-  - Two options: NO (default) or YES
-  - If YES, allows players to join from Quick Play option
+  - Three states, one press apart: YES, NO, PASS
+  - YES (default): the room is in Lobbies for everyone, and Quick Play lands strangers in it
+  - NO: invisible; only someone with the code gets in
+  - PASS: press once more from NO and type a four-character passcode. The room is in Lobbies with a padlock, and the code alone won't get anyone in - they need the passcode too. The row shows the passcode you set so you can read it out; press it again to take the lock off
 - Fog
   - Control how long it takes before the Fog rolls in
 - Safari
