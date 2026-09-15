@@ -1,11 +1,17 @@
 {
-  "readAt": "2026-09-15T00:50:16.822Z",
+  "readAt": "2026-09-15T05:58:19.150Z",
   "list": [
+    {
+      "tag": "v0.52.0",
+      "name": "a fainted lead, a frozen spectator, balls on the water, the eye on a route",
+      "at": "2026-09-15T01:53:24Z",
+      "dl": 6
+    },
     {
       "tag": "v0.51.0",
       "name": "LOBBIES",
       "at": "2026-09-14T03:19:08Z",
-      "dl": 24
+      "dl": 26
     },
     {
       "tag": "v0.50.1",
@@ -83,7 +89,7 @@
       "tag": "v0.40.0",
       "name": "the bots can win",
       "at": "2026-08-28T12:43:41Z",
-      "dl": 302
+      "dl": 303
     },
     {
       "tag": "v0.39.0",
