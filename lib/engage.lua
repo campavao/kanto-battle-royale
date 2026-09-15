@@ -164,4 +164,29 @@ function Engage.stale(pending, now, limit)
   return (now - pending.at) >= (limit or Engage.PENDING_SECONDS)
 end
 
+-- The lead a link battle sends out (2026-09-14).  LinkBattle.new builds
+-- both battlers from party[1] AS IT STANDS -- the engine's wild and
+-- trainer paths pick Party.firstHealthy, the lockstep does not -- and a
+-- fainted lead is a fight that never opens: both machines sit in the
+-- intro's message phase with a 0 HP mon on the field, no menu ever comes,
+-- and the watchdog is what finally ends it ("a battle mismatch", as it
+-- looked from the chair).  So the first healthy mon is moved to the front
+-- BEFORE LinkState packs the party, on both machines, each for its own
+-- team: what rides the wire is a party the engine can open.  The rest
+-- keep their order, so the write-back by slot (link.battle_ended) still
+-- lands on the right mons.  Returns the slot the lead came from, or nil
+-- for a party with nobody standing (not a fight the mod would open).
+function Engage.frontHealthy(party)
+  for i, mon in ipairs(party or {}) do
+    if (mon.hp or 0) > 0 then
+      if i > 1 then
+        table.remove(party, i)
+        table.insert(party, 1, mon)
+      end
+      return i
+    end
+  end
+  return nil
+end
+
 return Engage

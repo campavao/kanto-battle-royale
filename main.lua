@@ -258,6 +258,37 @@ return function(mod)
   -- and seed so this log
   -- and the relay's own can be lined up afterwards.
   local log = Log.new(mod.log)
+  -- The match log on disk (2026-09-14): `br-log.txt` in this mod's
+  -- storage, rewritten as lines arrive.  The sandbox's love.filesystem is
+  -- the compat shim -- writes land in the mod's private compat storage,
+  -- which is exactly the point: a file that survives the window closing,
+  -- where a player who turned DEBUG LOG on can find what it wrote.  Story
+  -- and warning lines are flushed at once (a handful per match); the deep
+  -- tier is batched.  The text is capped so a long night of deep logging
+  -- stays one modest file: the oldest lines fall off the top.
+  do
+    local LOG_FILE, LOG_CAP, BATCH = "br-log.txt", 400 * 1024, 40
+    local fs = type(love) == "table" and love.filesystem or nil
+    if fs and fs.write then
+      local text, pending, wrote = "", 0, false
+      local function flush()
+        pending = 0
+        pcall(fs.write, LOG_FILE, text)
+        wrote = true
+      end
+      log:setSink(function(line)
+        text = text .. line .. "\n"
+        if #text > LOG_CAP then
+          local cut = text:find("\n", #text - LOG_CAP, true)
+          text = cut and text:sub(cut + 1) or text:sub(-LOG_CAP)
+        end
+        pending = pending + 1
+        -- a story line (no tier mark) or a warning flushes now
+        if pending >= BATCH or not line:find("· ", 1, true) then flush() end
+      end)
+      mod.exports.logFile = function() return wrote and LOG_FILE or nil end
+    end
+  end
   -- Wall clock, or nil where there is no LOVE under us (the headless test
   -- loader).  Defined up here rather than beside its first caller because
   -- a Lua local is only in scope BELOW its line: half the file used to be
@@ -4330,10 +4361,29 @@ return function(mod)
     for id, def in pairs(maps) do
       if Map.isOutdoor(def) and (all or Map.isFlyTown(def)) and locations[id] then
         out[#out + 1] = { id = id, x = locations[id].x, y = locations[id].y,
-                          name = locations[id].name or id }
+                          name = locations[id].name or id, fly = Map.isFlyTown(def) }
       end
     end
     return out
+  end
+
+  -- where the fog's eye may land (POK-202): the towns and the routes with
+  -- ground to stand on, Fog.eyes's rule over the real map data.  Once per
+  -- match on the host (tickRing caches the centre), so the cell sweep is
+  -- paid once.
+  local function eyeList()
+    local data = BR.game and BR.game.data
+    if not data then return {} end
+    return Fog.eyes(townList(true), function(id)
+      local def = data.maps[id]
+      local ts = def and data.tilesets[def.tileset]
+      if not (def and ts) then return 0 end
+      local cells = Spawn.cellsOf(def, ts, data.maps, data.tilesets,
+                                  data.field and data.field.ledges)
+      local n = 0
+      for _ in pairs(cells) do n = n + 1 end
+      return n
+    end)
   end
 
   -- ------- the Safari opening (POK-21) and the drop (POK-22)
@@ -5034,7 +5084,7 @@ return function(mod)
     local phase = Fog.phaseAt(now - self.matchStartedAt, self:roundFog())
     if self.ring and self.ring.phase == phase then return end
 
-    local center = self.ringCenter or Fog.center(self.matchSeed, townList())
+    local center = self.ringCenter or Fog.center(self.matchSeed, eyeList())
     self.ringCenter = center
     if not center then return end
     local radius = Fog.radius(phase)
@@ -6066,9 +6116,23 @@ return function(mod)
   -- is read in one, and a fight is where the clock is felt most.  The
   -- boxes keep three: what is left of them asks something.
   local BATTLE_TEXT_SECONDS = 2
+  -- WAITING. with nobody coming (2026-09-14).  Our move is on the wire and
+  -- the peer's never arrives: their client is stuck before its own menu
+  -- (a fainted lead used to do exactly that -- see Engage.frontHealthy --
+  -- and a wedged client always can), and waitRemote is the one phase
+  -- neither watchdog reaches: the engine's shot clock ticks only in the
+  -- menu, and the text watchdog above presses only at text.  The player
+  -- sat on WAITING. with no way out but closing the game.  A peer who is
+  -- merely slow forfeits on their own clock at ~42 s (PVP_TURN_SECONDS
+  -- plus its text), so a minute with nothing back is a peer who is not
+  -- coming: we say goodbye on the wire (their engine ends the fight as a
+  -- draw if it can still hear) and close the cable, which ends ours the
+  -- same way.
+  local LINK_WAIT_SECONDS = 60
   function BR:tickAutoResolve(game)
     if not self.matchWorld then
       self.runnerBusySince, self.battleTextSince, self.boxSince = nil, nil, nil
+      self.linkWaitSince = nil
       return
     end
     local now = clock()
@@ -6077,6 +6141,23 @@ return function(mod)
     local input = game.input
     local function press(btn)
       if input and input.pressQueue then table.insert(input.pressQueue, btn) end
+    end
+
+    if self.battle and top and top.kind == "link" and not top.mirror
+       and top.phase == "waitRemote" and top.pendingMyAction and not top.remoteAction then
+      self.linkWaitSince = self.linkWaitSince or now
+      if (now - self.linkWaitSince) >= LINK_WAIT_SECONDS then
+        self.linkWaitSince = nil
+        log:say("link: nothing back from the other side in %ds; closing the fight",
+                LINK_WAIT_SECONDS)
+        local ch = self.battle.channel
+        if ch then
+          pcall(function() ch:send({ type = "bye" }) end)
+          if ch.close then ch:close() end
+        end
+      end
+    else
+      self.linkWaitSince = nil
     end
 
     -- battle text waiting on a button: msgWaiting is the CONT arrow
@@ -6320,8 +6401,14 @@ return function(mod)
   -- Nor on another ball (POK-175).  Solid balls kept each other apart
   -- through the occupancy check; passable ones would stack, and a ball
   -- under a ball is one nobody can see until the top one goes.
-  local function spillCellFree(data, mapId, x, y)
-    if not Spawn.walkable(data.maps, data.tilesets, mapId, x, y) then
+  -- `afloat`: the faller went down ON the water (2026-09-14), so the sea
+  -- around them is a place a ball can land too -- the winner is a swimmer
+  -- standing right there, and a ball that "washed ashore" up to twelve
+  -- cells away, or stacked six deep on the one cell the search fell back
+  -- to, read as "the POKeMON never landed" from the chair.
+  local function spillCellFree(data, mapId, x, y, afloat)
+    if not (Spawn.walkable(data.maps, data.tilesets, mapId, x, y)
+            or (afloat and Spawn.swimmable(data.maps, data.tilesets, mapId, x, y))) then
       return false
     end
     if Spawn.isWarp(data.maps, mapId, x, y) then return false end
@@ -6339,10 +6426,11 @@ return function(mod)
     local here = game and mod.world:current()
     if not (game and here and relay) then return end
     local data = game.data
+    local afloat = Spawn.swimmable(data.maps, data.tilesets, here.mapId, here.x, here.y)
     local spill = Spills.build(self.myId or 0, here.mapId, here.x, here.y,
                                game.save.party,
                                function(x, y)
-                                 return spillCellFree(data, here.mapId, x, y)
+                                 return spillCellFree(data, here.mapId, x, y, afloat)
                                end,
                                bagOf(game.save, self:playerName()),
                                function(x, y)
@@ -7095,7 +7183,7 @@ return function(mod)
     p.status = "out"
     if self.relay then self.relay:broadcast(Wire.botout(id)) end
     self.ghosts:despawn(id)
-    self:spillBot(id, p)
+    self:spillBot(id, p, killerName ~= nil)
     -- The fog has no killer, and this line used to be inside
     -- `if killerName` -- so the one event POK-72 is about, a wave of
     -- bots going down together, left no trace in the log at all.
@@ -7122,7 +7210,7 @@ return function(mod)
   -- bot carries no real one) where it stood, whoever put it down: the fog,
   -- another bot, or a player, who now finds it on the ground beside them
   -- rather than in their pocket (POK-25).
-  function BR:spillBot(id, p)
+  function BR:spillBot(id, p, beaten)
     local data = self.game and self.game.data
     if not (data and p and p.map and p.x and p.y) then return end
     -- the team it actually built (POK-158), fainted included -- what hits
@@ -7131,12 +7219,16 @@ return function(mod)
     local party = Bots.spillRows(self:botRecord(id), self:level(), data, stone, pick)
     local bag = self:botBag(id)
     bag.name = p.name
-    -- A surfing bot can die ON the water (the fog mid-crossing), and the
+    -- A surfing bot can die ON the water.  To the FOG mid-crossing, the
     -- BAG hard-lands on the faller's own cell -- loot only a swimmer
-    -- could ever reach.  It washes ashore instead: the nearest land cell,
-    -- scanned outward, so the spill lands where anybody can walk to it.
+    -- could ever reach -- so it washes ashore: the nearest land cell,
+    -- scanned outward, where anybody can walk to it.  BEATEN on the
+    -- water (2026-09-14), the winner is a swimmer standing right there,
+    -- and the team floats where it fell: the ring around the faller, on
+    -- the sea, the way it lands on a route.
     local sx, sy = p.x, p.y
-    if Spawn.swimmable(data.maps, data.tilesets, p.map, sx, sy) then
+    local afloat = Spawn.swimmable(data.maps, data.tilesets, p.map, sx, sy)
+    if afloat and not beaten then
       local found
       for r = 1, 12 do
         for dy = -r, r do
@@ -7154,7 +7246,7 @@ return function(mod)
       if found then sx, sy = found.x, found.y end
     end
     local spill = Spills.build(id, p.map, sx, sy, party, function(x, y)
-      return spillCellFree(data, p.map, x, y)
+      return spillCellFree(data, p.map, x, y, afloat and beaten)
     end, bag, function(x, y) return Spawn.isWarp(data.maps, p.map, x, y) end)
     if spill and self.relay then
       self.relay:broadcast(Wire.spill(spill.map, spill.mons, spill.bag))
@@ -7631,6 +7723,22 @@ return function(mod)
   mod.hooks:wrap("pokemon.level_visible", function(next, mon, ctx)
     if inMatch() then return false end
     return next(mon, ctx)
+  end)
+
+  -- No survey zoom in a match (POK-208).  The engine's wheel / Ctrl+minus
+  -- / OPTIONS ZOOM steps the overworld out past FIT and draws the
+  -- neighbouring maps in -- which in a battle royale is every trainer on
+  -- the route, the fog's edge and every spill on one screen (a friend's
+  -- 2026-09-14 "my sprite disappeared" was this: zoomed out until the
+  -- player was off the top).  zoom.range is the engine's own seam for
+  -- the legal offset window: the floor rises to FIT for the length of
+  -- the round, so a held OUT offset is clamped to FIT on the next frame
+  -- and the wheel stops there; zooming IN stays theirs.  Outside a round
+  -- the range is whatever it was.
+  mod.hooks:wrap("zoom.range", function(next, lo, hi, S)
+    local baseLo, baseHi = next(lo, hi, S)
+    if inMatch() then return 0, math.max(0, baseHi or 0) end
+    return baseLo, baseHi
   end)
 
   -- No EXP from ANY battle during a round (POK-74, widened by POK-139).
@@ -8145,6 +8253,9 @@ return function(mod)
     self.pending = nil
     self.ghosts:despawnAll()             -- the world pauses under the battle
     broadcastPlace()                     -- tell everyone I am busy
+    -- a fainted lead cannot open a lockstep (lib/engage.lua): the first
+    -- mon standing goes to the front before LinkState packs the party
+    Engage.frontHealthy(self.game.save.party)
     local LinkState = require("src.link.LinkState")
     self.game.stack:push(LinkState.newFromSession(self.game, channel,
                                                   "battle", isHost))
@@ -10138,8 +10249,9 @@ return function(mod)
     local species = type(withMon) == "string" and withMon or "RATTATA"
     local party = withMon and { { species = species, level = 5, hp = 10 } } or {}
     local who = (owner == "me") and (BR.myId or 0) or (owner or 999)
+    local afloat = Spawn.swimmable(data.maps, data.tilesets, here.mapId, x, y)
     local spill = Spills.build(who, here.mapId, x, y, party,
-      function(cx, cy) return spillCellFree(data, here.mapId, cx, cy) end,
+      function(cx, cy) return spillCellFree(data, here.mapId, cx, cy, afloat) end,
       { items = { { id = "POTION", n = 1 } }, money = 500, name = "DEBUG" },
       function(cx, cy) return Spawn.isWarp(data.maps, here.mapId, cx, cy) end)
     if not spill then return nil, "nothing to spill" end

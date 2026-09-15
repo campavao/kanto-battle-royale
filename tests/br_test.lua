@@ -2080,6 +2080,31 @@ do
      "somebody else's grace is not ours")
 end
 
+-- ------- a fainted lead cannot open a lockstep (2026-09-14)
+--
+-- LinkBattle.new sends out party[1] as it stands; the wild and trainer
+-- paths pick Party.firstHealthy.  A fainted lead is a fight that never
+-- opens (both sides sit in the intro's message phase, no menu comes, the
+-- watchdog ends it), so beginBattle fronts the first mon standing before
+-- LinkState packs the party.
+
+do
+  local party = { { species = "RATTATA", hp = 0 }, { species = "PIDGEY", hp = 0 },
+                  { species = "SPEAROW", hp = 12 }, { species = "EKANS", hp = 3 } }
+  eq(Engage.frontHealthy(party), 3, "the first mon standing was in slot 3")
+  eq(party[1].species, "SPEAROW", "...and now leads")
+  eq(party[2].species, "RATTATA", "the fainted keep their order behind it")
+  eq(party[3].species, "PIDGEY", "...all of them")
+  eq(party[4].species, "EKANS", "...and the rest follow")
+  eq(Engage.frontHealthy(party), 1, "a healthy lead is left alone")
+  eq(party[1].species, "SPEAROW", "...in place")
+  local wiped = { { species = "RATTATA", hp = 0 }, { species = "PIDGEY" } }
+  eq(Engage.frontHealthy(wiped), nil, "nobody standing is nil (no hp counts as fainted)")
+  eq(wiped[1].species, "RATTATA", "...and nothing moves")
+  eq(Engage.frontHealthy({}), nil, "an empty party is nil")
+  eq(Engage.frontHealthy(nil), nil, "no party is nil")
+end
+
 -- ------- ...and on the real lockstep (needs the imported data, like the
 -- engine's own link tests): a loopback host/guest pair, the guest's RUN
 -- wrapped.  A failed roll leaves the battle running and the host hears
@@ -2201,6 +2226,131 @@ do
     local r3A, r3B = results3()
     eq(r3B, "lose", "the staller forfeits when the clock runs out")
     eq(r3A, "win", "and the opponent wins outright")
+
+    -- A fainted lead (2026-09-14).  As packed, the engine never opens the
+    -- fight: no menu on either side.  Fronted (Engage.frontHealthy, what
+    -- beginBattle does before the handshake), the lockstep opens on the
+    -- mon standing and a turn resolves.
+    local Engage = require("mods.battle_royale.lib.engage")
+    local function twoMon(lead, second, deadLead)
+      local g = makeFakeGame(lead)
+      if deadLead then g.save.party[1].hp = 0 end
+      table.insert(g.save.party, Pokemon.new(Data, second, 50))
+      return g
+    end
+    local function pairOf(gA, gB, seed)
+      gB.save.player.name = "BLUE"
+      local nA, nB = Net.loopbackPair()
+      local pA, pB = Protocol.packParty(gA.save.party), Protocol.packParty(gB.save.party)
+      local bA = LinkBattle.newHost(gA, nA, { myParty = pA, theirParty = pB, theirName = "BLUE", seed = seed })
+      local bB = LinkBattle.newGuest(gB, nB, { myParty = pB, theirParty = pA, theirName = "RED", seed = seed })
+      local rA, rB
+      bA.onFinish = function(r) rA = r end
+      bB.onFinish = function(r) rB = r end
+      gA.stack:push(bA)
+      gB.stack:push(bB)
+      return bA, bB, nA, function() return rA, rB end
+    end
+    local gA4, gB4 = twoMon("RATTATA", "PIDGEY", true), twoMon("RATTATA", "PIDGEY")
+    local bA4, bB4 = pairOf(gA4, gB4, 555)
+    pump(gA4, gB4, bA4, bB4, 900)
+    ok(bA4.phase ~= "menu",
+       "as packed, a fainted lead never reaches its menu (" .. bA4.phase .. ")")
+    local gA5, gB5 = twoMon("RATTATA", "PIDGEY", true), twoMon("RATTATA", "PIDGEY")
+    eq(Engage.frontHealthy(gA5.save.party), 2, "fronted: PIDGEY comes forward")
+    local bA5, bB5, _, results5 = pairOf(gA5, gB5, 555)
+    pump(gA5, gB5, bA5, bB5, 900)
+    eq(bA5.phase, "menu", "fronted: the host reaches its menu")
+    eq(bB5.phase, "menu", "fronted: the guest reaches its menu")
+    eq(bA5.player.mon.species, "PIDGEY", "the host leads with the mon standing")
+    eq(bB5.enemy.mon.species, "PIDGEY", "...and the guest sees the same lead")
+    bA5:resolveTurn(bA5.player.curMoves[1])
+    bB5:resolveTurn(bB5.player.curMoves[1])
+    pump(gA5, gB5, bA5, bB5, 900)
+    local r5A, r5B = results5()
+    ok(r5A == nil and r5B == nil, "a turn resolved and the fight is still on")
+    eq(bA5.turnCount, 1, "...one turn on the host")
+    eq(bB5.turnCount, 1, "...and on the guest")
+
+    -- A spectated duel plays through a faint (2026-09-14).  The host's
+    -- side records the duel the way BR:startRecordingLink does (its own
+    -- sends off the channel, the peer's off the poll); a third machine
+    -- replays the log through Mirror.open.  The guest's lead is a level 5
+    -- that the host's level 50 drops in one move, so the log carries a
+    -- REPLACE -- the frame the replica used to freeze on.
+    local Mirror = require("mods.battle_royale.lib.mirror")
+    local gA6 = twoMon("RATTATA", "PIDGEY")
+    local gB6 = makeFakeGame("RATTATA")
+    gB6.save.party[1] = Pokemon.new(Data, "RATTATA", 5)
+    table.insert(gB6.save.party, Pokemon.new(Data, "PIDGEY", 5))
+    gB6.save.player.name = "BLUE"
+    local nA6, nB6 = Net.loopbackPair()
+    local pA6, pB6 = Protocol.packParty(gA6.save.party), Protocol.packParty(gB6.save.party)
+    local rec = Mirror.recordLink(nA6, { isHost = true, seed = 4444, me = pA6, foe = pB6,
+                                         myName = "RED", foeName = "BLUE" })
+    local basePoll = nA6.poll
+    nA6.poll = function(self_)
+      local msgs = basePoll(self_)
+      for _, m in ipairs(msgs or {}) do rec:onTheirs(m) end
+      return msgs
+    end
+    local bA6 = LinkBattle.newHost(gA6, nA6, { myParty = pA6, theirParty = pB6, theirName = "BLUE", seed = 4444 })
+    local bB6 = LinkBattle.newGuest(gB6, nB6, { myParty = pB6, theirParty = pA6, theirName = "RED", seed = 4444 })
+    local r6A, r6B
+    bA6.onFinish = function(r) r6A = r end
+    bB6.onFinish = function(r) r6B = r end
+    -- the guest's replacement pick without a party screen: the first mon
+    -- standing, the moment the picker would open
+    bB6.buildScreen = function(_, name, o)
+      if name ~= "PartyMenu" then error("unexpected screen " .. tostring(name)) end
+      local screen = {}
+      function screen:enter() end
+      function screen:update()
+        local pick
+        for _, m in ipairs(o.party) do if m.hp > 0 then pick = m break end end
+        -- an engine that keeps the picker open closes it through the
+        -- menu handle; one that does not expects the picker to go itself
+        o.onSwitch(pick, { close = function()
+          if gB6.stack:top() == screen then gB6.stack:pop() end
+        end, refuse = function() end })
+        if gB6.stack:top() == screen then gB6.stack:pop() end
+      end
+      return screen
+    end
+    gA6.stack:push(bA6)
+    gB6.stack:push(bB6)
+    local replaces = 0
+    for _ = 1, 6000 do
+      if r6A and r6B then break end
+      Input.pressed = (bA6.phase ~= "menu") and { a = true } or {}
+      gA6.stack:update(1 / 60)
+      Input.pressed = (bB6.phase ~= "menu") and { a = true } or {}
+      gB6.stack:update(1 / 60)
+      if bA6.phase == "menu" and gA6.stack:top() == bA6 then bA6:resolveTurn(bA6.player.curMoves[1]) end
+      if bB6.phase == "menu" and gB6.stack:top() == bB6 then bB6:resolveTurn(bB6.player.curMoves[1]) end
+    end
+    rec:stop(r6A)
+    for _, f in ipairs(rec.log) do
+      if f.k == "link" and f.m and f.m.type == "replace" then replaces = replaces + 1 end
+    end
+    eq(r6A, "win", "the recorded duel: the host wins")
+    ok(replaces >= 1, "...and the log carries a replacement pick (" .. replaces .. ")")
+    local gC = makeFakeGame("RATTATA")
+    local rep, why = Mirror.open(gC, rec.log[1], { log = function() end })
+    ok(rep ~= nil, "the replica opens off the start frame (" .. tostring(why) .. ")")
+    if rep then
+      gC.stack:push(rep)
+      for i = 2, #rec.log do rep:feed(rec.log[i]) end
+      local ticks = 0
+      while not rep.mirrorClosed and ticks < 12000 do
+        ticks = ticks + 1
+        Input.pressed = {}
+        gC.stack:update(1 / 60)
+      end
+      ok(rep.mirrorClosed, "the replica plays the whole duel through the faint (" .. ticks .. " ticks)")
+      eq(rep.turnCount, bA6.turnCount, "...the same number of turns as the real fight")
+      eq(rep.result, "hostWin", "...to the same end")
+    end
   end)
   if not hadLove then _G.love = nil end
   if not okAll then
@@ -5835,6 +5985,72 @@ do
   local f2 = Fame.new(g2, {}, {})
   local okA = pcall(function() f2:advance() end)
   ok(okA, "no onDone is not an error")
+end
+
+-- ------- where the fog's eye may land (POK-202)
+--
+-- Every fly town, and every route with ground to stand on: the three sea
+-- routes are water end to end, and an endgame only a swimmer can reach is
+-- a player taken by the fog with no fight offered.  Checked against the
+-- real map data, like the spawn sweep.
+
+do
+  local Fog = require("mods.battle_royale.lib.fog")
+  -- the rule itself, on a made-up board
+  local places = { { id = "TOWN", fly = true }, { id = "ROUTE_A" }, { id = "SEA" } }
+  local land = { TOWN = 10, ROUTE_A = 100, SEA = 99 }
+  local picked = Fog.eyes(places, function(id) return land[id] end)
+  eq(#picked, 2, "a town always, a route with enough land, never the sea")
+  eq(picked[1].id, "TOWN", "...the town")
+  eq(picked[2].id, "ROUTE_A", "...the route at the floor")
+  eq(#Fog.eyes(places, nil), 1, "with no land count only the towns qualify")
+
+  local hadLove = _G.love
+  local okReal, err = pcall(function()
+    _G.love = _G.love or require("tests.love_stub")
+    local Data = require("src.core.Data")
+    Data:load()
+    local Map = require("src.world.Map")
+    local Spawn = require("mods.battle_royale.lib.spawn")
+    local locations = Data.field.townMap.locations
+    local all = {}
+    for id, def in pairs(Data.maps) do
+      if Map.isOutdoor(def) and locations[id] then
+        all[#all + 1] = { id = id, x = locations[id].x, y = locations[id].y,
+                          name = locations[id].name, fly = Map.isFlyTown(def) }
+      end
+    end
+    local eyesOf = Fog.eyes(all, function(id)
+      local def = Data.maps[id]
+      local n = 0
+      for _ in pairs(Spawn.cellsOf(def, Data.tilesets[def.tileset], Data.maps, Data.tilesets,
+                                  Data.field and Data.field.ledges)) do n = n + 1 end
+      return n
+    end)
+    local set = {}
+    for _, e in ipairs(eyesOf) do set[e.id] = e end
+    eq(#all, 34, "Kanto places 34 outdoor maps")
+    eq(#eyesOf, 31, "...31 of which the eye may land on")
+    for _, sea in ipairs({ "ROUTE_19", "ROUTE_20", "ROUTE_21" }) do
+      ok(set[sea] == nil, sea .. " is not one of them")
+    end
+    for _, id in ipairs({ "ROUTE_1", "ROUTE_3", "ROUTE_17", "ROUTE_25", "CINNABAR_ISLAND", "PALLET_TOWN" }) do
+      ok(set[id] ~= nil, id .. " is")
+    end
+    eq(set.ROUTE_3.name, "ROUTE 3", "a route is announced by its Town Map name")
+    -- the seed still draws one place, and a route is as likely as a town
+    local routes, towns = 0, 0
+    for seed = 1, 200 do
+      local c = Fog.center(seed, eyesOf)
+      if c.fly then towns = towns + 1 else routes = routes + 1 end
+    end
+    ok(routes > 0 and towns > 0, "over 200 seeds the eye lands on both routes and towns ("
+       .. routes .. " routes, " .. towns .. " towns)")
+  end)
+  if not hadLove then _G.love = nil end
+  if not okReal then
+    io.write("  (skipping the real-Kanto eye list: " .. tostring(err) .. ")" .. string.char(10))
+  end
 end
 
 -- ------- the lockstep cells still match the scenes they suppress

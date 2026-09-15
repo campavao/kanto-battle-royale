@@ -535,6 +535,34 @@ test("garbage lines are dropped, a flood of them disconnects", async () => {
   }, { badLines: 5 });
 });
 
+test("a host's line budget is deeper than a guest's", async () => {
+  await withRelay(async (port) => {
+    const host = await connect(port);
+    host.send({ type: "host_room", name: "HOST" });
+    const hosted = await host.until("room_hosted");
+    const guest = await connect(port);
+    guest.send({ type: "join_room", code: hosted.code, name: "GUEST" });
+    await guest.until("room_joined");
+    await host.until("roster");
+    // the same burst from both: a guest's bucket is 40 lines, the host's
+    // four times that (hostLines) -- thirty walking bots at ~4 steps/s
+    // each is the host's ordinary rate, not a flood
+    for (let i = 0; i < 100; i++) { guest.send({ type: "ping" }); host.send({ type: "ping" }); }
+    const dropped = await guest.until("__closed");
+    assert.equal(dropped.type, "__closed", "the guest was dropped for flooding");
+    // the host is still there: its pings were all answered (the guest's
+    // drop puts a roster in between, which is not a pong)
+    let pongs = 0;
+    while (pongs < 100) {
+      const m = await host.next();
+      if (m.type === "pong") pongs++;
+      else if (m.type === "__closed") assert.fail("the host was dropped too");
+    }
+    assert.equal(pongs, 100, "every one of the host's pings was answered");
+    host.end();
+  }, { burstLines: 40, linesPerSec: 1 });
+});
+
 test("a stat line is counted and never answered", async () => {
   await withRelay(async (port) => {
     const before = stats();

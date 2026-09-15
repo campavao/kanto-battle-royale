@@ -110,6 +110,17 @@ export const DEFAULT_LIMITS = Object.freeze({
   // dropped for flooding, and with no host migration that ended the match.
   linesPerSec: 120,
   burstLines: 1200,     // bucket depth: one fog sweep, with room over it
+  // The HOST's bucket is this many times deeper and refills this many
+  // times faster.  A host speaks for every bot in the room -- one `place`
+  // line per bot step, ~4/s each -- so thirty bots on the move alone reach
+  // 120/s, the fog's beats add their spills and eliminations on top, and
+  // the mirror hands each spectator every frame of every fight they look
+  // at.  2026-09-14: a four-trainer match's host was dropped for flooding
+  // at headroom 1/1200 half an hour in, and the room closed under three
+  // spectators with "no heir".  A runaway client is still orders of
+  // magnitude above this; the multiplier only lifts the ceiling off the
+  // one connection whose legitimate rate scales with the room.
+  hostLines: 4,
   badLines: 20,         // unparsable lines before we give up on a socket
   members: 16,
   // The widest room the lobby list may claim: the host's MAX as the mod
@@ -864,8 +875,15 @@ export function createRelay(options = {}) {
       conn.buf = conn.buf.slice(nl + 1);
       if (line.length === 0) continue;
       if (line.length > limits.line) { conn.destroy("line_too_long"); return; }
-      conn.tokens = Math.min(limits.burstLines,
-        conn.tokens + ((now - conn.tokenAt) / 1000) * limits.linesPerSec);
+      const mul = (conn.room && conn.room.host === conn) ? limits.hostLines : 1;
+      if (mul > 1 && !conn.hostDepth) {
+        // promoted (or hosting): the deeper bucket starts full, not at
+        // whatever a guest's was down to
+        conn.hostDepth = true;
+        conn.tokens += limits.burstLines * (mul - 1);
+      }
+      conn.tokens = Math.min(limits.burstLines * mul,
+        conn.tokens + ((now - conn.tokenAt) / 1000) * limits.linesPerSec * mul);
       conn.tokenAt = now;
       if (conn.tokens < 1) { conn.destroy("flood"); return; }
       conn.tokens -= 1;

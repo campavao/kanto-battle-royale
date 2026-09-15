@@ -424,7 +424,7 @@ end
 
 -- shared by both replicas: the frame queue, the stand-in input, the page
 -- turner, catch-up, the idle close
-local function install(game, s, opts, applyFrame, frozen)
+local function install(game, s, opts, applyFrame, frozen, eager)
   local log = opts.log or function() end
   s.mirror = true
   s.mirrorPending = {}
@@ -458,6 +458,8 @@ local function install(game, s, opts, applyFrame, frozen)
   local baseUpdate = s.update
   local function tick(self, dt, fast)
     self.mirrorInput.fast = fast
+    -- a frame the replica can take mid-page goes in before the turn gate
+    if eager then eager(self) end
     if frozen(self) then
       -- between turns: the real player is at their menu.  Apply the next
       -- action if one is here; otherwise hold the picture.
@@ -792,7 +794,26 @@ local function openLink(game, start, opts)
     net.inbox[#net.inbox + 1] = { type = "spectate", side = f.side, msg = f.m }
     return true
   end
-  install(game, s, opts, applyFrame, frozen)
+  -- A REPLACEMENT is not a turn (2026-09-14).  After a KO the observer
+  -- polls its replace queue from inside the message queue -- phase
+  -- "messages", not waitBoth -- and applyFrame only runs at the turn gate,
+  -- so the pick a real player made sat at the head of the log while the
+  -- replica waited for it, forever: every spectated duel froze on its
+  -- first faint, with no idle close because the idle clock is the gate's
+  -- too.  The observer queues replaces (hostReplace/guestReplace) rather
+  -- than acting on them, so one can go in whenever it is at the head.  An
+  -- ACTION still waits for the gate: fed mid-page it would start the next
+  -- turn over the one still playing.  bye/forfeit wait too, so the last
+  -- turn plays out before "The match ended."
+  local function eager(self)
+    local f = self.mirrorPending[1]
+    while f and f.k == "link" and f.m and f.m.type == "replace" do
+      table.remove(self.mirrorPending, 1)
+      net.inbox[#net.inbox + 1] = { type = "spectate", side = f.side, msg = f.m }
+      f = self.mirrorPending[1]
+    end
+  end
+  install(game, s, opts, applyFrame, frozen, eager)
   -- newSpectator's own finish pops the stack and emits battle.ended; ours
   -- must not announce anything
   s.finish = function(self) self:mirrorClose(self.result or "ended") end

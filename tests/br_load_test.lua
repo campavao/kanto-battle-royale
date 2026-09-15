@@ -104,6 +104,14 @@ do
     f:close()
     local hook = src:match('mod%.hooks:wrap%("ui%.start_menu%.items".-\n  end%)')
     T.check(hook ~= nil, "found the start_menu hook")
+    -- POK-208: the survey zoom is off for the round -- the floor of the
+    -- engine's zoom.range window rises to FIT while inMatch()
+    local zoom = src:match('mod%.hooks:wrap%("zoom%.range".-\n  end%)')
+    T.check(zoom ~= nil, "found the zoom.range hook")
+    if zoom then
+      T.check(zoom:find("if inMatch() then return 0,", 1, true) ~= nil,
+              "the zoom floor is FIT during a round")
+    end
     if hook then
       for _, row in ipairs({ "LINK", "SAVE", "OPTION", "MODS" }) do
         T.check(hook:find('removeLabel%(out, "' .. row .. '"%)') ~= nil,

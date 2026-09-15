@@ -41,6 +41,26 @@ function Log.new(out)
   return setmetatable({ out = out, deepOn = false }, Log)
 end
 
+-- A second reader for every line (2026-09-14): the engine's logger is
+-- print, stdout is block-buffered, and a launcher-run game has no console
+-- -- so "I played with debug on" left nothing anyone could read.  The sink
+-- gets the finished line (prefix, tier mark and all) and is expected to
+-- put it somewhere that outlives the process; main.lua points it at a
+-- file in the mod's own storage.  Never on the hot path: it fires exactly
+-- when the logger would.  A sink that throws is dropped, not fatal.
+function Log:setSink(fn) self.sink = fn end
+
+local function toSink(self, line, ...)
+  if not self.sink then return end
+  local text = line
+  if select("#", ...) > 0 then
+    local ok, formatted = pcall(string.format, tostring(line), ...)
+    if ok then text = formatted end
+  end
+  local ok = pcall(self.sink, tostring(text))
+  if not ok then self.sink = nil end
+end
+
 -- Which game this client is in, for the prefix.  Called when the room comes
 -- up (code, no seed yet) and again when the match starts (both).
 function Log:match(code, seed)
@@ -63,16 +83,19 @@ end
 function Log:say(fmt, ...)
   if not self.out then return end
   self.out:info(self:prefix() .. tostring(fmt), ...)
+  toSink(self, self:prefix() .. tostring(fmt), ...)
 end
 
 function Log:deep(fmt, ...)
   if not (self.deepOn and self.out) then return end
   self.out:info(self:prefix() .. "· " .. tostring(fmt), ...)
+  toSink(self, self:prefix() .. "· " .. tostring(fmt), ...)
 end
 
 function Log:warn(fmt, ...)
   if not self.out then return end
   self.out:warn(self:prefix() .. tostring(fmt), ...)
+  toSink(self, "! " .. self:prefix() .. tostring(fmt), ...)
 end
 
 return Log

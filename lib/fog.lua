@@ -108,11 +108,31 @@ function Fog.phaseAt(elapsedSeconds, phaseSeconds)
   return math.max(1, math.min(#Fog.PHASES, phase))
 end
 
--- Where the ring closes.  Chosen from the places worth naming -- the towns
--- and cities -- so the announcement is somewhere a player can picture
--- ("THE FOG CLOSES ON CELADON CITY") rather than a route number.  Derived
--- from the match seed, so every client agrees without being told.
+-- Where the ring closes.  Chosen from the places the Town Map names -- the
+-- towns and cities, and since POK-202 the routes between them ("THE FOG
+-- CLOSES ON ROUTE 3") -- so the announcement is somewhere a player can
+-- picture.  Derived from the match seed, so every client agrees without
+-- being told.
 --
+-- Which outdoor maps the eye may land on (POK-202, 2026-09-14): every fly
+-- town, and every other placed outdoor map -- the routes -- with enough
+-- ground to stand on.  The three sea routes are water end to end (SEA
+-- ROUTE 21 has four land cells), and an endgame nobody without SURF can
+-- reach is not an endgame: a player who cannot get to the eye's square is
+-- taken by the fog with no fight offered.  `landOf(id)` answers how many
+-- walkable, non-water cells a map has; the floor keeps CINNABAR (111)
+-- and drops ROUTE 20 (90).  Entries are { id, x, y, name, fly }.
+Fog.MIN_EYE_LAND = 100
+function Fog.eyes(places, landOf)
+  local out = {}
+  for _, p in ipairs(places or {}) do
+    if p.fly or (landOf and (landOf(p.id) or 0) >= Fog.MIN_EYE_LAND) then
+      out[#out + 1] = p
+    end
+  end
+  return out
+end
+
 -- `towns` is a list of { id, x, y, name }.
 function Fog.center(seed, towns)
   if not towns or #towns == 0 then return nil end
