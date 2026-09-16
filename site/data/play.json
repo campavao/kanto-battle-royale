@@ -1,7 +1,36 @@
 {
- "readAt": "2026-09-16T05:20:36.298Z",
+ "readAt": "2026-09-16T10:13:50.920Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "Y5S96X",
+   "at": "2026-09-16T08:29:55.748Z",
+   "end": "2026-09-16T08:38:33.175Z",
+   "secs": 517,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "3b2ac95b"
+   ],
+   "played": [
+    {
+     "t": "2026-09-16T08:30:55.941Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "exact": true
+  },
   {
    "code": "M59MBS",
    "at": "2026-09-16T04:14:02.384Z",
@@ -19463,13 +19492,13 @@
   {
    "id": "3b2ac95b",
    "first": "2026-09-13T09:08:51.817Z",
-   "last": "2026-09-13T09:45:55.671Z",
+   "last": "2026-09-16T08:29:55.840Z",
    "since": "2026-09-13",
    "versions": [
     "0.50.1"
    ],
    "solo": 0,
-   "checkins": 9,
+   "checkins": 10,
    "v": "0.50.1"
   },
   {
