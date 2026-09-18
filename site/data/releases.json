@@ -1,11 +1,11 @@
 {
-  "readAt": "2026-09-18T00:23:46.089Z",
+  "readAt": "2026-09-18T20:00:00.282Z",
   "list": [
     {
       "tag": "v0.52.0",
       "name": "a fainted lead, a frozen spectator, balls on the water, the eye on a route",
       "at": "2026-09-15T01:53:24Z",
-      "dl": 33
+      "dl": 35
     },
     {
       "tag": "v0.51.0",
@@ -89,7 +89,7 @@
       "tag": "v0.40.0",
       "name": "the bots can win",
       "at": "2026-08-28T12:43:41Z",
-      "dl": 316
+      "dl": 317
     },
     {
       "tag": "v0.39.0",

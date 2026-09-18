@@ -1,7 +1,53 @@
 {
- "readAt": "2026-09-18T00:23:46.228Z",
+ "readAt": "2026-09-18T20:00:00.567Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "25VRV4",
+   "at": "2026-09-18T19:17:52.791Z",
+   "end": "2026-09-18T19:19:01.615Z",
+   "secs": 69,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "56469cc1"
+   ],
+   "played": []
+  },
+  {
+   "code": "TTC2FF",
+   "at": "2026-09-18T19:16:46.848Z",
+   "end": "2026-09-18T19:17:46.618Z",
+   "secs": 60,
+   "door": "open",
+   "mode": "quick",
+   "humans": 2,
+   "together": 2,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [
+    {
+     "t": "2026-09-18T19:17:15.190Z",
+     "how": "quick"
+    }
+   ],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "56469cc1"
+   ],
+   "played": [],
+   "migrated": 1
+  },
   {
    "code": "E89VKR",
    "at": "2026-09-18T00:08:45.535Z",
@@ -20177,13 +20223,13 @@
   {
    "id": "56469cc1",
    "first": "2026-09-13T06:17:52.507Z",
-   "last": "2026-09-13T06:28:55.243Z",
+   "last": "2026-09-18T19:17:52.936Z",
    "since": "2026-09-13",
    "versions": [
     "0.50.1"
    ],
    "solo": 0,
-   "checkins": 5,
+   "checkins": 8,
    "v": "0.50.1"
   },
   {
