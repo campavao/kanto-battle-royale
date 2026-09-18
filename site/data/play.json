@@ -1,7 +1,76 @@
 {
- "readAt": "2026-09-18T20:00:00.567Z",
+ "readAt": "2026-09-18T22:31:49.506Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "3SVXJB",
+   "at": "2026-09-18T21:44:50.508Z",
+   "end": "2026-09-18T21:46:01.300Z",
+   "secs": 71,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.52.0"
+   ],
+   "installs": [
+    "680f9898"
+   ],
+   "played": []
+  },
+  {
+   "code": "RGY8TV",
+   "at": "2026-09-18T21:34:04.154Z",
+   "end": "2026-09-18T21:42:16.182Z",
+   "secs": 492,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.52.0"
+   ],
+   "installs": [
+    "680f9898"
+   ],
+   "played": [
+    {
+     "t": "2026-09-18T21:35:04.503Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "exact": true
+  },
+  {
+   "code": "D54YSS",
+   "at": "2026-09-18T21:33:53.615Z",
+   "end": "2026-09-18T21:33:56.398Z",
+   "secs": 3,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.52.0"
+   ],
+   "installs": [
+    "680f9898"
+   ],
+   "played": []
+  },
   {
    "code": "25VRV4",
    "at": "2026-09-18T19:17:52.791Z",
@@ -19949,7 +20018,7 @@
   {
    "id": "680f9898",
    "first": "2026-09-11T03:04:32.479Z",
-   "last": "2026-09-18T00:08:45.674Z",
+   "last": "2026-09-18T21:44:50.679Z",
    "since": "2026-09-10",
    "versions": [
     "0.49.0",
@@ -19959,7 +20028,7 @@
     "0.52.0"
    ],
    "solo": 3,
-   "checkins": 167,
+   "checkins": 170,
    "v": "0.52.0"
   },
   {
@@ -20851,6 +20920,11 @@
   }
  ],
  "bounces": [
+  {
+   "t": "2026-09-18T21:34:02.196Z",
+   "tried": "quick",
+   "secs": 0
+  },
   {
    "t": "2026-09-15T02:56:13.851Z",
    "tried": "quick",
