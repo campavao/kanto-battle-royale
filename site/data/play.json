@@ -1,7 +1,56 @@
 {
- "readAt": "2026-09-19T16:45:12.015Z",
+ "readAt": "2026-09-19T19:14:25.616Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "4PTEPC",
+   "at": "2026-09-19T16:46:52.887Z",
+   "end": "2026-09-19T16:59:40.886Z",
+   "secs": 768,
+   "door": "open",
+   "mode": "host",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.52.0"
+   ],
+   "installs": [
+    "c03b7419"
+   ],
+   "played": [
+    {
+     "t": "2026-09-19T16:47:07.930Z",
+     "mode": "host",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "exact": true
+  },
+  {
+   "code": "Z74JG6",
+   "at": "2026-09-19T16:46:48.620Z",
+   "end": "2026-09-19T16:46:50.604Z",
+   "secs": 2,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.52.0"
+   ],
+   "installs": [
+    "c03b7419"
+   ],
+   "played": []
+  },
   {
    "code": "FGDZVA",
    "at": "2026-09-19T16:31:53.670Z",
@@ -20328,14 +20377,15 @@
   {
    "id": "c03b7419",
    "first": "2026-09-12T00:10:13.287Z",
-   "last": "2026-09-19T16:31:53.847Z",
+   "last": "2026-09-19T16:46:53.031Z",
    "since": "2026-09-11",
    "versions": [
-    "0.50.0"
+    "0.50.0",
+    "0.52.0"
    ],
    "solo": 1,
-   "checkins": 28,
-   "v": "0.50.0"
+   "checkins": 30,
+   "v": "0.52.0"
   },
   {
    "id": "09fb9f29",

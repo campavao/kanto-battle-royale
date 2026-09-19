@@ -1,11 +1,17 @@
 {
-  "readAt": "2026-09-19T16:45:11.809Z",
+  "readAt": "2026-09-19T19:14:25.392Z",
   "list": [
+    {
+      "tag": "v0.53.0",
+      "name": "the bag works against a person",
+      "at": "2026-09-19T19:02:55Z",
+      "dl": 1
+    },
     {
       "tag": "v0.52.0",
       "name": "a fainted lead, a frozen spectator, balls on the water, the eye on a route",
       "at": "2026-09-15T01:53:24Z",
-      "dl": 44
+      "dl": 45
     },
     {
       "tag": "v0.51.0",
@@ -89,7 +95,7 @@
       "tag": "v0.40.0",
       "name": "the bots can win",
       "at": "2026-08-28T12:43:41Z",
-      "dl": 326
+      "dl": 329
     },
     {
       "tag": "v0.39.0",
