@@ -1,7 +1,37 @@
 {
- "readAt": "2026-09-19T19:14:25.616Z",
+ "readAt": "2026-09-19T21:29:40.713Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "DBQUHP",
+   "at": "2026-09-19T21:15:14.166Z",
+   "end": null,
+   "secs": null,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.52.0"
+   ],
+   "installs": [
+    "49dd4e29"
+   ],
+   "played": [
+    {
+     "t": "2026-09-19T21:16:14.365Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "live": true,
+   "exact": true
+  },
   {
    "code": "4PTEPC",
    "at": "2026-09-19T16:46:52.887Z",
@@ -20673,13 +20703,13 @@
   {
    "id": "49dd4e29",
    "first": "2026-09-16T17:29:23.699Z",
-   "last": "2026-09-16T17:29:23.699Z",
+   "last": "2026-09-19T21:15:14.216Z",
    "since": "2026-09-16",
    "versions": [
     "0.52.0"
    ],
    "solo": 0,
-   "checkins": 1,
+   "checkins": 2,
    "v": "0.52.0"
   },
   {
