@@ -1,14 +1,43 @@
 {
- "readAt": "2026-09-19T00:40:08.099Z",
+ "readAt": "2026-09-19T05:08:36.099Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
   {
-   "code": "B9CKFZ",
-   "at": "2026-09-18T23:50:20.759Z",
-   "end": null,
-   "secs": null,
+   "code": "ATJAK4",
+   "at": "2026-09-19T04:28:34.192Z",
+   "end": "2026-09-19T04:58:20.386Z",
+   "secs": 1786,
    "door": "open",
-   "mode": "host",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.50.0"
+   ],
+   "installs": [
+    "c03b7419"
+   ],
+   "played": [
+    {
+     "t": "2026-09-19T04:29:34.633Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": 1721
+    }
+   ],
+   "exact": true
+  },
+  {
+   "code": "MSEHTU",
+   "at": "2026-09-19T01:32:12.308Z",
+   "end": "2026-09-19T01:32:15.954Z",
+   "secs": 4,
+   "door": "open",
+   "mode": "quick",
    "humans": 1,
    "together": 1,
    "spectators": 0,
@@ -20,8 +49,36 @@
    "installs": [
     "eadb7a25"
    ],
-   "played": [],
-   "live": true
+   "played": []
+  },
+  {
+   "code": "B9CKFZ",
+   "at": "2026-09-18T23:50:20.759Z",
+   "end": "2026-09-19T01:28:07.054Z",
+   "secs": 5866,
+   "door": "open",
+   "mode": "host",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.52.0"
+   ],
+   "installs": [
+    "eadb7a25"
+   ],
+   "played": [
+    {
+     "t": "2026-09-19T00:52:34.995Z",
+     "mode": "host",
+     "trainers": 1,
+     "watching": 0,
+     "secs": 1814
+    }
+   ],
+   "exact": true
   },
   {
    "code": "SNEQW2",
@@ -20049,7 +20106,7 @@
   {
    "id": "eadb7a25",
    "first": "2026-09-10T16:29:07.523Z",
-   "last": "2026-09-18T23:50:21.031Z",
+   "last": "2026-09-19T01:32:12.507Z",
    "since": "2026-09-10",
    "versions": [
     "0.49.0",
@@ -20057,7 +20114,7 @@
     "0.52.0"
    ],
    "solo": 2,
-   "checkins": 16,
+   "checkins": 17,
    "v": "0.52.0"
   },
   {
@@ -20202,13 +20259,13 @@
   {
    "id": "c03b7419",
    "first": "2026-09-12T00:10:13.287Z",
-   "last": "2026-09-12T18:04:38.635Z",
+   "last": "2026-09-19T04:28:34.358Z",
    "since": "2026-09-11",
    "versions": [
     "0.50.0"
    ],
    "solo": 1,
-   "checkins": 24,
+   "checkins": 25,
    "v": "0.50.0"
   },
   {
