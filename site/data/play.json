@@ -1,12 +1,12 @@
 {
- "readAt": "2026-09-19T21:29:40.713Z",
+ "readAt": "2026-09-19T23:28:10.088Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
   {
    "code": "DBQUHP",
    "at": "2026-09-19T21:15:14.166Z",
-   "end": null,
-   "secs": null,
+   "end": "2026-09-19T21:43:06.069Z",
+   "secs": 1672,
    "door": "open",
    "mode": "quick",
    "humans": 1,
@@ -26,10 +26,9 @@
      "mode": "quick",
      "trainers": 1,
      "watching": 0,
-     "secs": null
+     "secs": 1591
     }
    ],
-   "live": true,
    "exact": true
   },
   {
