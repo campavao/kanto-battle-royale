@@ -13,7 +13,20 @@
 # battle intro on, and the POK-65 watchdog plus the clock must still end
 # it.
 #
-# Env overrides: LOVEC (lovec.exe path), POKEPORT_IMPORT_ROM, BR_RELAY_PORT.
+# Env overrides: LOVEC (lovec.exe path), POKEPORT_IMPORT_ROM, BR_RELAY_PORT,
+# BR_PVP_TIMEOUT (seconds, default 900).
+#
+# Recording a run: both clients normally run at 3x with no window and no
+# audio device, which is right for a regression and wrong for footage.
+# BR_PVP_WINDOW names the roles to show ("host", "guest" or "host,guest");
+# a shown client also gets the real audio device, a hidden one stays on
+# SDL's dummy driver so only the window being recorded makes sound.
+# BR_PVP_SPEED sets the logic clock for both clients (default 3; use 1 for
+# real-time footage, and raise BR_PVP_TIMEOUT to match -- a 3x run that
+# takes 6 minutes takes 18 at 1x).
+#
+#   BR_PVP_WINDOW=host BR_PVP_SPEED=1 BR_PVP_TIMEOUT=2400 \
+#     python mods/battle_royale/tests/drivers/pvp/run_pvp.py spectate
 
 import os
 import subprocess
@@ -28,6 +41,9 @@ ROM = os.environ.get("POKEPORT_IMPORT_ROM",
                      r"C:\Users\cam95\Documents\roms\pokemon-red-us.gb")
 PORT = os.environ.get("BR_RELAY_PORT", "7790")
 TIMEOUT = int(os.environ.get("BR_PVP_TIMEOUT", "900"))
+SPEED = os.environ.get("BR_PVP_SPEED", "3")
+SHOWN = {r.strip() for r in os.environ.get("BR_PVP_WINDOW", "").split(",")
+         if r.strip()}
 SCENARIOS = {
     "duel": ("host_duel.lua", "guest_duel.lua"),
     "stall": ("host_stall.lua", "guest_stall.lua"),
@@ -55,6 +71,10 @@ SCENARIOS = {
     # eyeline must fire, the guest's menu must come down for it, and the
     # lockstep must open on both screens.
     "menu": ("host_menu.lua", "guest_menu.lua"),
+    # POK-207: the bag on the cable (engine RFC 0021).  The guest takes a
+    # hit, opens ITEM mid-duel and spends the turn on a POTION; the host
+    # must resolve a heal it never chose, and the fight must stay in step.
+    "items": ("host_items.lua", "guest_items.lua"),
     # The fight a spectator is shown (lib/mirror.lua): the host loses the
     # duel, watches the guest, and the guest's next fight must open on the
     # host's screen as a replica and end the way the real one did.
@@ -77,12 +97,20 @@ def spawn_love(role, driver, workdir, log):
         "POKEPORT_GAME": "red",
         "POKEPORT_IMPORT_ROM": ROM,
         "POKEPORT_IDENTITY": "br-pvp-" + role,
-        "POKEPORT_SPEED": "3",
+        "POKEPORT_SPEED": SPEED,
         "POKEPORT_DRIVER": os.path.join(HERE, driver),
+        # conf.lua opens no window for a driver run unless told to; a
+        # hidden client also gets no audio device, so a recording of the
+        # shown one is not scored by the other's Pallet Town theme
+        "POKEPORT_DRIVER_WINDOW": "1" if role in SHOWN else "0",
         "BR_PVP_DIR": workdir,
         "BR_PVP_ROLE": role,
         "BR_PVP_RELAY": "127.0.0.1:" + PORT,
     })
+    if role in SHOWN:
+        env.pop("SDL_AUDIODRIVER", None)   # the platform's default device
+    else:
+        env["SDL_AUDIODRIVER"] = "dummy"
     return subprocess.Popen([LOVEC, "."], cwd=REPO, env=env,
                             stdout=log, stderr=subprocess.STDOUT)
 
@@ -119,6 +147,7 @@ def main():
         return read(plogs[role]) + read(logs[role])
     handles, procs = {}, {}
     print("scenario:", scenario)
+    print("speed:", SPEED, " shown:", ",".join(sorted(SHOWN)) or "none")
     print("workdir:", workdir)
 
     try:

@@ -745,7 +745,8 @@ local MIRROR_ACTS = { move = true, struggle = true, locked = true, switch = true
                       run = true, ball = true, item = true, replace = true,
                       choice = true, link = true }
 local LINK_TYPES = { action = true, replace = true, bye = true, forfeit = true }
-local LINK_KINDS = { move = true, struggle = true, locked = true, switch = true, run = true }
+local LINK_KINDS = { move = true, struggle = true, locked = true, switch = true,
+                     run = true, item = true }
 local MAX_TEXT = 96
 
 local function shortString(v, max)
@@ -886,8 +887,12 @@ decoders.bmir = function(m)
       local lm = f.m
       if type(lm) ~= "table" or not LINK_TYPES[lm.type] then return nil, "bad lockstep message" end
       out.side = f.side
+      -- an item action (RFC 0021): the id is a bare item name the peer
+      -- looks up in its own data, and `move` is one of the four slots.
       out.m = { type = lm.type, kind = LINK_KINDS[lm.kind] and lm.kind or nil,
-                slot = clampInt(lm.slot, 1, 4, nil), index = clampInt(lm.index, 1, 6, nil) }
+                slot = clampInt(lm.slot, 1, 4, nil), index = clampInt(lm.index, 1, 6, nil),
+                item = shortString(lm.item),
+                move = clampInt(lm.move, 1, 4, nil) }
     end
   else
     return nil, "bad frame kind"

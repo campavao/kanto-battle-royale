@@ -96,4 +96,44 @@ function Seams.summary()
        .. " — this build predates gen1recomp v0.2.26"
 end
 
+-- Items on the cable (RFC 0021, POK-207): the one seam this mod ASKS for
+-- rather than requires.  Without it a duel's ITEM row says "Items can't be
+-- used in a link battle!", which is the status quo, not a failure -- so it
+-- is not in probes() and never makes Seams.ok() false.
+--
+-- It landed upstream in two halves, and a release shipped between them:
+--
+--   #2284  opts.items + src/link/LinkItems   (merged 2026-09-16, v0.2.61)
+--   #2288  SCHEMAS.action carries item/move  (merged 2026-09-19, v0.2.65)
+--
+-- v0.2.61 through v0.2.64 have LinkItems but a Wire.sanitize that strips
+-- an item action down to kind/slot/index.  The bag opens, the turn is
+-- spent, and the peer applies an item it cannot name -- nothing at all --
+-- so the two machines part by one heal with nothing on either screen to
+-- say so.  The presence of LinkItems is therefore not the question.  The
+-- question is whether an item action survives the engine's own sanitize,
+-- and that is asked directly: a build that fixes it some other way passes,
+-- and one that has the module without the wire does not.
+--
+-- The room door refuses a battle across any engine skew, so both duellists
+-- always get the same answer here.
+--
+-- Returns true, or false and one line saying why, for the boot log.
+function Seams.linkItems()
+  if not tryRequire("src.link.LinkItems") then
+    return false, "no src.link.LinkItems -- this build predates RFC 0021 (#2284)"
+  end
+  local Wire = tryRequire("src.link.Wire")
+  if not (Wire and type(Wire.sanitize) == "function") then
+    return false, "no Wire.sanitize to ask"
+  end
+  local ok, out = pcall(Wire.sanitize, { type = "action", kind = "item",
+                                         item = "ETHER", index = 1, move = 2 })
+  if not (ok and type(out) == "table" and out.item == "ETHER" and out.move == 2) then
+    return false, "the wire drops an item action's item -- RFC 0021 without"
+               .. " its wire fix (#2288), as in gen1recomp v0.2.61-v0.2.64"
+  end
+  return true
+end
+
 return Seams

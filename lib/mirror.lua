@@ -48,7 +48,7 @@ Mirror.ACTS = { move = true, struggle = true, locked = true, switch = true,
 -- ...and what a lockstep message riding a `link` frame may be
 Mirror.LINK_TYPES = { action = true, replace = true, bye = true, forfeit = true }
 Mirror.LINK_KINDS = { move = true, struggle = true, locked = true,
-                      switch = true, run = true }
+                      switch = true, run = true, item = true }
 
 -- a page of text holds this long before the replica turns it (a reading
 -- pace; the real player presses A whenever they like)
@@ -302,8 +302,12 @@ function Mirror.recordLink(channel, opts)
   local function relevant(m)
     return type(m) == "table" and Mirror.LINK_TYPES[m.type] == true
   end
+  -- an item action (RFC 0021) carries two more fields the replica needs:
+  -- WHICH item, and -- for the ETHERs -- which move it picked.  `index`
+  -- is already here; on an item it means the party slot it was used on.
   local function slim(m)
-    return { type = m.type, kind = m.kind, slot = m.slot, index = m.index }
+    return { type = m.type, kind = m.kind, slot = m.slot, index = m.index,
+             item = m.item, move = m.move }
   end
   if channel then
     local baseSend = channel.send

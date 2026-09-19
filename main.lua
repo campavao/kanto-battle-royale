@@ -310,6 +310,13 @@ return function(mod)
   else
     log:warn("battle royale: %s", Seams.summary())
   end
+  -- ...and whether a duel's bag opens (POK-207), which is optional: an
+  -- engine without it keeps cable rules, so this says rather than warns.
+  do
+    local items, why = Seams.linkItems()
+    log:say("battle royale: items in a duel: %s",
+            items and "yes (RFC 0021)" or ("no -- " .. tostring(why)))
+  end
 
   -- The BAG on the ground (POK-25) is our own 16x16 sheet, drawn in the
   -- item ball's four shades -- Gen 1 has no bag sprite -- and registered
@@ -2232,7 +2239,7 @@ return function(mod)
     return save
   end)
 
-  -- ------- the PvP shot clock (POK-59)
+  -- ------- the PvP shot clock (POK-59) and the bag (POK-207)
   --
   -- The engine's tournament clock (opts.turnLimit) is exactly the rule a
   -- battle royale needs: a visible countdown while the menu is yours, and
@@ -2242,11 +2249,25 @@ return function(mod)
   -- LinkState; a pre-clock engine simply ignores the extra field.
   do
     local LinkBattle = require("src.link.LinkBattle")
+    -- POK-207: the bag on the cable.  Cable rules say no items and the
+    -- engine keeps them by default -- right for the Cable Club, wrong
+    -- here, where the potions and X items on the ground are the whole
+    -- economy and the same bag works against a bot.  opts.items = true
+    -- (RFC 0021) hands the turn to the item instead of a move, on both
+    -- machines and on a spectator's replica.  Set only when the engine
+    -- under us actually carries it end to end -- LinkItems AND a wire
+    -- that keeps the item (Seams.linkItems: v0.2.61-v0.2.64 have the
+    -- first without the second, and a duel there desyncs by a heal).  An
+    -- older one ignores the field and keeps saying no, and the room door
+    -- already refuses a battle across an engine skew, so two duellists
+    -- are never split on it.
+    local hasLinkItems = Seams.linkItems()
     local function withClock(base)
       return function(game, net, opts)
         if opts and not opts.turnLimit and BR:inRound() then
           opts.turnLimit = PVP_TURN_SECONDS
         end
+        if opts and hasLinkItems and BR:inRound() then opts.items = true end
         local battle, why = base(game, net, opts)
         -- both trainers' own battle text (lib/lines.lua)
         if battle and BR:inRound() then pcall(BR.dressBattle, BR, battle, opts) end
@@ -6129,10 +6150,14 @@ return function(mod)
   -- draw if it can still hear) and close the cable, which ends ours the
   -- same way.
   local LINK_WAIT_SECONDS = 60
+  -- how often the bag watchdog below presses B once the shot clock has
+  -- run out under an open bag: often enough to unwind a picker over a
+  -- bag over a battle in about a second, slow enough to be a press
+  local BAG_BACKOUT_SECONDS = 0.35
   function BR:tickAutoResolve(game)
     if not self.matchWorld then
       self.runnerBusySince, self.battleTextSince, self.boxSince = nil, nil, nil
-      self.linkWaitSince = nil
+      self.linkWaitSince, self.bagStallSince = nil, nil
       return
     end
     local now = clock()
@@ -6196,7 +6221,7 @@ return function(mod)
       else
         self.battleTextSince = nil
       end
-      self.runnerBusySince, self.boxSince = nil, nil
+      self.runnerBusySince, self.boxSince, self.bagStallSince = nil, nil, nil
       return
     end
     self.battleTextSince = nil
@@ -6204,8 +6229,34 @@ return function(mod)
     -- player's own, and pressing into them picks things
     if self.localBattle then
       self.runnerBusySince, self.boxSince = nil, nil
+      -- ...with one exception: THE BAG IS NOT A HIDING PLACE (POK-207).
+      -- Now that a duel opens the bag (opts.items), the shot clock has
+      -- a hole in it: the engine ticks only the TOP state and counts
+      -- down only at `menu`, so a player parked in the bag stops the
+      -- clock dead and the other side sits on WAITING. until the
+      -- 60-second cable watchdog above ends the fight as a draw -- a
+      -- better stall than the one POK-59 closed.  So the bag gets the
+      -- same clock the menu has, counted here (this tick runs whatever
+      -- is on top), and past it the watchdog presses B -- never A, so
+      -- it backs out of the bag and the picker and can never choose an
+      -- item -- until the move menu is back and the engine's own clock
+      -- takes over.  Any screen the duel put up counts, not just the
+      -- bag -- the party menu the POKeMON row opens stops the same
+      -- clock.  Only a live duel in a round: a bot fight and the
+      -- Safari are nobody else's time.
+      local lbl = self.localBattle
+      if lbl.kind == "link" and not lbl.mirror and self:inRound() then
+        self.bagStallSince = self.bagStallSince or now
+        if (now - self.bagStallSince) >= PVP_TURN_SECONDS then
+          self.bagStallSince = now - PVP_TURN_SECONDS + BAG_BACKOUT_SECONDS
+          press("b")
+        end
+      else
+        self.bagStallSince = nil
+      end
       return
     end
+    self.bagStallSince = nil
 
     local ow = mod.world:overworld()
     -- a TextBox on top -- the runner's own show_text pushes one and waits
@@ -9084,15 +9135,18 @@ return function(mod)
   -- through to the vanilla read-only map, as does every other item.
   mod.hooks:wrap("item.use", function(next, game, battle, id, target, list,
                                       moveIndex, picker)
-    -- A POKe DOLL from the bag in a bot fight (POK-194).  The engine's
-    -- ItemEffects says "not the time" for a doll in any non-wild battle;
-    -- here it is the way out.  The bag closes and RUN is pressed for you:
-    -- Flee.wrapTrainer on this battle spends the doll and ends the fight,
-    -- so the bag and the RUN row are one path.  A link battle never opens
-    -- the bag at all (LinkBattle.openItems), and its RUN spends the doll
-    -- through Flee.wrap already.
-    if id == "POKE_DOLL" and battle and BR.botFight and BR:inSession()
-       and battle.kind == "trainer" and not battle.mirror and not battle.botSim
+    -- A POKe DOLL from the bag in a fight (POK-194, POK-207).  The
+    -- engine's ItemEffects says "not the time" for a doll in any
+    -- non-wild battle; here it is the way out.  The bag closes and RUN
+    -- is pressed for you -- Flee.wrapTrainer (a bot) or Flee.wrap (a
+    -- duel) spends the doll and ends the fight -- so the bag and the
+    -- RUN row are one path.  A duel only reaches here now that the bag
+    -- opens on the cable at all (opts.items, RFC 0021); before that the
+    -- RUN row was the only door and this branch never saw a link.
+    if id == "POKE_DOLL" and battle and BR:inSession()
+       and not battle.mirror and not battle.botSim
+       and ((BR.botFight and battle.kind == "trainer")
+            or (battle.kind == "link" and BR:inRound()))
        and type(battle.tryRun) == "function" then
       if list and list.close then list:close() end
       battle:tryRun()

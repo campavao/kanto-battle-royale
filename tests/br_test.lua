@@ -2351,6 +2351,109 @@ do
       eq(rep.turnCount, bA6.turnCount, "...the same number of turns as the real fight")
       eq(rep.result, "hostWin", "...to the same end")
     end
+
+    -- A POTION on the cable, and the spectator sees it (POK-207).  The
+    -- mod asks for opts.items (RFC 0021) in withClock; what it has to
+    -- carry itself is the SPECTATOR's copy of the turn -- an item
+    -- action says which item and, for the ETHERs, which move, and the
+    -- recorder used to slim both fields away.  The host leads with a
+    -- mon at a third of its HP on both machines (the packed party
+    -- carries the damage), uses a POTION the way BagMenu does, and the
+    -- guest and the replica heal their copies to the same number.
+    local ItemEffects = require("src.inventory.ItemEffects")
+    local gA7 = makeFakeGame("RATTATA")
+    local gB7 = makeFakeGame("RATTATA")
+    gB7.save.player.name = "BLUE"
+    local hurt = gA7.save.party[1]
+    hurt.hp = math.max(1, math.floor(hurt.stats.hp / 3))
+    local nA7, nB7 = Net.loopbackPair()
+    local pA7, pB7 = Protocol.packParty(gA7.save.party), Protocol.packParty(gB7.save.party)
+    local rec7 = Mirror.recordLink(nA7, { isHost = true, seed = 7777, me = pA7, foe = pB7,
+                                          myName = "RED", foeName = "BLUE" })
+    local basePoll7 = nA7.poll
+    nA7.poll = function(self_)
+      local msgs = basePoll7(self_)
+      for _, m in ipairs(msgs or {}) do rec7:onTheirs(m) end
+      return msgs
+    end
+    local bA7 = LinkBattle.newHost(gA7, nA7, { myParty = pA7, theirParty = pB7, theirName = "BLUE",
+                                               seed = 7777, items = true })
+    local bB7 = LinkBattle.newGuest(gB7, nB7, { myParty = pB7, theirParty = pA7, theirName = "RED",
+                                                seed = 7777, items = true })
+    -- what a side PRINTS is the proof it resolved the item: the HP it
+    -- ends the turn on is the heal and the guest's attack together
+    local function watchSays(b)
+      local seen = {}
+      local say, sayNext = b.say, b.sayNext
+      b.say = function(s_, text, ...) seen[#seen + 1] = text; return say(s_, text, ...) end
+      b.sayNext = function(s_, text, ...) seen[#seen + 1] = text; return sayNext(s_, text, ...) end
+      return seen
+    end
+    local function saidPotion(seen)
+      for _, text in ipairs(seen) do
+        if type(text) == "string" and text:find("POTION", 1, true) then return true end
+      end
+      return false
+    end
+    local saysB7 = watchSays(bB7)
+    gA7.stack:push(bA7)
+    gB7.stack:push(bB7)
+    local used7, moved7, hpOnGuestBefore = false, false, nil
+    for _ = 1, 20000 do
+      if not used7 and bA7.phase == "menu" and gA7.stack:top() == bA7 then
+        hpOnGuestBefore = bB7.enemy.mon.hp
+        local target = bA7.player.mon
+        eq(select(1, ItemEffects.use(Data, gA7.save, "POTION", target, bA7)), "consumed",
+           "items: the host's POTION lands on its own lockstep copy")
+        bA7:itemUsed({}, { item = "POTION", target = target })
+        used7 = true
+      end
+      if not moved7 and bB7.phase == "menu" and gB7.stack:top() == bB7 then
+        bB7:resolveTurn(bB7.player.curMoves[1])
+        moved7 = true
+      end
+      if used7 and moved7 and bA7.phase == "menu" and bB7.phase == "menu" then break end
+      Input.pressed = (bA7.phase ~= "menu") and { a = true } or {}
+      gA7.stack:update(1 / 60)
+      Input.pressed = (bB7.phase ~= "menu") and { a = true } or {}
+      gB7.stack:update(1 / 60)
+    end
+    ok(used7 and moved7, "items: the turn was spent on an item and a move")
+    ok(saidPotion(saysB7), "items: the guest prints the host's POTION")
+    eq(bB7.enemy.mon.hp, bA7.player.mon.hp,
+       "...and lands on the same HP -- the heal, then the guest's attack")
+    eq(bA7.turnCount, bB7.turnCount, "...and both machines count one turn")
+
+    local itemFrames = {}
+    for _, f in ipairs(rec7.log) do
+      if f.k == "link" and f.m and f.m.kind == "item" then itemFrames[#itemFrames + 1] = f end
+    end
+    eq(#itemFrames, 1, "the recorder logs the item as the turn's action")
+    if itemFrames[1] then
+      eq(itemFrames[1].side, "host", "...on the host's side")
+      eq(itemFrames[1].m.item, "POTION", "...and says WHICH item (the slim used to drop it)")
+      eq(itemFrames[1].m.index, 1, "...and the party slot it was used on")
+    end
+
+    local gC7 = makeFakeGame("RATTATA")
+    local rep7 = Mirror.open(gC7, rec7.log[1], { log = function() end })
+    ok(rep7 ~= nil, "a replica opens on the item duel")
+    if rep7 then
+      local saysC7 = watchSays(rep7)
+      gC7.stack:push(rep7)
+      for i = 2, #rec7.log do rep7:feed(rec7.log[i]) end
+      -- turnCount ticks up as the turn STARTS, so a break on it stops
+      -- between the POTION and the guest's attack: run the replica out
+      for _ = 1, 12000 do
+        if rep7.mirrorClosed then break end
+        Input.pressed = {}
+        gC7.stack:update(1 / 60)
+      end
+      eq(rep7.turnCount, 1, "the replica plays the item turn")
+      ok(saidPotion(saysC7), "...prints the POTION the recorder used to slim away")
+      eq(rep7.player.mon.hp, bA7.player.mon.hp,
+         "...and its copy of the host's lead ends where the real one did")
+    end
   end)
   if not hadLove then _G.love = nil end
   if not okAll then
@@ -6598,6 +6701,23 @@ do
   eq(lk.side, "guest", "a lockstep frame keeps its side")
   eq(lk.m.slot, 2, "...and the slot")
   eq(lk.m.junk, nil, "...and nothing else")
+  -- an ITEM action (POK-207, RFC 0021) carries two more fields: which
+  -- item, and -- the ETHERs -- which move it picked
+  local li = Wire.decode(Wire.mirror("m3", { n = 4, k = "link", side = "host",
+                                             m = { type = "action", kind = "item", item = "MAX_ETHER",
+                                                   index = 3, move = 2, junk = "x" } })).frame
+  eq(li.m.kind, "item", "an item action survives the door")
+  eq(li.m.item, "MAX_ETHER", "...carrying which item")
+  eq(li.m.index, 3, "...which party slot it was used on")
+  eq(li.m.move, 2, "...and which move it picked")
+  eq(li.m.junk, nil, "...and nothing else")
+  eq(Wire.decode(Wire.mirror("m3", { n = 5, k = "link", side = "host",
+                                     m = { type = "action", kind = "item", item = "POTION",
+                                           move = 9 } })).frame.m.move, 4,
+     "a move slot outside the four is clamped into it, as the switch slot is")
+  eq(Wire.decode(Wire.mirror("m3", { n = 6, k = "link", side = "host",
+                                     m = { type = "action", kind = "item", item = 7 } })).frame.m.item, nil,
+     "...and an item id that is not a name")
 
   -- and what the door refuses
   ok(not Wire.decode({ t = "bmir", b = "m", m = { n = 1, k = "start", kind = "safari", me = {}, foe = {} } }),

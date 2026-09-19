@@ -86,4 +86,57 @@ do
   Seams.check = realCheck
 end
 
+-- Items on the cable (RFC 0021, POK-207) are asked for, not required: the
+-- mod sets opts.items only when Seams.linkItems() says the engine carries
+-- an item action end to end.  This checkout has both halves (#2284 and the
+-- wire fix #2288), so the answer is yes -- and it must not leak into the
+-- required list, where a missing optional seam would shout at boot.
+do
+  local yes, why = Seams.linkItems()
+  T.check(yes == true, "this engine carries an item on the cable: " .. tostring(why))
+  T.eq(why, nil, "...with no excuse attached")
+  for _, n in ipairs(Seams.check().native) do
+    T.check(not n:find("0021", 1, true), "RFC 0021 is not a required seam: " .. n)
+  end
+end
+
+-- gen1recomp v0.2.61-v0.2.64: LinkItems shipped, the wire fix did not.
+-- Their SCHEMAS.action rebuilds an action from kind/slot/index alone, so
+-- the item never reaches the peer and the duel desyncs by a heal.  Put
+-- that schema back and the answer has to be NO, naming why -- which is
+-- the whole reason the probe asks the wire rather than looking for the
+-- module.
+do
+  local Wire = require("src.link.Wire")
+  local real = Wire.SCHEMAS.action
+  Wire.SCHEMAS.action = function(m)
+    return {
+      kind = Wire.str(m.kind, "", 64),
+      slot = Wire.num(m.slot, nil, 1, 4),
+      index = Wire.num(m.index, nil, 1, 6),
+    }
+  end
+  local yes, why = Seams.linkItems()
+  Wire.SCHEMAS.action = real
+  T.check(not yes, "a wire that strips the item is NOT items on the cable")
+  T.check(type(why) == "string" and why:find("#2288", 1, true) ~= nil,
+          "...and the boot line names the missing fix: " .. tostring(why))
+  T.check(Seams.linkItems() == true, "...and the real schema is back afterwards")
+end
+
+-- An engine before RFC 0021 at all: no LinkItems module.  Still no, and
+-- still not an error -- the ITEM row just keeps cable rules.
+do
+  local saved = package.loaded["src.link.LinkItems"]
+  package.loaded["src.link.LinkItems"] = nil
+  package.preload["src.link.LinkItems"] = function() error("not in this build") end
+  local yes, why = Seams.linkItems()
+  package.preload["src.link.LinkItems"] = nil
+  package.loaded["src.link.LinkItems"] = saved
+  T.check(not yes, "no LinkItems is no items on the cable")
+  T.check(type(why) == "string" and why:find("#2284", 1, true) ~= nil,
+          "...and says the engine predates it: " .. tostring(why))
+  T.check(Seams.ok(), "...without making the required seams fail")
+end
+
 T.finish("battle royale seams")
