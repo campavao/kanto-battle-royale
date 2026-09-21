@@ -1,7 +1,96 @@
 {
- "readAt": "2026-09-20T23:26:34.830Z",
+ "readAt": "2026-09-21T01:30:28.850Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "9G6ZTF",
+   "at": "2026-09-21T00:25:36.897Z",
+   "end": "2026-09-21T00:25:38.864Z",
+   "secs": 2,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "a76f46c4"
+   ],
+   "played": []
+  },
+  {
+   "code": "FPS6HY",
+   "at": "2026-09-20T23:57:19.571Z",
+   "end": "2026-09-21T00:25:30.446Z",
+   "secs": 1691,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "a76f46c4"
+   ],
+   "played": [
+    {
+     "t": "2026-09-21T00:00:00.974Z",
+     "mode": "daily",
+     "trainers": 1,
+     "watching": 0,
+     "secs": 1528
+    }
+   ],
+   "exact": true
+  },
+  {
+   "code": "T9PXYN",
+   "at": "2026-09-20T23:42:00.594Z",
+   "end": "2026-09-20T23:42:06.333Z",
+   "secs": 6,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "beb80c3b"
+   ],
+   "played": []
+  },
+  {
+   "code": "28TGHS",
+   "at": "2026-09-20T23:41:42.363Z",
+   "end": "2026-09-20T23:41:57.546Z",
+   "secs": 15,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "beb80c3b"
+   ],
+   "played": []
+  },
   {
    "code": "UJMY8V",
    "at": "2026-09-20T23:23:20.074Z",
@@ -19856,7 +19945,7 @@
   {
    "id": "a76f46c4",
    "first": "2026-09-02T17:34:57.607Z",
-   "last": "2026-09-16T23:51:24.812Z",
+   "last": "2026-09-21T00:25:37.026Z",
    "since": "2026-08-27",
    "versions": [
     "0.43.0",
@@ -19864,11 +19953,12 @@
     "0.45.0",
     "0.47.0",
     "0.50.1",
-    "0.52.0"
+    "0.52.0",
+    "0.53.0"
    ],
    "solo": 158,
-   "checkins": 28,
-   "v": "0.52.0"
+   "checkins": 30,
+   "v": "0.53.0"
   },
   {
    "id": "1fde7048",
@@ -20946,13 +21036,13 @@
   {
    "id": "beb80c3b",
    "first": "2026-09-20T23:23:20.284Z",
-   "last": "2026-09-20T23:23:20.284Z",
+   "last": "2026-09-20T23:42:00.742Z",
    "since": "2026-09-20",
    "versions": [
     "0.53.0"
    ],
    "solo": 0,
-   "checkins": 1,
+   "checkins": 3,
    "v": "0.53.0"
   }
  ],
