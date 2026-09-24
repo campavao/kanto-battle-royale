@@ -1,12 +1,12 @@
 {
- "readAt": "2026-09-24T17:28:34.138Z",
+ "readAt": "2026-09-24T20:42:50.434Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
   {
    "code": "F5C8TT",
    "at": "2026-09-24T17:07:19.277Z",
-   "end": null,
-   "secs": null,
+   "end": "2026-09-24T17:32:14.567Z",
+   "secs": 1495,
    "door": "open",
    "mode": "quick",
    "humans": 1,
@@ -26,10 +26,9 @@
      "mode": "quick",
      "trainers": 1,
      "watching": 0,
-     "secs": null
+     "secs": 1361
     }
    ],
-   "live": true,
    "exact": true
   },
   {
