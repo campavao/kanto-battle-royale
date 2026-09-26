@@ -1,7 +1,77 @@
 {
- "readAt": "2026-09-25T21:19:43.698Z",
+ "readAt": "2026-09-26T00:03:17.255Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "TJ65KT",
+   "at": "2026-09-25T23:56:32.383Z",
+   "end": null,
+   "secs": null,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "c9a22783"
+   ],
+   "played": [
+    {
+     "t": "2026-09-26T00:00:01.167Z",
+     "mode": "daily",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "live": true,
+   "exact": true
+  },
+  {
+   "code": "6P96A7",
+   "at": "2026-09-25T23:53:00.321Z",
+   "end": "2026-09-25T23:56:22.402Z",
+   "secs": 202,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "c9a22783"
+   ],
+   "played": []
+  },
+  {
+   "code": "TVHZRZ",
+   "at": "2026-09-25T23:50:31.892Z",
+   "end": "2026-09-25T23:51:40.307Z",
+   "secs": 68,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "c9a22783"
+   ],
+   "played": []
+  },
   {
    "code": "B5ZD4G",
    "at": "2026-09-25T19:54:31.004Z",
@@ -21477,13 +21547,13 @@
   {
    "id": "c9a22783",
    "first": "2026-09-13T19:55:27.842Z",
-   "last": "2026-09-25T19:54:31.174Z",
+   "last": "2026-09-25T23:56:32.624Z",
    "since": "2026-09-13",
    "versions": [
     "0.50.1"
    ],
    "solo": 5,
-   "checkins": 24,
+   "checkins": 27,
    "v": "0.50.1"
   },
   {
