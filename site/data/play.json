@@ -1,7 +1,57 @@
 {
- "readAt": "2026-09-27T01:41:58.132Z",
+ "readAt": "2026-09-27T23:48:46.034Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "U8F9PD",
+   "at": "2026-09-27T23:40:08.324Z",
+   "end": null,
+   "secs": null,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "c9a22783"
+   ],
+   "played": [
+    {
+     "t": "2026-09-27T23:41:08.563Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "live": true,
+   "exact": true
+  },
+  {
+   "code": "9722S3",
+   "at": "2026-09-27T23:39:45.307Z",
+   "end": "2026-09-27T23:39:49.981Z",
+   "secs": 5,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "c9a22783"
+   ],
+   "played": []
+  },
   {
    "code": "2PPP72",
    "at": "2026-09-27T00:28:41.324Z",
@@ -21754,13 +21804,13 @@
   {
    "id": "c9a22783",
    "first": "2026-09-13T19:55:27.842Z",
-   "last": "2026-09-25T23:56:32.624Z",
+   "last": "2026-09-27T23:40:08.448Z",
    "since": "2026-09-13",
    "versions": [
     "0.50.1"
    ],
    "solo": 5,
-   "checkins": 27,
+   "checkins": 29,
    "v": "0.50.1"
   },
   {
