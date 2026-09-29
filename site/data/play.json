@@ -1,7 +1,134 @@
 {
- "readAt": "2026-09-28T18:41:44.426Z",
+ "readAt": "2026-09-29T09:37:21.156Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "6NXHEG",
+   "at": "2026-09-29T03:47:35.708Z",
+   "end": "2026-09-29T04:11:52.665Z",
+   "secs": 1457,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "3dd643c6"
+   ],
+   "played": [
+    {
+     "t": "2026-09-29T03:48:35.998Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": 1389
+    }
+   ],
+   "exact": true
+  },
+  {
+   "code": "5XUUCS",
+   "at": "2026-09-29T03:47:05.391Z",
+   "end": "2026-09-29T03:47:08.060Z",
+   "secs": 3,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "3dd643c6"
+   ],
+   "played": []
+  },
+  {
+   "code": "VK6596",
+   "at": "2026-09-29T03:43:05.123Z",
+   "end": "2026-09-29T03:47:02.415Z",
+   "secs": 237,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "3dd643c6"
+   ],
+   "played": [
+    {
+     "t": "2026-09-29T03:44:05.377Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "exact": true
+  },
+  {
+   "code": "M2GRDK",
+   "at": "2026-09-29T03:42:57.803Z",
+   "end": "2026-09-29T03:43:00.545Z",
+   "secs": 3,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "3dd643c6"
+   ],
+   "played": []
+  },
+  {
+   "code": "SGTS9S",
+   "at": "2026-09-29T03:35:56.837Z",
+   "end": "2026-09-29T03:42:09.915Z",
+   "secs": 373,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "3dd643c6"
+   ],
+   "played": [
+    {
+     "t": "2026-09-29T03:36:57.296Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "exact": true
+  },
   {
    "code": "D4CDJN",
    "at": "2026-09-28T16:52:51.284Z",
@@ -21934,6 +22061,18 @@
    ],
    "solo": 0,
    "checkins": 1,
+   "v": "0.53.0"
+  },
+  {
+   "id": "3dd643c6",
+   "first": "2026-09-29T03:35:57.040Z",
+   "last": "2026-09-29T03:47:35.911Z",
+   "since": "2026-09-28",
+   "versions": [
+    "0.53.0"
+   ],
+   "solo": 0,
+   "checkins": 5,
    "v": "0.53.0"
   }
  ],
