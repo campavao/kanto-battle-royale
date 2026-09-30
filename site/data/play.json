@@ -1,7 +1,36 @@
 {
- "readAt": "2026-09-30T11:22:43.626Z",
+ "readAt": "2026-09-30T16:56:43.358Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "QR6Q2B",
+   "at": "2026-09-30T13:19:00.134Z",
+   "end": "2026-09-30T13:43:08.303Z",
+   "secs": 1448,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "4eaed3fc"
+   ],
+   "played": [
+    {
+     "t": "2026-09-30T13:20:00.428Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": 1381
+    }
+   ],
+   "exact": true
+  },
   {
    "code": "A4TP8M",
    "at": "2026-09-30T11:14:31.923Z",
@@ -22536,6 +22565,18 @@
    ],
    "solo": 1,
    "checkins": 6,
+   "v": "0.53.0"
+  },
+  {
+   "id": "4eaed3fc",
+   "first": "2026-09-30T13:19:00.334Z",
+   "last": "2026-09-30T13:19:00.334Z",
+   "since": "2026-09-30",
+   "versions": [
+    "0.53.0"
+   ],
+   "solo": 0,
+   "checkins": 1,
    "v": "0.53.0"
   }
  ],
