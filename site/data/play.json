@@ -1,12 +1,47 @@
 {
- "readAt": "2026-10-03T04:40:39.349Z",
+ "readAt": "2026-10-03T10:05:02.985Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
   {
+   "code": "PXA2US",
+   "at": "2026-10-03T04:48:07.976Z",
+   "end": "2026-10-03T04:53:46.968Z",
+   "secs": 339,
+   "door": "open",
+   "mode": "host",
+   "humans": 2,
+   "together": 2,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [
+    {
+     "t": "2026-10-03T04:48:52.943Z",
+     "how": "code"
+    }
+   ],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "cfcf8280",
+    "88641457"
+   ],
+   "played": [
+    {
+     "t": "2026-10-03T04:49:57.144Z",
+     "mode": "host",
+     "trainers": 2,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "exact": true
+  },
+  {
    "code": "NVMR28",
    "at": "2026-10-03T04:19:19.574Z",
-   "end": null,
-   "secs": null,
+   "end": "2026-10-03T04:47:34.213Z",
+   "secs": 1695,
    "door": "open",
    "mode": "host",
    "humans": 2,
@@ -32,10 +67,9 @@
      "mode": "host",
      "trainers": 2,
      "watching": 0,
-     "secs": null
+     "secs": 1302
     }
    ],
-   "live": true,
    "exact": true
   },
   {
@@ -23068,25 +23102,25 @@
   {
    "id": "cfcf8280",
    "first": "2026-10-03T03:52:49.448Z",
-   "last": "2026-10-03T04:19:19.695Z",
+   "last": "2026-10-03T04:48:08.092Z",
    "since": "2026-09-18",
    "versions": [
     "0.53.0"
    ],
    "solo": 8,
-   "checkins": 3,
+   "checkins": 4,
    "v": "0.53.0"
   },
   {
    "id": "88641457",
    "first": "2026-10-03T03:53:57.760Z",
-   "last": "2026-10-03T04:19:53.253Z",
+   "last": "2026-10-03T04:48:53.067Z",
    "since": "2026-10-02",
    "versions": [
     "0.53.0"
    ],
    "solo": 0,
-   "checkins": 3,
+   "checkins": 4,
    "v": "0.53.0"
   }
  ],
