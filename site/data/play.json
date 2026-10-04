@@ -1,7 +1,86 @@
 {
- "readAt": "2026-10-03T10:05:02.985Z",
+ "readAt": "2026-10-04T00:05:16.453Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "CKAGY5",
+   "at": "2026-10-04T00:02:32.640Z",
+   "end": null,
+   "secs": null,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "680f9898"
+   ],
+   "played": [
+    {
+     "t": "2026-10-04T00:03:33.096Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "live": true,
+   "exact": true
+  },
+  {
+   "code": "VEYTRV",
+   "at": "2026-10-04T00:02:17.336Z",
+   "end": "2026-10-04T00:02:25.950Z",
+   "secs": 9,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "680f9898"
+   ],
+   "played": []
+  },
+  {
+   "code": "NGARTP",
+   "at": "2026-10-03T23:57:00.785Z",
+   "end": "2026-10-04T00:02:14.088Z",
+   "secs": 313,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "680f9898"
+   ],
+   "played": [
+    {
+     "t": "2026-10-04T00:00:00.801Z",
+     "mode": "daily",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "exact": true
+  },
   {
    "code": "PXA2US",
    "at": "2026-10-03T04:48:07.976Z",
@@ -22545,7 +22624,7 @@
   {
    "id": "680f9898",
    "first": "2026-09-11T03:04:32.479Z",
-   "last": "2026-10-02T23:58:10.872Z",
+   "last": "2026-10-04T00:02:32.880Z",
    "since": "2026-09-10",
    "versions": [
     "0.49.0",
@@ -22556,7 +22635,7 @@
     "0.53.0"
    ],
    "solo": 4,
-   "checkins": 199,
+   "checkins": 202,
    "v": "0.53.0"
   },
   {
