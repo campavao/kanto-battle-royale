@@ -1,12 +1,32 @@
 {
- "readAt": "2026-10-04T00:05:16.453Z",
+ "readAt": "2026-10-04T05:57:26.001Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
   {
+   "code": "49YBVZ",
+   "at": "2026-10-04T03:17:06.797Z",
+   "end": "2026-10-04T03:17:08.383Z",
+   "secs": 2,
+   "door": "open",
+   "mode": "host",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "3f633198"
+   ],
+   "played": []
+  },
+  {
    "code": "CKAGY5",
    "at": "2026-10-04T00:02:32.640Z",
-   "end": null,
-   "secs": null,
+   "end": "2026-10-04T00:24:05.028Z",
+   "secs": 1292,
    "door": "open",
    "mode": "quick",
    "humans": 1,
@@ -29,7 +49,6 @@
      "secs": null
     }
    ],
-   "live": true,
    "exact": true
   },
   {
@@ -23201,9 +23220,27 @@
    "solo": 0,
    "checkins": 4,
    "v": "0.53.0"
+  },
+  {
+   "id": "3f633198",
+   "first": "2026-10-04T03:17:06.932Z",
+   "last": "2026-10-04T03:17:06.932Z",
+   "since": "2026-10-04",
+   "versions": [
+    "0.53.0"
+   ],
+   "solo": 1,
+   "checkins": 1,
+   "v": "0.53.0"
   }
  ],
  "solo": [
+  {
+   "t": "2026-10-04T03:17:06.932Z",
+   "install": "3f633198",
+   "n": 1,
+   "v": "0.53.0"
+  },
   {
    "t": "2026-10-03T03:52:49.448Z",
    "install": "cfcf8280",
