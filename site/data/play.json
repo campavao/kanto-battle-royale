@@ -1,12 +1,12 @@
 {
- "readAt": "2026-10-04T19:57:42.188Z",
+ "readAt": "2026-10-04T23:00:03.337Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
   {
    "code": "EFDCMN",
    "at": "2026-10-04T19:49:29.607Z",
-   "end": null,
-   "secs": null,
+   "end": "2026-10-04T20:17:34.801Z",
+   "secs": 1685,
    "door": "open",
    "mode": "quick",
    "humans": 1,
@@ -26,10 +26,9 @@
      "mode": "quick",
      "trainers": 1,
      "watching": 0,
-     "secs": null
+     "secs": 1617
     }
    ],
-   "live": true,
    "exact": true
   },
   {
