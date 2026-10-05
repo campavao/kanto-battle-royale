@@ -1,7 +1,86 @@
 {
- "readAt": "2026-10-05T01:52:04.548Z",
+ "readAt": "2026-10-05T08:42:23.227Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "2967VR",
+   "at": "2026-10-05T08:39:34.178Z",
+   "end": null,
+   "secs": null,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "0347af8d"
+   ],
+   "played": [
+    {
+     "t": "2026-10-05T08:40:34.397Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "live": true,
+   "exact": true
+  },
+  {
+   "code": "DPAMQ2",
+   "at": "2026-10-05T08:39:27.221Z",
+   "end": "2026-10-05T08:39:30.170Z",
+   "secs": 3,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "0347af8d"
+   ],
+   "played": []
+  },
+  {
+   "code": "4NUZ4H",
+   "at": "2026-10-05T08:28:22.810Z",
+   "end": "2026-10-05T08:38:59.930Z",
+   "secs": 637,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "0347af8d"
+   ],
+   "played": [
+    {
+     "t": "2026-10-05T08:29:23.093Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "exact": true
+  },
   {
    "code": "F3PKGW",
    "at": "2026-10-05T00:49:31.775Z",
@@ -22921,14 +23000,15 @@
   {
    "id": "0347af8d",
    "first": "2026-09-12T04:58:58.395Z",
-   "last": "2026-09-13T10:18:51.122Z",
+   "last": "2026-10-05T08:39:34.310Z",
    "since": "2026-09-11",
    "versions": [
-    "0.50.1"
+    "0.50.1",
+    "0.53.0"
    ],
-   "solo": 4,
-   "checkins": 37,
-   "v": "0.50.1"
+   "solo": 6,
+   "checkins": 40,
+   "v": "0.53.0"
   },
   {
    "id": "23226e9d",
@@ -23372,6 +23452,12 @@
   }
  ],
  "solo": [
+  {
+   "t": "2026-10-05T08:28:22.945Z",
+   "install": "0347af8d",
+   "n": 2,
+   "v": "0.53.0"
+  },
   {
    "t": "2026-10-04T03:17:06.932Z",
    "install": "3f633198",
