@@ -1,12 +1,72 @@
 {
- "readAt": "2026-10-05T17:26:49.211Z",
+ "readAt": "2026-10-05T23:19:32.296Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
   {
+   "code": "5Z4TC5",
+   "at": "2026-10-05T22:41:06.083Z",
+   "end": "2026-10-05T22:41:24.188Z",
+   "secs": 18,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "3f633198"
+   ],
+   "played": []
+  },
+  {
+   "code": "NYJSRQ",
+   "at": "2026-10-05T18:04:29.900Z",
+   "end": "2026-10-05T18:04:38.365Z",
+   "secs": 8,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.47.0"
+   ],
+   "installs": [
+    "0df3a942"
+   ],
+   "played": []
+  },
+  {
+   "code": "ARS24C",
+   "at": "2026-10-05T17:46:58.385Z",
+   "end": "2026-10-05T17:47:05.971Z",
+   "secs": 8,
+   "door": "open",
+   "mode": "host",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "7e3b11c5"
+   ],
+   "played": []
+  },
+  {
    "code": "VQ73NM",
    "at": "2026-10-05T17:21:14.967Z",
-   "end": null,
-   "secs": null,
+   "end": "2026-10-05T17:46:52.343Z",
+   "secs": 1537,
    "door": "open",
    "mode": "quick",
    "humans": 1,
@@ -26,10 +86,9 @@
      "mode": "quick",
      "trainers": 1,
      "watching": 0,
-     "secs": null
+     "secs": 1460
     }
    ],
-   "live": true,
    "exact": true
   },
   {
@@ -22364,13 +22423,13 @@
   {
    "id": "0df3a942",
    "first": "2026-09-06T22:48:23.451Z",
-   "last": "2026-09-16T16:09:32.865Z",
+   "last": "2026-10-05T18:04:30.105Z",
    "since": "2026-09-06",
    "versions": [
     "0.47.0"
    ],
    "solo": 0,
-   "checkins": 6,
+   "checkins": 7,
    "v": "0.47.0"
   },
   {
@@ -23083,7 +23142,7 @@
   {
    "id": "7e3b11c5",
    "first": "2026-09-12T17:25:31.975Z",
-   "last": "2026-10-05T17:21:15.128Z",
+   "last": "2026-10-05T17:46:58.545Z",
    "since": "2026-09-12",
    "versions": [
     "0.50.1",
@@ -23093,7 +23152,7 @@
     "0.53.0"
    ],
    "solo": 1,
-   "checkins": 44,
+   "checkins": 45,
    "v": "0.53.0"
   },
   {
@@ -23475,13 +23534,13 @@
   {
    "id": "3f633198",
    "first": "2026-10-04T03:17:06.932Z",
-   "last": "2026-10-04T03:17:06.932Z",
+   "last": "2026-10-05T22:41:06.291Z",
    "since": "2026-10-04",
    "versions": [
     "0.53.0"
    ],
-   "solo": 1,
-   "checkins": 1,
+   "solo": 2,
+   "checkins": 2,
    "v": "0.53.0"
   },
   {
@@ -23510,6 +23569,12 @@
   }
  ],
  "solo": [
+  {
+   "t": "2026-10-05T22:41:06.291Z",
+   "install": "3f633198",
+   "n": 1,
+   "v": "0.53.0"
+  },
   {
    "t": "2026-10-05T10:39:10.931Z",
    "install": "0347af8d",
