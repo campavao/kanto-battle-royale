@@ -1,7 +1,36 @@
 {
- "readAt": "2026-10-06T16:56:52.293Z",
+ "readAt": "2026-10-06T21:33:59.493Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "SXGXTU",
+   "at": "2026-10-06T21:16:45.711Z",
+   "end": "2026-10-06T21:18:10.715Z",
+   "secs": 85,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "13650ff0"
+   ],
+   "played": [
+    {
+     "t": "2026-10-06T21:17:46.417Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "exact": true
+  },
   {
    "code": "SVT3E4",
    "at": "2026-10-06T15:56:10.503Z",
@@ -23796,6 +23825,18 @@
     "0.53.0"
    ],
    "solo": 3,
+   "checkins": 1,
+   "v": "0.53.0"
+  },
+  {
+   "id": "13650ff0",
+   "first": "2026-10-06T21:16:45.872Z",
+   "last": "2026-10-06T21:16:45.872Z",
+   "since": "2026-10-06",
+   "versions": [
+    "0.53.0"
+   ],
+   "solo": 0,
    "checkins": 1,
    "v": "0.53.0"
   }
