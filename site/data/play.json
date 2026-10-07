@@ -1,7 +1,96 @@
 {
- "readAt": "2026-10-07T07:16:26.661Z",
+ "readAt": "2026-10-07T20:12:28.205Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "FCT679",
+   "at": "2026-10-07T18:14:23.785Z",
+   "end": "2026-10-07T18:35:40.576Z",
+   "secs": 1277,
+   "door": "open",
+   "mode": "host",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "c03b7419"
+   ],
+   "played": [
+    {
+     "t": "2026-10-07T18:14:26.796Z",
+     "mode": "host",
+     "trainers": 1,
+     "watching": 0,
+     "secs": 1213
+    }
+   ],
+   "exact": true
+  },
+  {
+   "code": "GMR75M",
+   "at": "2026-10-07T18:13:45.679Z",
+   "end": "2026-10-07T18:14:01.787Z",
+   "secs": 16,
+   "door": "open",
+   "mode": "host",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "c03b7419"
+   ],
+   "played": []
+  },
+  {
+   "code": "KXF5C9",
+   "at": "2026-10-07T18:13:41.960Z",
+   "end": "2026-10-07T18:13:42.980Z",
+   "secs": 1,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "c03b7419"
+   ],
+   "played": []
+  },
+  {
+   "code": "TQHJ8V",
+   "at": "2026-10-07T18:13:38.979Z",
+   "end": "2026-10-07T18:13:40.135Z",
+   "secs": 1,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "c03b7419"
+   ],
+   "played": []
+  },
   {
    "code": "SXGXTU",
    "at": "2026-10-06T21:16:45.711Z",
@@ -23280,15 +23369,16 @@
   {
    "id": "c03b7419",
    "first": "2026-09-12T00:10:13.287Z",
-   "last": "2026-10-01T17:44:24.506Z",
+   "last": "2026-10-07T18:14:23.814Z",
    "since": "2026-09-11",
    "versions": [
     "0.50.0",
-    "0.52.0"
+    "0.52.0",
+    "0.53.0"
    ],
    "solo": 2,
-   "checkins": 35,
-   "v": "0.52.0"
+   "checkins": 39,
+   "v": "0.53.0"
   },
   {
    "id": "09fb9f29",
@@ -24396,6 +24486,11 @@
   }
  ],
  "bounces": [
+  {
+   "t": "2026-10-07T18:14:10.032Z",
+   "tried": "code",
+   "secs": 0
+  },
   {
    "t": "2026-10-06T04:11:56.064Z",
    "tried": "quick",
