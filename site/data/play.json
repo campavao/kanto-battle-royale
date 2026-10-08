@@ -1,7 +1,76 @@
 {
- "readAt": "2026-10-08T13:53:42.133Z",
+ "readAt": "2026-10-08T23:59:01.820Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "748HJM",
+   "at": "2026-10-08T22:55:44.022Z",
+   "end": "2026-10-08T23:00:59.079Z",
+   "secs": 315,
+   "door": "open",
+   "mode": "host",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "7e3b11c5"
+   ],
+   "played": [
+    {
+     "t": "2026-10-08T22:56:03.938Z",
+     "mode": "host",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "exact": true
+  },
+  {
+   "code": "22BDG5",
+   "at": "2026-10-08T22:55:38.190Z",
+   "end": "2026-10-08T22:55:41.388Z",
+   "secs": 3,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "7e3b11c5"
+   ],
+   "played": []
+  },
+  {
+   "code": "A9HUAR",
+   "at": "2026-10-08T22:55:33.520Z",
+   "end": "2026-10-08T22:55:36.528Z",
+   "secs": 3,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "7e3b11c5"
+   ],
+   "played": []
+  },
   {
    "code": "CDZ52R",
    "at": "2026-10-08T11:31:37.264Z",
@@ -23486,7 +23555,7 @@
   {
    "id": "7e3b11c5",
    "first": "2026-09-12T17:25:31.975Z",
-   "last": "2026-10-06T15:21:13.745Z",
+   "last": "2026-10-08T22:55:44.146Z",
    "since": "2026-09-12",
    "versions": [
     "0.50.1",
@@ -23496,7 +23565,7 @@
     "0.53.0"
    ],
    "solo": 1,
-   "checkins": 46,
+   "checkins": 49,
    "v": "0.53.0"
   },
   {
