@@ -1,7 +1,67 @@
 {
- "readAt": "2026-10-10T02:22:12.960Z",
+ "readAt": "2026-10-11T01:43:00.598Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "Z85WXN",
+   "at": "2026-10-10T23:42:00.910Z",
+   "end": "2026-10-10T23:42:24.534Z",
+   "secs": 24,
+   "door": "open",
+   "mode": "host",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "7e3b11c5"
+   ],
+   "played": []
+  },
+  {
+   "code": "DCN42Z",
+   "at": "2026-10-10T23:41:55.881Z",
+   "end": "2026-10-10T23:41:58.797Z",
+   "secs": 3,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "7e3b11c5"
+   ],
+   "played": []
+  },
+  {
+   "code": "XPK723",
+   "at": "2026-10-10T23:41:46.002Z",
+   "end": "2026-10-10T23:41:47.290Z",
+   "secs": 1,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "7e3b11c5"
+   ],
+   "played": []
+  },
   {
    "code": "T9D5E2",
    "at": "2026-10-09T23:59:05.064Z",
@@ -23713,7 +23773,7 @@
   {
    "id": "7e3b11c5",
    "first": "2026-09-12T17:25:31.975Z",
-   "last": "2026-10-08T22:55:44.146Z",
+   "last": "2026-10-10T23:42:01.029Z",
    "since": "2026-09-12",
    "versions": [
     "0.50.1",
@@ -23723,7 +23783,7 @@
     "0.53.0"
    ],
    "solo": 1,
-   "checkins": 49,
+   "checkins": 52,
    "v": "0.53.0"
   },
   {
