@@ -1,7 +1,83 @@
 {
- "readAt": "2026-10-12T02:26:20.844Z",
+ "readAt": "2026-10-12T09:40:11.871Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "82BFS4",
+   "at": "2026-10-12T04:38:13.623Z",
+   "end": "2026-10-12T04:38:15.440Z",
+   "secs": 2,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "914b53ff"
+   ],
+   "played": []
+  },
+  {
+   "code": "MYGUDG",
+   "at": "2026-10-12T04:20:49.386Z",
+   "end": "2026-10-12T05:09:33.882Z",
+   "secs": 2924,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 2,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "8df61a1b"
+   ],
+   "played": [
+    {
+     "t": "2026-10-12T04:21:49.584Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": 1390
+    },
+    {
+     "t": "2026-10-12T04:46:00.435Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": 1406
+    }
+   ],
+   "exact": true
+  },
+  {
+   "code": "ZRR3NY",
+   "at": "2026-10-12T02:31:06.533Z",
+   "end": "2026-10-12T02:31:26.233Z",
+   "secs": 20,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "914b53ff"
+   ],
+   "played": []
+  },
   {
    "code": "ZPZFAS",
    "at": "2026-10-12T01:48:54.208Z",
@@ -23783,15 +23859,16 @@
   {
    "id": "914b53ff",
    "first": "2026-09-12T02:04:29.327Z",
-   "last": "2026-09-13T07:09:23.180Z",
+   "last": "2026-10-12T04:38:13.801Z",
    "since": "2026-09-11",
    "versions": [
     "0.50.0",
-    "0.50.1"
+    "0.50.1",
+    "0.53.0"
    ],
    "solo": 3,
-   "checkins": 6,
-   "v": "0.50.1"
+   "checkins": 8,
+   "v": "0.53.0"
   },
   {
    "id": "e813c8a8",
@@ -23897,13 +23974,13 @@
   {
    "id": "8df61a1b",
    "first": "2026-09-13T02:28:34.600Z",
-   "last": "2026-09-15T03:52:38.431Z",
+   "last": "2026-10-12T04:20:49.502Z",
    "since": "2026-09-12",
    "versions": [
     "0.50.1"
    ],
    "solo": 3,
-   "checkins": 18,
+   "checkins": 19,
    "v": "0.50.1"
   },
   {
@@ -24916,6 +24993,11 @@
   }
  ],
  "bounces": [
+  {
+   "t": "2026-10-12T04:38:04.515Z",
+   "tried": "quick",
+   "secs": 9
+  },
   {
    "t": "2026-10-07T18:14:10.032Z",
    "tried": "code",
