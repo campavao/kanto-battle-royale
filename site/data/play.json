@@ -1,7 +1,47 @@
 {
- "readAt": "2026-10-11T23:05:33.809Z",
+ "readAt": "2026-10-12T02:26:20.844Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "ZPZFAS",
+   "at": "2026-10-12T01:48:54.208Z",
+   "end": "2026-10-12T01:49:12.440Z",
+   "secs": 18,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "aadb5771"
+   ],
+   "played": []
+  },
+  {
+   "code": "SP5JWR",
+   "at": "2026-10-12T01:48:28.031Z",
+   "end": "2026-10-12T01:48:47.105Z",
+   "secs": 19,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "aadb5771"
+   ],
+   "played": []
+  },
   {
    "code": "HUHUW3",
    "at": "2026-10-11T19:55:05.311Z",
@@ -24301,9 +24341,27 @@
    "solo": 0,
    "checkins": 1,
    "v": "0.53.0"
+  },
+  {
+   "id": "aadb5771",
+   "first": "2026-10-12T01:48:28.181Z",
+   "last": "2026-10-12T01:48:54.471Z",
+   "since": "2026-10-11",
+   "versions": [
+    "0.53.0"
+   ],
+   "solo": 4,
+   "checkins": 2,
+   "v": "0.53.0"
   }
  ],
  "solo": [
+  {
+   "t": "2026-10-12T01:48:28.181Z",
+   "install": "aadb5771",
+   "n": 4,
+   "v": "0.53.0"
+  },
   {
    "t": "2026-10-06T15:56:10.740Z",
    "install": "7f816e2a",
