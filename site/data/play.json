@@ -1,7 +1,63 @@
 {
- "readAt": "2026-10-12T09:40:11.871Z",
+ "readAt": "2026-10-12T19:21:41.983Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "DE7CRX",
+   "at": "2026-10-12T16:10:20.042Z",
+   "end": "2026-10-12T16:50:35.072Z",
+   "secs": 2415,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 2,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "aadb5771"
+   ],
+   "played": [
+    {
+     "t": "2026-10-12T16:11:20.243Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": 1137
+    },
+    {
+     "t": "2026-10-12T16:31:20.655Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "exact": true
+  },
+  {
+   "code": "CG6WPR",
+   "at": "2026-10-12T16:09:25.078Z",
+   "end": "2026-10-12T16:09:56.318Z",
+   "secs": 31,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "aadb5771"
+   ],
+   "played": []
+  },
   {
    "code": "82BFS4",
    "at": "2026-10-12T04:38:13.623Z",
@@ -24422,17 +24478,23 @@
   {
    "id": "aadb5771",
    "first": "2026-10-12T01:48:28.181Z",
-   "last": "2026-10-12T01:48:54.471Z",
+   "last": "2026-10-12T16:10:20.177Z",
    "since": "2026-10-11",
    "versions": [
     "0.53.0"
    ],
-   "solo": 4,
-   "checkins": 2,
+   "solo": 7,
+   "checkins": 4,
    "v": "0.53.0"
   }
  ],
  "solo": [
+  {
+   "t": "2026-10-12T16:09:25.223Z",
+   "install": "aadb5771",
+   "n": 3,
+   "v": "0.53.0"
+  },
   {
    "t": "2026-10-12T01:48:28.181Z",
    "install": "aadb5771",
