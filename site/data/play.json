@@ -1,7 +1,125 @@
 {
- "readAt": "2026-10-12T19:21:41.983Z",
+ "readAt": "2026-10-13T01:34:20.266Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "V2PT39",
+   "at": "2026-10-12T23:54:45.973Z",
+   "end": "2026-10-13T00:01:17.424Z",
+   "secs": 391,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "aadb5771"
+   ],
+   "played": [
+    {
+     "t": "2026-10-13T00:00:00.796Z",
+     "mode": "daily",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "exact": true
+  },
+  {
+   "code": "G7M3ET",
+   "at": "2026-10-12T23:54:15.842Z",
+   "end": "2026-10-12T23:54:37.911Z",
+   "secs": 22,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "aadb5771"
+   ],
+   "played": []
+  },
+  {
+   "code": "EJAA95",
+   "at": "2026-10-12T19:36:50.705Z",
+   "end": "2026-10-12T19:57:04.217Z",
+   "secs": 1214,
+   "door": "open",
+   "mode": "host",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "7e3b11c5"
+   ],
+   "played": [
+    {
+     "t": "2026-10-12T19:36:55.018Z",
+     "mode": "host",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "exact": true
+  },
+  {
+   "code": "P5D8W4",
+   "at": "2026-10-12T19:36:46.619Z",
+   "end": "2026-10-12T19:36:48.094Z",
+   "secs": 1,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "7e3b11c5"
+   ],
+   "played": []
+  },
+  {
+   "code": "EQ9BK8",
+   "at": "2026-10-12T19:36:37.667Z",
+   "end": "2026-10-12T19:36:41.103Z",
+   "secs": 3,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "7e3b11c5"
+   ],
+   "played": []
+  },
   {
    "code": "DE7CRX",
    "at": "2026-10-12T16:10:20.042Z",
@@ -23966,7 +24084,7 @@
   {
    "id": "7e3b11c5",
    "first": "2026-09-12T17:25:31.975Z",
-   "last": "2026-10-10T23:42:01.029Z",
+   "last": "2026-10-12T19:36:50.850Z",
    "since": "2026-09-12",
    "versions": [
     "0.50.1",
@@ -23976,7 +24094,7 @@
     "0.53.0"
    ],
    "solo": 1,
-   "checkins": 52,
+   "checkins": 55,
    "v": "0.53.0"
   },
   {
@@ -24478,13 +24596,13 @@
   {
    "id": "aadb5771",
    "first": "2026-10-12T01:48:28.181Z",
-   "last": "2026-10-12T16:10:20.177Z",
+   "last": "2026-10-12T23:54:46.468Z",
    "since": "2026-10-11",
    "versions": [
     "0.53.0"
    ],
    "solo": 7,
-   "checkins": 4,
+   "checkins": 6,
    "v": "0.53.0"
   }
  ],
@@ -25055,6 +25173,11 @@
   }
  ],
  "bounces": [
+  {
+   "t": "2026-10-13T00:01:20.749Z",
+   "tried": "quick",
+   "secs": 9
+  },
   {
    "t": "2026-10-12T04:38:04.515Z",
    "tried": "quick",
