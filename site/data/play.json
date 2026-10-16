@@ -1,7 +1,36 @@
 {
- "readAt": "2026-10-15T05:46:58.117Z",
+ "readAt": "2026-10-16T05:38:30.603Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "BARM8R",
+   "at": "2026-10-16T02:59:37.051Z",
+   "end": "2026-10-16T03:00:28.687Z",
+   "secs": 52,
+   "door": "open",
+   "mode": "host",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "8df61a1b"
+   ],
+   "played": [
+    {
+     "t": "2026-10-16T03:00:07.938Z",
+     "mode": "host",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "exact": true
+  },
   {
    "code": "RKMD8R",
    "at": "2026-10-13T19:01:47.537Z",
@@ -24217,13 +24246,13 @@
   {
    "id": "8df61a1b",
    "first": "2026-09-13T02:28:34.600Z",
-   "last": "2026-10-12T04:20:49.502Z",
+   "last": "2026-10-16T02:59:37.167Z",
    "since": "2026-09-12",
    "versions": [
     "0.50.1"
    ],
    "solo": 3,
-   "checkins": 19,
+   "checkins": 20,
    "v": "0.50.1"
   },
   {
