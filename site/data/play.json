@@ -1,12 +1,12 @@
 {
- "readAt": "2026-10-20T05:22:35.545Z",
+ "readAt": "2026-10-20T10:19:27.091Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
   {
    "code": "CTH5GT",
    "at": "2026-10-20T04:51:49.369Z",
-   "end": null,
-   "secs": null,
+   "end": "2026-10-20T05:24:41.177Z",
+   "secs": 1972,
    "door": "open",
    "mode": "quick",
    "humans": 1,
@@ -26,10 +26,9 @@
      "mode": "quick",
      "trainers": 1,
      "watching": 0,
-     "secs": null
+     "secs": 1835
     }
    ],
-   "live": true,
    "exact": true
   },
   {
