@@ -1,7 +1,105 @@
 {
- "readAt": "2026-10-21T01:00:59.350Z",
+ "readAt": "2026-10-21T06:03:39.981Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "CM4QQV",
+   "at": "2026-10-21T05:43:48.575Z",
+   "end": "2026-10-21T05:43:48.878Z",
+   "secs": 0,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "165e91fe"
+   ],
+   "played": []
+  },
+  {
+   "code": "7QANNW",
+   "at": "2026-10-21T02:30:41.397Z",
+   "end": "2026-10-21T02:30:54.982Z",
+   "secs": 14,
+   "door": "open",
+   "mode": "host",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "5092e6b1"
+   ],
+   "played": []
+  },
+  {
+   "code": "VP3GC3",
+   "at": "2026-10-21T02:29:19.003Z",
+   "end": "2026-10-21T02:30:31.168Z",
+   "secs": 72,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "5092e6b1"
+   ],
+   "played": [
+    {
+     "t": "2026-10-21T02:30:19.166Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "exact": true
+  },
+  {
+   "code": "WRTQFM",
+   "at": "2026-10-21T02:05:33.028Z",
+   "end": "2026-10-21T02:29:15.506Z",
+   "secs": 1422,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "5092e6b1"
+   ],
+   "played": [
+    {
+     "t": "2026-10-21T02:06:33.251Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "exact": true
+  },
   {
    "code": "FABRFK",
    "at": "2026-10-21T00:00:46.049Z",
@@ -24878,13 +24976,13 @@
   {
    "id": "165e91fe",
    "first": "2026-10-06T14:11:05.775Z",
-   "last": "2026-10-06T14:11:05.775Z",
+   "last": "2026-10-21T05:43:48.816Z",
    "since": "2026-10-06",
    "versions": [
     "0.53.0"
    ],
    "solo": 0,
-   "checkins": 1,
+   "checkins": 2,
    "v": "0.53.0"
   },
   {
@@ -25005,6 +25103,18 @@
    ],
    "solo": 0,
    "checkins": 1,
+   "v": "0.53.0"
+  },
+  {
+   "id": "5092e6b1",
+   "first": "2026-10-21T02:05:33.146Z",
+   "last": "2026-10-21T02:30:41.505Z",
+   "since": "2026-10-20",
+   "versions": [
+    "0.53.0"
+   ],
+   "solo": 0,
+   "checkins": 3,
    "v": "0.53.0"
   }
  ],
