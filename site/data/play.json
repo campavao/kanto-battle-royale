@@ -1,7 +1,114 @@
 {
- "readAt": "2026-10-21T06:03:39.981Z",
+ "readAt": "2026-10-23T04:54:05.461Z",
  "from": "2026-08-30T23:00:25.533Z",
  "sessions": [
+  {
+   "code": "2FUA92",
+   "at": "2026-10-23T03:17:28.200Z",
+   "end": "2026-10-23T03:38:07.761Z",
+   "secs": 1240,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "c9a22783"
+   ],
+   "played": [
+    {
+     "t": "2026-10-23T03:18:28.498Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "exact": true
+  },
+  {
+   "code": "HRMZHF",
+   "at": "2026-10-23T03:17:20.065Z",
+   "end": "2026-10-23T03:17:22.829Z",
+   "secs": 3,
+   "door": "daily",
+   "mode": "daily",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 0,
+   "joins": [],
+   "versions": [
+    "0.50.1"
+   ],
+   "installs": [
+    "c9a22783"
+   ],
+   "played": []
+  },
+  {
+   "code": "UBSKJP",
+   "at": "2026-10-22T21:20:43.766Z",
+   "end": "2026-10-22T21:26:40.292Z",
+   "secs": 357,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "e17b77c1"
+   ],
+   "played": [
+    {
+     "t": "2026-10-22T21:21:44.611Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": null
+    }
+   ],
+   "exact": true
+  },
+  {
+   "code": "YWP6HA",
+   "at": "2026-10-22T00:01:35.213Z",
+   "end": "2026-10-22T00:35:01.432Z",
+   "secs": 2006,
+   "door": "open",
+   "mode": "quick",
+   "humans": 1,
+   "together": 1,
+   "spectators": 0,
+   "matches": 1,
+   "joins": [],
+   "versions": [
+    "0.53.0"
+   ],
+   "installs": [
+    "3b418a17"
+   ],
+   "played": [
+    {
+     "t": "2026-10-22T00:02:35.506Z",
+     "mode": "quick",
+     "trainers": 1,
+     "watching": 0,
+     "secs": 1856
+    }
+   ],
+   "exact": true
+  },
   {
    "code": "CM4QQV",
    "at": "2026-10-21T05:43:48.575Z",
@@ -24724,13 +24831,13 @@
   {
    "id": "c9a22783",
    "first": "2026-09-13T19:55:27.842Z",
-   "last": "2026-10-20T04:51:49.528Z",
+   "last": "2026-10-23T03:17:28.389Z",
    "since": "2026-09-13",
    "versions": [
     "0.50.1"
    ],
    "solo": 5,
-   "checkins": 36,
+   "checkins": 38,
    "v": "0.50.1"
   },
   {
@@ -25115,6 +25222,30 @@
    ],
    "solo": 0,
    "checkins": 3,
+   "v": "0.53.0"
+  },
+  {
+   "id": "3b418a17",
+   "first": "2026-10-22T00:01:35.345Z",
+   "last": "2026-10-22T00:01:35.345Z",
+   "since": "2026-10-21",
+   "versions": [
+    "0.53.0"
+   ],
+   "solo": 0,
+   "checkins": 1,
+   "v": "0.53.0"
+  },
+  {
+   "id": "e17b77c1",
+   "first": "2026-10-22T21:20:44.084Z",
+   "last": "2026-10-22T21:20:44.084Z",
+   "since": "2026-10-22",
+   "versions": [
+    "0.53.0"
+   ],
+   "solo": 0,
+   "checkins": 1,
    "v": "0.53.0"
   }
  ],
