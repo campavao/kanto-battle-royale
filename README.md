@@ -33,7 +33,7 @@ Play with up to 30 other players at one time, dropping all over Kanto, to be the
 4. Launch the game. `BATTLE ROYALE` is on the title menu.
 
 > **This mod needs gen1recomp v0.2.26 or newer.**
-> Everyone in a match needs the same game and mod version — [why that is](COMPATIBILITY.md).
+> Everyone in a match needs the same game and mod version ([why](COMPATIBILITY.md)).
 
 ## Screenshots
 
@@ -197,25 +197,25 @@ You can see what it adds up to on the [live stats page](https://campavao.github.
 
 ## Running your own relay (for the nerds)
 
-Only needed for playing with other people — `SOLO VS BOTS` never touches it. Everyone points `SERVER...` at the same address, and the default one is mine.
+You only need it to play with other people. `SOLO VS BOTS` never uses it. Everyone points `SERVER...` at the same address, and the default one is mine.
 
 ```sh
 node relay/server.js   # :7790 (PORT or BR_RELAY_PORT to change)
 ```
 
-- Zero dependencies — Node 18+ and a reachable port is a server
+- No dependencies. Node 18 or newer and a reachable port are all a server needs
 - It's **raw TCP**, not HTTP, so hosts that only forward HTTP (Vercel, Netlify) won't work
-- On **Railway**: deploy this repo with **Root Directory `relay`**, set `PORT=7790`, add a **TCP Proxy** to port 7790, and turn **App Sleeping off** — the `host:port` it gives you is what goes under `SERVER...`
+- On **Railway**: deploy this repo with **Root Directory `relay`**, set `PORT=7790`, add a **TCP Proxy** to port 7790, and turn **App Sleeping off**. Put the `host:port` it gives you under `SERVER...`
 - `BR_MAX_ROOMS` (default 40) and `BR_MAX_CONNS` (default 200) cap what it will hold
-- It has flood limits but no accounts and no moderation — anyone with the address can open a room
+- It has flood limits but no accounts and no moderation, so anyone with the address can open a room
 
 ## For developers
 
-The mod is built on the `battle-royale` branch of [campavao/gen1recomp](https://github.com/campavao/gen1recomp/tree/battle-royale/mods/battle_royale), and this repo is a copy of that folder. The [developer README](https://github.com/campavao/gen1recomp/blob/battle-royale/mods/battle_royale/README.md) over there covers how it works, the engine hooks it needs, the test suites, and the scripted playtest drivers. Please open pull requests there, not here — a change merged here is overwritten by the next copy.
+The mod is built on the `battle-royale` branch of [campavao/gen1recomp](https://github.com/campavao/gen1recomp/tree/battle-royale/mods/battle_royale), and this repo is a copy of that folder. The [developer README](https://github.com/campavao/gen1recomp/blob/battle-royale/mods/battle_royale/README.md) over there covers how it works, the engine hooks it needs, the test suites, and the scripted playtest drivers. Please open pull requests there, not here. The next copy overwrites any change merged here.
 
 ## Credits and licence
 
-MIT, and it ships no game data — you supply your own ROM to gen1recomp.
+MIT. It ships no game data; you supply your own ROM to gen1recomp.
 Built on [gen1recomp](https://github.com/bryanthaboi/gen1recomp) by BOIS CLUB
 GAMES, LLC.
 

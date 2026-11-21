@@ -390,15 +390,15 @@
       <div>
         <p id="relaytext">No relay data on this page yet.</p>
         <p class="hint" id="relayhint">
-          A scheduled job reads the relay's heartbeat and writes <code>data/stats.json</code>, so
-          nothing here asks the relay itself.
+          A scheduled job reads the relay's heartbeat and writes <code>data/stats.json</code>. This
+          page never contacts the relay.
         </p>
       </div>
     </div>
   </section>
 
   <footer class="foot">
-    <span>Read off the relay's own log by a scheduled job, so it runs behind by up to a few hours. Solo play never opens a socket and is only counted when that install next connects. Downloads count every update the launcher fetches, so they are events, not people.</span>
+    <span>A scheduled job reads the relay's log, so this page runs up to a few hours behind. A solo match never connects to the relay, so it counts only when that install next connects. Downloads count every update the launcher fetches, so they are events, not people.</span>
     <span><a href="https://github.com/campavao/kanto-battle-royale">repo</a> ·
           <a href="https://github.com/campavao/kanto-battle-royale/releases">releases</a> ·
           <a href="https://github.com/campavao/kanto-battle-royale/tree/main/site/data">data</a></span>
@@ -455,7 +455,7 @@ async function relay() {
     const solo = s.statSolo == null ? null : s.statSolo;
     $("relayhint").textContent =
       (solo === null
-        ? "No solo telemetry in this deployment yet. "
+        ? "No solo matches reported since this deploy. "
         : plural(solo, "solo match", "solo matches") + " reported by " + plural(s.statSeen || 0, "check-in") + ". ") +
       "Last changed " + clock(s.at) + ", " + day(s.at) + " · " + (s.sent || "0B") + " out.";
   } catch (e) {}
@@ -598,7 +598,7 @@ function drawPlay() {
     btn.setAttribute("aria-label", text + ": " + (total(x) ? t + " matches, " + x.solo + " solo reported" : "nothing"));
     hoverable(btn, () => {
       $("dayout").className = "readout";
-      $("dayout").innerHTML = '<span class="v">' + text + "</span> — " +
+      $("dayout").innerHTML = '<span class="v">' + text + "</span>: " +
         (total(x) ? [x.quick ? x.quick + " quick play" : "", x.daily ? x.daily + " daily" : "",
               x.host ? x.host + " hosted" : "", x.solo ? x.solo + " solo reported" : ""]
                 .filter(Boolean).join(", ") +
@@ -614,7 +614,7 @@ function drawPlay() {
   const showsGap = (!from || from < GAP[1]) && new Date() > GAP[0];
   $("gap").hidden = !showsGap;
   $("gap").innerHTML = showsGap
-    ? "<b>Oct 24 to Nov 14 is missing, not quiet.</b> The log reader was broken then and the relay keeps only a week of log, so those rooms are gone. The relay's own count still has their matches (Right now, above)."
+    ? "<b>Oct 24 to Nov 14 is missing, not quiet.</b> The log reader was broken then and the relay keeps only a week of log, so those rooms are gone. The relay's own match count, under Right now above, still includes them."
     : "";
   const every = Math.max(1, Math.ceil(days.length / 6));
   $("dayaxis").innerHTML = days.map((x, i) =>
@@ -703,7 +703,7 @@ function drawPlay() {
   $("installnote").innerHTML = active.length
     ? "<b>" + active.length + "</b> " + (active.length === 1 ? "install" : "installs") + " checked in " + label.replace(/^in /, "over ") +
       (behind ? ", <b>" + behind + "</b> last seen on something older than " + ver(latest) : "") +
-      ". An install is a random id minted on first launch, never a name; a player who only ever plays solo never checks in, so they are not here."
+      ". An install is a random id made on first launch, never a name. A player who only plays solo never checks in, so they are not here."
     : "Nobody checked in " + label.replace(/^in /, "over ") + ".";
 }
 
@@ -782,7 +782,7 @@ function drawLadder(list) {
     hoverable(btn, () => {
       $("readout").className = "readout";
       $("readout").innerHTML =
-        '<span class="v">' + esc(r.tag) + "</span> — " + plural(r.dl, "download") +
+        '<span class="v">' + esc(r.tag) + "</span>: " + plural(r.dl, "download") +
         ' <span class="n">· ' + day(r.at) + (blind(r.tag) ? " · the updater could not see it" : "") + "</span>" +
         (r.name ? '<br><span class="n">' + esc(r.name) + "</span>" : "");
     });
