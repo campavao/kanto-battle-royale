@@ -111,7 +111,11 @@ async function deployments() {
          edges { node { id status createdAt } }
        }
      }`,
-    { input: { projectId: PROJECT, serviceId: SERVICE } }
+    // Only the ones that ran. Every stats commit to this repo queues a
+    // SKIPPED one (the relay's watch path did not change), and from Oct 23 the
+    // newest 100 were all SKIPPED: the live relay fell off the list, and the
+    // play log read nothing for a month (Cam, 11-21).
+    { input: { projectId: PROJECT, serviceId: SERVICE, status: { in: ["SUCCESS", "REMOVED", "CRASHED"] } } }
   );
   return (data?.deployments?.edges || []).map(e => e.node)
     .filter(n => n.status === "SUCCESS" || n.status === "REMOVED" || n.status === "CRASHED")
@@ -415,8 +419,11 @@ async function main() {
   const live = deps.find(d => d.status === "SUCCESS");
 
   for (const d of deps) {
-    if (new Date(d.createdAt) < cutoff) continue;
     const isLive = live && d.id === live.id;
+    // The age cut is for dead processes' one-time sweep. The live one is read
+    // however old it is: a relay up since Sep 15 went past 45 days on Oct 23,
+    // and every run after read nothing at all (Cam, 11-21: an empty month).
+    if (!isLive && new Date(d.createdAt) < cutoff) continue;
     // a dead process is read once, in full; the live one from just before
     // the last thing seen
     if (!isLive && store.swept[d.id]) continue;
